@@ -1,7 +1,11 @@
 # Resume prompt
 
-Paste this as the opening message of a fresh session. Everything below the line
-is the prompt.
+Paste everything below the line as the opening message of a fresh session.
+
+Keep this file honest. It is the only document a new session is guaranteed to
+read, so when something here stops being true it is worse than useless — it
+sends the session off to build what already exists. Update it at the end of any
+session that changes the answer to "what works" or "what is next".
 
 ---
 
@@ -11,224 +15,236 @@ yourself, keep going through obstacles, and only stop to ask when a decision
 genuinely changes what gets built (or when you need something run on real
 hardware — see below).
 
+## Where this is
+
+**The CPU works and the SCC transmits. The PROM does not boot yet.**
+
+Milestones M0 and M1 are done (`docs/07-mister-port-plan.md` has the list). The
+core runs a 240-test bare-metal MIPS III/IV suite under Verilator against full
+R4400 expectations:
+
+| | checks passed | failed | tests failing |
+|---|---:|---:|---:|
+| IRIS, R4400 expectations | 2101 | 61 | 25 |
+| **this core** | **2155** | **9** | **3** |
+
+The three failures are diagnosed, not mysterious: two cache tests (both caches
+are switched off) and `cvt.s.l`/`cvt.d.l` truncating their source to 56 bits.
+
+The CPU is the MiSTer N64 project's R4300i, **made to present as an R4400**,
+which is what an Indy actually shipped with. That is not just `PRId`: nothing
+reports the TLB entry count architecturally, so software infers it from the CPU
+identity, and the TLB was widened from 32 to 48 entries to make the claim true.
+`PRESENT_AS_R4400` in `cpu_cop0.vhd` is the switch and both settings are tested.
+
 ## Read first
 
-`docs/README.md` indexes the whole knowledge base. At minimum read, in order:
+`docs/README.md` indexes everything. At minimum, in this order:
 
-1. `docs/00-overview.md` — where this came from and what is reusable
-2. **`docs/09-cpu-validation.md`** — the CPU test suite and the oracle strategy.
-   This is the document that determines how you work.
-3. `docs/04-cpu.md` — the CPU decision and its open questions
-4. `docs/03-boot-prom.md` — the PROM's reset flow and the 8-step bring-up order
-5. `docs/02-address-map.md` — the register map
-6. `docs/07-mister-port-plan.md` — the milestones you are executing
-7. `docs/prom-reference/HARDWARE.md` — the authoritative per-device reference
+1. **`docs/10-r4300-integration.md`** — the CPU as built. The byte-lane
+   contract, the R4400 presentation, the eight bugs fixed in the vendored core,
+   the numbers. Read this before touching `rtl/cpu/`.
+2. **`docs/09-cpu-validation.md`** — the test suite and the oracle policy. This
+   is the document that determines *how you work*.
+3. `docs/02-address-map.md` — the register map. You will live in this for M2.
+4. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
+5. `docs/06-simulation.md` — what the harness gives you.
+6. `docs/07-mister-port-plan.md` — the milestones.
+7. `docs/prom-reference/HARDWARE.md` — the authoritative per-device reference.
 
-`docs/05-existing-rtl.md` explains the prior DE1 sandbox at `~/mistersgi`; read
-it before copying anything out of there, because several of its constructs are
-workarounds for DE1 hardware that must not be carried forward — `data_flipped`
-above all.
+`docs/05-existing-rtl.md` explains the prior DE1 sandbox at `~/mistersgi`. Read
+it before copying anything out of there — several of its constructs are
+workarounds for DE1 hardware that must not be carried forward, `data_flipped`
+above all. `~/mistersgi/sgi_mc.v` is the exception and is your M2 starting
+point.
 
-## Target: Indy (IP24) with the N64 R4300i
+## Build and run
 
-Build the **SGI Indy / IP24** using the MiSTer N64 project's R4300i core
-(`~/mistersgi/R4300_VHDL/`). Vendor the **VHDL** — Quartus compiles it directly.
-Never vendor `cpu_netlist_v2.v`, the 5 MB Yosys flatten; regenerate it by script
-if Verilator needs it.
+```sh
+brew install verilator ghdl
+brew install messense/macos-cross-toolchains/mipsel-unknown-linux-gnu
 
-Keep the CPU behind a clean wrapper in `rtl/cpu/` with a documented bus
-contract. An aoR3000/Indigo fallback is documented in `docs/04-cpu.md` in case
-the R4300i plus Newport does not fit the DE10-Nano.
+tests/run-cputest.sh      # 240-test MIPS suite on the core, ~35 s
+tests/run-scc.sh          # the Z8530, ~4 s
+make -C verilator cputest # just rebuild the simulator
+```
 
-Endianness is **already settled**: `cpu_cop0.vhd:582` sets
-`COP0_16_CONFIG_bigEndian <= '1'` at reset, so the R4300i is natively
-big-endian, which is what SGI needs. Do not carry the sandbox's `data_flipped`
-byte reversal forward — it exists only to feed the little-endian aoR3000.
+Two toolchain facts worth not rediscovering:
 
-## Validation strategy — this is the important part
-
-There is a working SGI Indy emulator at `~/repos/iris` (**IRIS**, Rust, boots
-IRIX 6.5 to a desktop with Newport graphics). Use it two ways:
-
-### 1. The bare-metal CPU test suite
-
-`~/repos/iris/cpu-tests/` is a 240-test / ~800-check MIPS III/IV suite that runs
-on the CPU with no OS and reports PASS/FAIL over the SCC. It needs **only** RAM
-at physical `0x08000000` and SCC TX at `0x1FBD9830`/`0x34` — no PROM, no MC, no
-chipset. So it runs on the core under Verilator long before the PROM can, and it
-is your **first CPU milestone**, not the PROM.
-
-Its expectations come from the R4000 manual, not from golden recordings, and it
-deliberately *reports* rather than asserts where the architecture is silent —
-read `cpu-tests/docs/oracle.md` and honour that policy.
-
-**The R4300i is not an R4400** — so it was made to present as one, because an
-Indy never shipped with an R4300 and software infers the TLB entry count from
-`PRId`. See `docs/10-r4300-integration.md`. The suite's `CPU_R4300` cell is
-still there and still tested, for the build that reports the underlying part
-honestly.
-
-Then, for each divergence, **decide deliberately and write the decision down**:
-fix the core where the PROM or IRIX depends on the behaviour (the `Config`
-cache-geometry fields are the clearest case — `realstart` derives refresh timing
-from them), accept it where nothing does. **Never edit an expectation to make a
-test pass.** If the core is wrong, fix the core; if a test genuinely doesn't
-apply to an R4300, branch it on CPU kind.
-
-### 2. IRIS as the behavioural oracle for everything else
-
-IRIS has readable Rust implementations of every device this core needs:
-`mc.rs`, `hpc3.rs`, `ioc.rs`, `hal2.rs`, `ds1x86.rs` (Dallas RTC),
-`eeprom_93c56.rs`, `rex3.rs` (rasteriser), `vc2.rs`, `xmap9.rs`, `mips_tlb.rs`,
-`mips_cache_v2.rs`. Set up an **MMIO golden-log diff** against it: run the same
-PROM in both, diff the traces, and the first divergence is the bug. This is the
-highest-leverage debugging technique available and the prior sandbox never had
-it.
-
-Keep MAME (`reference/mame/`, `~/repos/mame`) as a third opinion where IRIS and
-the manual disagree. Diff console output against the real serial captures in
-`roms/*/*.capture.txt.gz`.
-
-### 3. Real hardware
-
-The user has physical SGI hardware and can run test binaries on it. The
-`cpu-tests` suite is deliberately free of IRIS-specific requirements — the test
-device is probed rather than assumed and everything essential goes over the SCC
-— so **the same binary boots on a real machine and prints the same lines**.
-
-Use this for ground truth where the manual is ambiguous and IRIS is not
-authoritative. Batch your requests: real-hardware runs cost the user time, so
-accumulate a set of questions and ask for one run, not ten. Commit any
-hardware-confirmed result under `tests/hardware/` with the captured output as
-the reference, and annotate the corresponding test as hardware-confirmed, which
-is what `cpu-tests/docs/oracle.md` §5 asks for.
+- **GHDL lowers the CPU's VHDL to Verilog for Verilator.** Quartus compiles the
+  VHDL directly; Verilator cannot, so `tools/gen_r4300_verilog.sh` runs GHDL's
+  synthesis backend over the same sources. No Yosys, no `ghdl-yosys-plugin`, and
+  nothing checked in — the output is gitignored and the Makefile regenerates it.
+  Never reintroduce a checked-in netlist.
+- **macOS has no `mips-linux-gnu-gcc`**, but the `mipsel` cross GCC is
+  bi-endian: `-EB -mabi=n32` produces exactly the ELF32 MSB image the tests
+  want. That is the whole reason this builds on a Mac.
 
 ## Validate everything through Verilator
 
 Every claim about the core's behaviour must be backed by a simulation run, not
-by reading the RTL. The harness lives in `verilator/`, already scaffolded with
-the standard MiSTer sim framework (SDL2 + OpenGL2 + Dear ImGui, plus `sim_bus` /
-`sim_console` / `sim_video` / `sim_input` / `sim_audio` / `sim_serial` /
-`sim_blkdevice` / `sim_clock`), a `Makefile` and `verilate.sh`. It builds on
-macOS with `brew install verilator sdl2`.
+by reading the RTL. This has already caught things that reading would not — a
+CDC race in the SCC's debug tap where the serial line was correct and the
+reported bytes were one behind, and an inverted NaN polarity in the FPU that
+looked perfectly reasonable in source.
 
-**You must author `verilator/sim.v`, `verilator/sim_ram.v` and
-`verilator/sim_main.cpp`** — they do not exist yet. `sim.v` is a `module emu`
-wrapper instantiating the core the way `sgiindy.sv` will on hardware, with
-`sim_ram.v` in place of SDRAM. Model the prior sandbox's harness
-(`~/mistersgi/sim_main_imgui.cpp`) for *content*, not structure — it is
-Win32/DX11-only and cannot build here.
+The harness is `verilator/`, headless, no SDL. What it gives you:
 
-Port these, they earned their keep (see `docs/06-simulation.md`):
+| Flag | What it does |
+|---|---|
+| `--elf FILE` | load a bare-metal ELF and boot from its entry point, no PROM |
+| `--prom FILE` | load a PROM image at `0x1FC00000`; `boot_pc` already defaults to `0xBFC00000` |
+| `--trace`, `--trace-from`, `--trace-count` | timestamped bus trace with decoded register names |
+| `--stuck N` | no-forward-progress detector — names the address being hammered |
+| `--hot` | the most-accessed addresses on exit |
+| `--uart` | decode the SCC's `txdb` line and compare it with the byte tap |
+| `--testdev` | fit the IRIS test device in GIO64 slot 0 |
 
-- the `decode_reg_name` MMIO table (~60 entries) so bus traces are readable
-- a timestamped bus trace with the CPU PC on every transaction
-- the **PC-stuck detector** (flag when PC hasn't advanced for ~20 000 cycles) —
-  this is what finds "the PROM is polling a register that never returns what it
-  wants"
-- the SCC console tap (grab the TX byte at the FIFO-pop event; do not try to
-  decode a serial waveform)
-- the runtime-toggleable ROM/MMIO spoof tables, matched by **word overlap**, not
-  `addr >= lo && addr <= hi` — bus reads arrive word-aligned even for byte loads
+The stuck detector watches the **bus**, not the PC: `cpu.vhd`'s PC is only
+observable through the savestate export, which lives inside a
+`-- synthesis translate_off` block and is not in the synthesised netlist.
+Watching bus addresses finds the same failures and names the register, which
+the PC alone would not.
 
-Add an **ELF loader** into the RAM model, the way IRIS's `--load-elf` does, so
-`cpu-tests` can run with no PROM. Probe both ends of each segment before
-committing: unmapped physical space accepts writes silently and reads back zero,
-so a mis-addressed load shows up as a CPU fetching zeros.
+## The oracles, in order
 
-Mind the physical map (`cpu-tests/docs/memory-map.md`): RAM starts at
-`0x08000000`, the bottom 512 KB is an **alias** of `0x08000000..0x0807ffff`, and
-everything from `0x00080000` to `0x08000000` is unmapped. The suite links at
-KSEG0 `0x88200000` for exactly this reason.
+### 1. The bare-metal test suite — `~/repos/iris/cpu-tests/`
 
-## Milestones
+240 tests, ~2200 checks, MIPS III/IV, runs on the CPU with no OS and reports
+over the SCC. Its expectations come from the R4000 manual rather than golden
+recordings, and it deliberately *reports* rather than asserts where the
+architecture is silent. Read `cpu-tests/docs/oracle.md` and honour that policy.
 
-Work `docs/07-mister-port-plan.md` M0 → M6 in order. Each is defined by an
-observable, not by "component X is written":
+It is **not forked into this repo**, deliberately: it is a general MIPS suite
+that also runs on real SGI hardware, and forking it would strand the R4300
+support. `CPU_R4300` was added to that checkout — see
+`docs/10-r4300-integration.md`.
 
-- **M0** harness runs, ELF loader works, traces, IRIS diff working
-- **M1** **CPU passes the `cpu-tests` suite**, matching IRIS except for the
-  enumerated R4300-vs-R4400 divergences
-- **M2** MC good enough to survive `realstart` (free-running `RPSS_CTR` is the
-  trap; `Config` cache-geometry fields are the other one)
-- **M3** first PROM banner line on the serial console, matching a real capture
-- **M4** memory sizing + GIO DMA memory clear complete
-- **M5** NVRAM with correct checksum and validity tag, persisted to SD
-- **M6** **interactive Command Monitor prompt** — `hinv` and `help` respond
+The standing rule, which has already been load-bearing: **never edit an
+expectation to make a test pass.** If the core is wrong, fix the core. If a
+test's *precondition* does not hold on this part, fix the precondition and say
+why. If two behaviours are genuinely both defensible, accept both and report
+which was seen. Eight of the divergences this suite found turned out to be
+plain bugs in the vendored CPU; only three were real R4300-vs-R4400 differences.
 
-M6 is "it boots" and needs **no graphics work at all**. Do not start Newport
-(M7) or SCSI/IRIX (M8) before M6 is solid — though note that when you get there,
-IRIS's `rex3.rs` / `vc2.rs` / `xmap9.rs` are a complete working reference.
+### 2. IRIS as the behavioural oracle for everything else
+
+`~/repos/iris` is a working Rust Indy emulator that boots IRIX 6.5 to a
+desktop, with readable implementations of every device this core still needs:
+`mc.rs`, `hpc3.rs`, `ioc.rs`, `hal2.rs`, `ds1x86.rs` (Dallas RTC),
+`eeprom_93c56.rs`, `rex3.rs`, `vc2.rs`, `xmap9.rs`. When the manual and your
+reading of the RTL disagree, IRIS is the tiebreaker — it is validated by the
+most demanding test there is.
+
+The **MMIO golden-log diff** against it is still unbuilt and is the single
+highest-leverage thing you can add for M2/M3: run the same PROM in both, diff
+the traces, and the first divergence is the bug.
+
+Keep MAME (`reference/mame/`, `~/repos/mame`) as a third opinion. Diff console
+output against the real serial captures in `roms/*/*.capture.txt.gz`.
+
+### 3. Real hardware
+
+The user has physical SGI hardware and can run test binaries on it —
+`docs/11-running-on-hardware.md` covers which machines and how. The suite is
+free of emulator-specific requirements, so the same binary boots on iron and
+prints the same lines.
+
+Use it for ground truth where the manual is ambiguous and IRIS is not
+authoritative. **Batch your requests**: real-hardware runs cost the user time,
+so accumulate a set of questions and ask for one run, not ten. Commit any
+hardware-confirmed result under `tests/hardware/` with the captured output as
+the reference, which is what `cpu-tests/docs/oracle.md` §5 asks for.
+
+## Where to pick up: M2, the memory controller
+
+Load the PROM and watch it wedge:
+
+```sh
+make -C verilator cputest
+cd verilator && ./obj_dir/Vsim_top --prom ../roms/IP24_Indy/ip24prom.070-9101-011.bin \
+    --max-cycles 20000000 --stuck 3000000 --hot
+```
+
+What happens today, which is a clean starting point rather than a mystery:
+
+- The PROM fetches from `0xBFC00000` and runs. The CPU is not the problem.
+- It bit-bangs the serial EEPROM at `MC + 0x30` a couple of hundred times and
+  moves on.
+- Then it wedges in `DELAY()` — the hot addresses are `0x1FC00510/518/520`,
+  which is the delay loop, spinning on `0x1FA01000`, **`RPSS_CTR`**.
+
+`RPSS_CTR` is a free-running 100 ns counter and `DELAY()`/`calibrate_delay()`
+busy-wait on it. `docs/02-address-map.md` predicted exactly this: *"if it
+doesn't advance the PROM hangs before any output."* So M2's first task is not
+the whole MC — it is a counter that counts.
+
+After that, in order: `SYSID` (`+0x18`, the sandbox returns `0x21` for an Indy
+with MC rev 1), `CPUCTRL0` (`+0x00`, the hottest MMIO address in the whole
+image) and `CPUCTRL1` (`+0x08`, written `0x16` early in `realstart`), then the
+93C56 EEPROM properly — `~/mistersgi/sgi_mc.v` reads back `0xFFFFFFFF` with the
+real SI path commented out, and IRIS's `eeprom_93c56.rs` is the model to follow.
+
+M3 is the first PROM banner line on the console, matched against a real serial
+capture. The SCC is already there and already proven, so M3 is about getting
+the PROM far enough to print, not about serial.
+
+Two pieces of the M0 wish-list are still missing and both come into their own
+the moment the question becomes "why did the PROM stop here": the
+**runtime-toggleable ROM/MMIO spoof tables** and the **IRIS golden-log diff**.
+Neither was needed for CPU work because the test suite is a better oracle than
+a trace diff, but the PROM chase is exactly the case they were designed for.
+Build them early rather than after a day of manual tracing.
+
+Also still unwritten, and not needed before M6: the GUI harness (`verilator/sim.v`,
+module `emu`) and `sgiindy.sv`'s real top level — it is still the stock MiSTer
+template, so nothing has been through Quartus yet and no resource numbers exist.
 
 ## Ground rules
 
 - **No identifying information in this repo.** No personal names, emails,
   usernames, absolute home paths, machine names, or links to personal accounts
   in any committed file or commit message. Upstream project attribution
-  (MiSTer-devel, IRIS, aoR3000, the MiSTer N64 project, OzOnE, MAME) is correct
-  and should stay.
-- **PROM images are in `roms/`** at the repository owner's decision, and are
-  SGI-copyrighted firmware not covered by this repository's licence (see
-  `NOTICE.md`). Nothing embeds them: the core loads a PROM from SD at runtime
-  like every other MiSTer core's BIOS. `reference/` is still gitignored.
-- **Vendor VHDL, not netlists.**
-- Check licences before vendoring anything: aoR3000 is BSD but its `linux/` and
-  `sim/vmips/` subdirectories are GPL. Check the N64 `cpu.vhd` licence and
-  IRIS's licence before copying code from either.
-- Match the surrounding code's style. Comment the *why* — the prior sandbox's
-  best asset is its comments explaining bugs found the hard way, and three
-  separate address/byte-lane bugs are recorded there. That class of bug is the
-  recurring hazard in this design; be paranoid about it.
+  (MiSTer-devel, IRIS, the MiSTer N64 project, OzOnE, MAME) is correct and
+  should stay.
+- **The licence is GPL-3.0** because the vendored CPU is. See `NOTICE.md`.
+- **Vendor VHDL, not netlists**, and keep `rtl/cpu/r4300/` diffable against
+  upstream. Every local change is marked `-- SGI:`, listed in
+  `rtl/cpu/r4300/UPSTREAM.md`, and provable with `tools/diff_upstream.sh`. If
+  you change the vendored CPU, update that file in the same commit.
+- **PROM images are committed** in `roms/`, at the repository owner's decision.
+  They are SGI-copyrighted firmware not covered by this repository's licence.
+  Nothing embeds them — the core loads one from SD at runtime like any MiSTer
+  core's BIOS. `reference/` stays gitignored.
+- Comment the *why*, not the *what*. The best asset this codebase inherited is
+  its comments explaining bugs found the hard way. Address and byte-lane bugs
+  are the recurring hazard in this design — there are now four recorded — so be
+  paranoid about them and write down what you worked out.
 
-## What already works — M0 and M1 are done
+## Traps already paid for
 
-Read [`docs/10-r4300-integration.md`](10-r4300-integration.md) first; it is the
-record of how, and it is where the byte-lane contract lives.
+Do not rediscover these:
 
-- **The CPU runs.** The R4300i is vendored as VHDL in `rtl/cpu/r4300/`, lowered
-  to Verilog for Verilator by `tools/gen_r4300_verilog.sh` (GHDL's synthesis
-  backend — no Yosys, no checked-in netlist), wrapped by
-  `rtl/cpu/r4300_wrap.vhd`, and bridged to the SGI bus by
-  `rtl/cpu/r4300_bus.sv`.
-- **It presents as an R4400**, which is what an Indy has. That is not just
-  `PRId`: nothing reports the TLB entry count architecturally, so software
-  infers it from the CPU identity, and the TLB was widened from 32 to 48
-  entries to make the claim true. Cache geometry, COP2 and the MIPS IV traps
-  moved with it. `PRESENT_AS_R4400` in `cpu_cop0.vhd` is the switch, and both
-  settings are tested.
-- **It is measured.** `tests/run-cputest.sh` runs the 240-test suite on it:
-  2155 checks passed / 9 failed against R4400 expectations, versus 2101 / 61
-  for IRIS's own R4400. Three tests fail, all diagnosed. Eight bugs in the
-  vendored CPU were found and fixed; `rtl/cpu/r4300/UPSTREAM.md` lists them and
-  `tools/diff_upstream.sh` proves the list complete.
-- **The SCC transmits.** `rtl/sgi/z8530_scc.sv` behind `rtl/sgi/sgi_scc.sv`,
-  proved by `tests/run-scc.sh` — a bare-metal image that programs the part the
-  way the PROM does, checked both at the byte tap and by decoding the `txdb`
-  waveform.
-- **The harness exists.** `verilator/` builds a headless simulator with an ELF
-  loader, bus trace, register-name decode, no-forward-progress detector and
-  console tap. The GUI harness (`sim.v`, module `emu`) is still unwritten and
-  is not needed before M6.
-- `roms/` and `reference/` are populated as before; `tools/prom/` still needs
-  `capstone`.
-
-## Where to pick up
-
-**M2 — the MC, enough to survive `realstart`.** `SYSID`, `CPUCTRL0/1`
-readback, and a genuinely free-running `RPSS_CTR`. `~/mistersgi/sgi_mc.v` has a
-working register file to start from. Note that one worry M2 carried has
-evaporated: `Config`'s cache-geometry fields are driven, and now report R4400
-geometry, so `realstart` will not derive nonsense refresh timing from them.
-
-Then M3: load a PROM image with `--prom`, boot from `0xBFC00000` (the harness
-already does this — `boot_pc` defaults to it), and chase the first banner line
-with `--trace` and `--stuck`.
-
-Two pieces of the M0 wish-list are still missing and should be built before the
-PROM chase gets hard: the **runtime-toggleable ROM/MMIO spoof tables**, and the
-**IRIS golden-log MMIO diff**. Neither was needed for CPU work, because the
-test suite is a better oracle than a trace diff; both come into their own the
-moment the question becomes "why did the PROM stop here".
+- **The CPU's `mem_*` byte lanes are not symmetric.** Reads want the aligned
+  doubleword shifted right by the address offset; writes swap the halves when
+  the access is 64-bit or lands in the upper word; byte enables are meaningless
+  on a read. `rtl/cpu/r4300_bus.sv` has the full derivation with citations.
+- **`cpu.vhd`'s `error_*` outputs are N64 debugging aids, not faults.** They
+  flag overflow, reserved-instruction and address-error traps, all of which
+  this suite raises on purpose. Treating them as fatal stops the run on its
+  first deliberate trap. The harness counts them; only a wedged pipeline and a
+  FIFO overflow abort.
+- **The SCC's channel naming is inverted between sources.** IRIS calls the pair
+  at IOC `+0x30`/`+0x34` channel B / tty1 — that is the SGI console. The DE1
+  sandbox called the same window channel A / Port 1. `rtl/sgi/sgi_scc.sv`
+  follows IRIS.
+- **A bare-metal image that never programs WR5 gets nothing out of the SCC**,
+  on this core and on real hardware alike, because the transmitter is disabled.
+  That is why `cpu-tests` output arrives via the test device and why
+  `tests/scc/scctest.c` exists.
+- **GHDL 6.0.0 crashes** (`netlists-utils.adb:166`) on a `numeric_std`
+  comparison whose operands differ in width. The generator works around the one
+  instance in `cpu.vhd`; if a new one appears, that is the symptom.
 
 Report progress as you complete each milestone, with the simulation output that
 demonstrates it.
