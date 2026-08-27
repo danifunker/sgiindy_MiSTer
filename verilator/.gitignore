@@ -1,0 +1,6 @@
+obj_dir/
+*.log
+*.fst
+*.vcd
+screenshot_*.png
+imgui.ini

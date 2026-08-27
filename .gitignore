@@ -1,1 +1,33 @@
 scratch/
+.DS_Store
+._*
+
+# SGI boot PROM images are copyrighted SGI firmware - kept locally for
+# development, never committed. Users supply their own at runtime.
+roms/
+
+# Bulky derived artefacts (PROM disassembly, chip specs, MAME sources).
+# Kept locally as working reference; not part of the core.
+reference/
+
+# Quartus / Verilator output
+db/
+incremental_db/
+output_files/
+simulation/
+greybox_tmp/
+obj_dir/
+*.qws
+*.rpt
+*.summary
+*.smsg
+*.sof
+*.pof
+*.jdi
+*.pin
+*.done
+*.log
+*.fst
+*.vcd
+tests/out/
+rtl/cpu/generated/

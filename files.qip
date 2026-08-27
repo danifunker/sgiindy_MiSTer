@@ -1,0 +1,50 @@
+# Core source manifest.
+# Add RTL here as it is written; sys/sys.qip is pulled in by the .qsf.
+#
+# Quartus compiles the CPU's VHDL directly - there is deliberately no
+# checked-in netlist. Verilator cannot read VHDL, so
+# tools/gen_r4300_verilog.sh lowers the same sources with GHDL for simulation
+# only; that output lives in rtl/cpu/generated/ and is gitignored.
+
+set_global_assignment -name SDC_FILE sgiindy.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE sgiindy.sv
+
+# --- SGI chipset ---------------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_indy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_scc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/z8530_scc.sv
+# set_global_assignment -name VERILOG_FILE       rtl/sgi/sgi_mc.v
+# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_int2.sv
+# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_ds1386.sv
+# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_hpc3.sv
+
+# --- CPU: the MiSTer N64 project's R4300i, vendored as VHDL ---------------
+# Order matters: packages and leaf entities before the units that use them.
+#
+# The `mem` library holds the primitives cpu.vhd instantiates as `entity
+# mem.<name>`. Quartus needs the -library assignment for those; rtl/cpu/prim/
+# holds behavioural replacements for the Altera megafunctions the upstream
+# versions wrap, so the core builds without altera_mf.
+set_global_assignment -name VHDL_FILE rtl/cpu/prim/RamMLAB.vhd -library mem
+set_global_assignment -name VHDL_FILE rtl/cpu/prim/dpram.vhd   -library mem
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/SyncFifoFallThroughMLAB.vhd -library mem
+
+set_global_assignment -name VHDL_FILE rtl/cpu/prim/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/prim/RamMLAB.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/prim/cpu_mul.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/functions.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/export.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/divider.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_instrcache.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_datacache.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_TLB_instr.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_TLB_data.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_cop0.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_FPU_sqrt.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu_FPU.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300/cpu.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/r4300_wrap.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/r4300_bus.sv
+
+# --- Newport graphics (M7, not started) ----------------------------------
+# set_global_assignment -name SYSTEMVERILOG_FILE rtl/newport/rex3.sv
