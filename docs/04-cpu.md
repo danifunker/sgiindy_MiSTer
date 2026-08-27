@@ -120,8 +120,10 @@ The CPU is integrated and measured; see
    cache-size fields is **wrong**: it reports IC = 2, DC = 1, IB = 1, DB = 0,
    i.e. a 16 KB/32 B I-cache and an 8 KB/16 B D-cache — its real geometry.
    Nothing needs hardwiring for `realstart`'s refresh timing.
-   `PRId` still wants spoofing to `0x00000440` if the PROM or IRIX turns out
-   to key off it; that decision is still open and belongs with M2.
+   ~~`PRId` still wants spoofing~~ — **done.** The core now reports `0x0440`
+   and, because that is a promise about TLB size rather than a label, the TLB
+   was widened to 48 entries to match. See
+   [10-r4300-integration.md](10-r4300-integration.md).
 3. **Caches** — still off, and now for a concrete reason: the fill path talks
    to the N64's RDRAM/DDR3 controller rather than to `mem_*`. The `cache`
    instruction itself decodes and does not fault, except for the two operations
@@ -131,5 +133,7 @@ The CPU is integrated and measured; see
 5. **FPU** — **measured.** 88 FPU tests, and after eight fixes to the vendored
    FPU the core passes every one of them except `fpu/vec_cvt_from_l`. Fifteen
    FPU tests pass here that IRIS fails. The FPU is not the risk it looked like.
-6. **TLB size** — 32 entries confirmed, all ten `tlb/` tests pass against that
-   number. Whether IRIX minds is still open; nothing has forced the question.
+6. **TLB size** — **resolved by widening it to 48.** The question was forced by
+   the `PRId` decision: nothing reports the entry count architecturally, so
+   software infers it from the CPU identity. All ten `tlb/` tests pass against
+   48, and against 32 when the core is set back to reporting an R4300.

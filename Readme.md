@@ -3,8 +3,9 @@
 An in-progress MiSTer FPGA core for the **SGI Indy (IP24, R4x00)**, using the
 MiSTer N64 project's R4300i CPU.
 
-**Status: the CPU works.** The R4300i runs a 240-test bare-metal MIPS III/IV
-suite under Verilator and reports **2114 checks passed, 9 failed** — against
+**Status: the CPU works, and presents as the R4400 an Indy actually shipped
+with.** It runs a 240-test bare-metal MIPS III/IV suite under Verilator against
+full R4400 expectations and reports **2155 checks passed, 9 failed** — against
 2101 / 61 for the IRIS emulator's own R4400. The Z8530 SCC transmits, verified
 against a UART decode of its own output pin. There is no boot PROM execution
 yet; that is the next milestone.
@@ -18,8 +19,8 @@ tests/run-scc.sh          # the SCC, ~4 s
 
 [`docs/README.md`](docs/README.md) indexes everything.
 [`docs/10-r4300-integration.md`](docs/10-r4300-integration.md) is the CPU as
-built — the byte-lane contract, the seven bugs fixed in the vendored core, and
-the numbers. If you are picking this work up,
+built — the byte-lane contract, what it takes to turn an R4300 into an R4400,
+the bugs fixed in the vendored core, and the numbers. If you are picking this work up,
 [`docs/08-resume-prompt.md`](docs/08-resume-prompt.md) is the entry point.
 
 ## Layout
@@ -28,7 +29,7 @@ the numbers. If you are picking this work up,
 |---|---|
 | `sgiindy.sv` | MiSTer top level (still the stock template) |
 | `rtl/sgi/` | `sgi_indy.sv` (the core), the SCC; MC, HPC3, INT2, DS1386, HAL2 to come |
-| `rtl/cpu/` | the R4300i: vendored VHDL, Altera-primitive stand-ins, the bus adapter |
+| `rtl/cpu/` | the CPU: vendored R4300i VHDL made to present as an R4400, Altera-primitive stand-ins, the bus adapter |
 | `rtl/newport/` | Newport graphics (REX3 / VC2 / XMAP9) — later |
 | `sys/` | MiSTer framework, from the upstream template |
 | `verilator/` | headless simulation harness |

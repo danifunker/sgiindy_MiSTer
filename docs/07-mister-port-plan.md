@@ -40,8 +40,10 @@ sgiindy_MiSTer/
 Each milestone is defined by an observable, not by "component X is written".
 
 **Status: M0 and M1 are done.** `tests/run-cputest.sh` runs the 240-test suite
-on the core in about 35 seconds and reports 2114 checks passed / 9 failed,
-against 2101 / 61 for IRIS's R4400. `tests/run-scc.sh` proves the Z8530
+on the core in about 35 seconds and reports 2155 checks passed / 9 failed
+against full R4400 expectations, versus 2101 / 61 for IRIS's own R4400. The
+core presents as an R4400PC - identity, 48 TLB entries, cache geometry, no
+COP2, MIPS IV traps as Reserved Instruction. `tests/run-scc.sh` proves the Z8530
 transmits, checked against a UART decode of its own output pin. See
 [10-r4300-integration.md](10-r4300-integration.md).
 

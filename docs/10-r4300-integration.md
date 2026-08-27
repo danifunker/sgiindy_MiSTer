@@ -1,12 +1,13 @@
-# The R4300i in this core
+# The CPU in this core
 
-What was actually built, what had to be changed, and what is measured. This is
-the document to read before touching `rtl/cpu/`.
+An R4300i made to present as the R4400 an Indy actually shipped with. What was
+built, what had to change, and what is measured. This is the document to read
+before touching `rtl/cpu/`.
 
-Status: **M1 complete.** The `cpu-tests` suite runs to completion on the core
-under Verilator and reports **2114 checks passed, 9 failed across 240 tests**,
-against **2101 / 61** for IRIS's own R4400. Three tests fail; fifteen that IRIS
-fails now pass. See [Results](#results).
+Status: **M1 complete.** The `cpu-tests` suite runs to completion under
+Verilator against full R4400 expectations and reports **2155 checks passed, 9
+failed across 240 tests**, against **2101 / 61** for IRIS's own R4400. Three
+tests fail; fifteen that IRIS fails now pass. See [Results](#results).
 
 ## Getting the VHDL into Verilator
 
@@ -100,8 +101,10 @@ the answer is that it works; the comment records both.
 
 ## What was fixed in the CPU
 
-Seven changes, all in the vendored VHDL, all marked `-- SGI:` and listed in
-`rtl/cpu/r4300/UPSTREAM.md`. `tools/diff_upstream.sh` prints the delta.
+Eight changes, all in the vendored VHDL, all marked `-- SGI:` and listed in
+`rtl/cpu/r4300/UPSTREAM.md`. `tools/diff_upstream.sh` prints the delta. These
+are bugs relative to the R4000 manual, distinct from the deliberate
+R4300-to-R4400 changes in the next section.
 
 | What | Why it matters here and not on an N64 |
 |---|---|
@@ -121,11 +124,84 @@ Both oracles agree it is the standard one here: the suite's constants are
 (`src/mips_exec.rs:99`) tests the mantissa MSB clear. Three independent
 sources, one answer.
 
-`Random` is deliberately **not** in that list. It already wraps at 31, correct
-for a 32-entry TLB; the test failed because it set `Wired = 40`, an entry this
-part does not have. That was fixed in the test, not the core.
+`Random` is deliberately **not** in that list. It wrapped at 31, correct for
+the 32-entry TLB it had at the time; the test failed because it set
+`Wired = 40`, an entry that part did not have. That was fixed in the test, not
+the core — and the TLB has since grown to 48 for a different reason, below.
+
+## Presenting as an R4400
+
+An Indy shipped with an R4000, R4400, R4600 or R5000. It never shipped with an
+R4300, and the R4300 is not a part any SGI software has ever been asked to
+drive. So the core reports itself as an R4400PC.
+
+The load-bearing fact is that **there is no architectural register that says
+how many TLB entries a part has.** On an R4000-family CPU, software takes that
+from `PRId` and nothing else. So `PRId` is not a label that can be changed on
+its own: reporting `0x0440` while the TLB has 32 entries gives you a machine
+that IRIX will drive as if it had 48, and the first time the kernel writes a
+high index it silently corrupts a low one. Identity and TLB size are one
+decision, and `PRESENT_AS_R4400` in `cpu_cop0.vhd` is that decision.
+
+| What | Was (R4300) | Now (R4400PC) | Cost |
+|---|---|---|---|
+| `PRId` | `0x0B22` | `0x0440` — imp 4, revision 4.0, which is the rule IRIX and Linux use to tell an R4400 from an R4000 | one mux arm |
+| `FIR` | `0x0A00` | `0x0500` | one nibble in `cpu_FPU.vhd` |
+| TLB entries | 32 | **48** | one more address bit on the entry RAM (32→64 deep × 101 bits), and a worst-case sequential search of 48 rather than 32 |
+| `Config` cache geometry | 16 KB/32 B I$, 8 KB/16 B D$ | 16 KB/16 B both, what an R4400 reports | one constant |
+| Coprocessor 2 | a real 64-bit data latch, so `mfc2` completes | Coprocessor Unusable, `Cause.CE = 2`, whatever `Status.CU2` says | one condition |
+| MIPS IV COP1 functions | Floating-Point exception, `FCSR.Cause.E` | Reserved Instruction | a five-way case in the COP1 decode |
+
+The TLB widening was the only one with real work in it, and it was tractable
+because **the TLB is searched sequentially, not associatively** — the
+`TLBPROBE`/`TLBINSTR`/`TLBDATA` states walk `TLB_readAddr` through the entry
+RAM. There is no bank of 32 comparators to grow into 48. What it did need was
+care in three places where the old five-bit counter's natural wrap at 31 *was*
+the entry count: the circular search from `TLB_fetchSource` round to
+`TLB_fetchSource - 1`, the `TLB_compareEnd` that terminates it, and the
+clear-all loop that starts one past the end. At six bits those wrap at 63, so
+each is now explicit against `TLB_LAST`. `Random` gained a `= 0` arm as well,
+so a `Wired` the part does not have bounds the counter instead of sending it
+through 63..48.
+
+Resource cost is not measured — nothing here has run through Quartus yet. The
+entry RAM doubling is 3.2 kbit more LUTRAM, and the search is deeper by 16
+cycles worst case, mostly hidden by the mini-TLB in `cpu_TLB_instr`/`_data`.
+
+### The one that is a lie, and why it is a safe one
+
+`Config`'s cache geometry now says 16 KB/16-byte for both caches while the
+hardware has 16 KB with 32-byte lines and 8 KB with 16-byte lines. That is
+deliberate and it is safe in the direction that matters:
+
+- **Over-reporting a cache size** makes an index-based flush loop run over
+  indices that alias onto real lines. Every line still gets flushed, some
+  twice. Harmless.
+- **Under-reporting a line size** makes the loop step finer than a line, so it
+  issues two operations per line instead of one. Also harmless. The dangerous
+  direction is a step *coarser* than a line, which skips lines — and reporting
+  16 bytes against 32-byte hardware cannot do that.
+
+Both errors are on the safe side, which is what makes this defensible while the
+caches are switched off entirely. It stops being defensible the moment they are
+turned on: at that point either the geometry becomes real or the report goes
+back to the truth. `cpu_cop0.vhd` says so at the constant.
+
+### Going back
+
+`PRESENT_AS_R4400` appears in three places — `cpu_cop0.vhd` (identity, TLB
+size, `Config`), `cpu.vhd` (COP2 and the MIPS IV COP1 codes) and one nibble in
+`cpu_FPU.vhd`'s `FIR`. Setting them false restores the R4300 the core is built
+from, and `TLB_ENTRIES` follows automatically so the part stays self-consistent.
+Both settings are tested: 2155/9 as an R4400, 2114/9 as an R4300, the same
+three tests failing either way. That is why the suite's `CPU_R4300` cell is
+still worth having even though the default build never uses it.
 
 ## The suite's third CPU
+
+*(This was the state before the R4400 presentation above; the `CPU_R4300`
+support it describes is still what the `PRESENT_AS_R4400 = false` build is
+tested with.)*
 
 The suite reads `PRId` at startup and refuses to run on anything it does not
 recognise — the R4300's `0x0B22` is neither R4400 nor R5000, so the very first
@@ -166,9 +242,10 @@ tests/run-cputest.sh
 | | checks passed | failed | tests failing |
 |---|---:|---:|---:|
 | IRIS, R4400 expectations | 2101 | 61 | 25 |
-| **this core, R4300** | **2114** | **9** | **3** |
+| **this core, as R4400** | **2155** | **9** | **3** |
+| this core, as R4300 | 2114 | 9 | 3 |
 
-Still failing:
+Still failing — the same three in both modes:
 
 | Test | Why | What to do |
 |---|---|---|

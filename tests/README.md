@@ -21,8 +21,9 @@ checkout is elsewhere. See [docs/09-cpu-validation.md](../docs/09-cpu-validation
 for the oracle policy and [docs/10-r4300-integration.md](../docs/10-r4300-integration.md)
 for the R4300 support that was added to it.
 
-Current: **2114 checks passed, 9 failed** over 240 tests, against 2101 / 61 for
-IRIS's own R4400. Three tests fail, all diagnosed in `docs/10`.
+Current: **2155 checks passed, 9 failed** over 240 tests, against 2101 / 61 for
+IRIS's own R4400 — the same expectations, since the core identifies as an
+R4400. Three tests fail, all diagnosed in `docs/10`.
 
 ## `run-scc.sh` — the SCC
 
@@ -67,5 +68,5 @@ brew install messense/macos-cross-toolchains/mipsel-unknown-linux-gnu
   reference `compare.py` diffs against. Regenerate with
   `cd ~/repos/iris/cpu-tests && ../target/release/iris --config run/bare.toml
   --load-elf build/cputest.elf --test-device --headless --noaudio`.
-- `r4300-core.log` — the last accepted run on this core, so a regression is
+- `core-r4400.log` — the last accepted run on this core, so a regression is
   visible in `git diff` and not just in a terminal.

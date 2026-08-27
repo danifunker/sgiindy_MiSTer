@@ -35,7 +35,7 @@ entity cpu_TLB_data is
       TLB_fetchExcNotFound : in  std_logic;
       TLB_fetchCached      : in  std_logic;
       TLB_fetchDirty       : in  std_logic;
-      TLB_fetchSource      : in  unsigned(4 downto 0);
+      TLB_fetchSource      : in  unsigned(5 downto 0);   -- SGI: 48 entries
       TLB_fetchAddrOut     : in  unsigned(31 downto 0)
    );
 end entity;
@@ -63,7 +63,7 @@ architecture arch of cpu_TLB_data is
       physical : unsigned(31 downto 0); 
       cached   : std_logic;
       dirty    : std_logic;
-      source   : unsigned(4 downto 0);
+      source   : unsigned(5 downto 0);   -- SGI: 48 entries
    end record; 
    
    type tminiEntries is array(0 to MINICOUNT - 1) of tminiEntry;

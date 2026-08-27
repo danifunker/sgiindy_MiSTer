@@ -107,6 +107,52 @@ entity cpu_cop0 is
 end entity;
 
 architecture arch of cpu_cop0 is
+
+   -- SGI: an Indy has an R4400, and the R4400 has 48 TLB entries. The R4300
+   -- this core is built from has 32, and IRIX does not probe: it takes the
+   -- entry count from PRId, so a machine that reports 0x0440 and then aliases
+   -- entries 32..47 onto 0..15 corrupts its own page tables the first time the
+   -- kernel writes a high index. Presenting as an R4400 and leaving the TLB at
+   -- 32 is therefore not an option; the two go together.
+   --
+   -- The cost is small because the TLB is searched sequentially rather than
+   -- associatively (see the TLBPROBE/TLBINSTR/TLBDATA states): one more address
+   -- bit on the entry RAM, and a worst-case search of 48 rather than 32 - and
+   -- the mini-TLB in cpu_TLB_instr/data absorbs most lookups before the search
+   -- runs at all.
+   -- SGI: what this CPU tells software it is.
+   --
+   -- An Indy shipped with an R4000, R4400, R4600 or R5000; it never shipped
+   -- with an R4300. Software identifies the part from PRId and nothing else -
+   -- there is no architectural "how many TLB entries" register on an R4000 -
+   -- so reporting 0x0B22 makes the IP24 PROM and IRIX configure themselves for
+   -- a CPU that is not in any Indy, and `hinv` would say so out loud.
+   --
+   -- 0x0440 is imp 0x04 revision 4.0. R4000 and R4400 share imp 0x04 and are
+   -- told apart by revision major >= 4, which is the rule IRIX and Linux both
+   -- use. Presenting as the PC variant: Config.SC stays 1, no secondary cache.
+   --
+   -- This is a promise, not a label. It selects the TLB size (TLB_ENTRIES
+   -- below is derived from it) and the cache geometry Config reports, and it
+   -- makes coprocessor 2 unusable in cpu.vhd, which has the same constant.
+   -- Set all three copies false to go back to reporting the R4300 the core is
+   -- built from, which is what the cpu-tests suite needs to apply honest
+   -- R4300 expectations - see docs/10-r4300-integration.md.
+   constant PRESENT_AS_R4400 : boolean := true;
+
+   -- Derived from PRESENT_AS_R4400 rather than set independently, because the
+   -- two are the same decision: software takes the entry count from PRId, so a
+   -- part whose identity and TLB size disagree is one no operating system can
+   -- drive correctly. The entry RAM is addressed with six bits either way -
+   -- allocating 64 and using 32 costs nothing worth splitting.
+   function tlb_entry_count(as_r4400 : boolean) return natural is
+   begin
+      if as_r4400 then return 48; else return 32; end if;
+   end function;
+
+   constant TLB_ENTRIES   : natural := tlb_entry_count(PRESENT_AS_R4400);
+   constant TLB_LAST      : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 1, 6);
+   constant TLB_LAST_PREV : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 2, 6);
      
    signal COP0_0_INDEX_tlbEntry           : unsigned(5 downto 0) := (others => '0');
    signal COP0_0_INDEX_probefailure       : std_logic := '0';
@@ -208,10 +254,11 @@ architecture arch of cpu_cop0 is
    
    signal TLB_init                        : std_logic := '0';
    signal TLB_resetMode                   : std_logic := '0';
-   signal TLB_resetAddr                   : unsigned(4 downto 0) := (others => '0');
+   -- SGI: 48 TLB entries, not the R4300's 32 - see TLB_ENTRIES below.
+   signal TLB_resetAddr                   : unsigned(5 downto 0) := (others => '0');
    
-   signal TLB_readAddr                    : unsigned(4 downto 0) := (others => '0');
-   signal TLB_compareEnd                  : unsigned(4 downto 0) := (others => '0');
+   signal TLB_readAddr                    : unsigned(5 downto 0) := (others => '0');
+   signal TLB_compareEnd                  : unsigned(5 downto 0) := (others => '0');
    
    signal TLBInvalidate                   : std_logic := '0'; 
    
@@ -275,8 +322,8 @@ architecture arch of cpu_cop0 is
    
    signal TLBMEM_writeEnable              : std_logic;
    signal TLBMEM_writeData                : std_logic_vector(100 downto 0);
-   signal TLBMEM_writeAddr                : std_logic_vector(4 downto 0);
-   signal TLBMEM_readAddr                 : std_logic_vector(4 downto 0);
+   signal TLBMEM_writeAddr                : std_logic_vector(5 downto 0);
+   signal TLBMEM_readAddr                 : std_logic_vector(5 downto 0);
    signal TLBMEM_readData                 : std_logic_vector(100 downto 0);
    
    signal TLB_ExcInstrRead                : std_logic;
@@ -287,7 +334,7 @@ architecture arch of cpu_cop0 is
    signal TLB_ExcDataMiss                 : std_logic;
    
    signal TLB_InstrClearEna               : std_logic;
-   signal TLB_InstrClearIndex             : unsigned(4 downto 0);
+   signal TLB_InstrClearIndex             : unsigned(5 downto 0);
    
    signal TLB_Instr_fetchReq              : std_logic;
    signal TLB_Data_fetchReq               : std_logic;
@@ -302,7 +349,7 @@ architecture arch of cpu_cop0 is
    signal TLB_fetchCached                 : std_logic := '0';
    signal TLB_fetchDirty                  : std_logic := '0';
    signal TLB_fetchRandom                 : std_logic := '0';
-   signal TLB_fetchSource                 : unsigned(4 downto 0) := (others => '0');
+   signal TLB_fetchSource                 : unsigned(5 downto 0) := (others => '0');
    signal TLB_fetchAddrOut                : unsigned(31 downto 0) := (others => '0');
    signal TLB_fetchAddrOutMasked          : unsigned(31 downto 0) := (others => '0');
    
@@ -323,7 +370,7 @@ architecture arch of cpu_cop0 is
       region                 : unsigned(1 downto 0);
       random                 : std_logic;
    end record; 
-   type tTLBENTRYS  is array(0 to 31) of tTLBENTRY;
+   type tTLBENTRYS  is array(0 to 63) of tTLBENTRY;
    signal TLBENTRYS : tTLBENTRYS;
 -- synthesis translate_on
    
@@ -433,12 +480,22 @@ begin
             
          when 14 => readValue <= COP0_14_EPC;
             
-         when 15 => readValue(11 downto 0) <= x"B22"; -- COP0_15_COPREVISION
+         -- SGI: see PRESENT_AS_R4400. R4300 is 0x0B22, R4400 is 0x0440.
+         when 15 =>
+            if (PRESENT_AS_R4400) then
+               readValue(11 downto 0) <= x"440";
+            else
+               readValue(11 downto 0) <= x"B22";
+            end if;
          
          when 16 =>
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
-            readValue(14 downto 4)  <= "11001000110";
+            if (PRESENT_AS_R4400) then
+               readValue(14 downto 4) <= "11001001000";   -- SGI: 16K/16K, 16 B lines
+            else
+               readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
+            end if;
             readValue(15)           <= COP0_16_CONFIG_bigEndian;
             readValue(23 downto 16) <= "00000110"; 
             readValue(27 downto 24) <= COP0_16_CONFIG_sysadWBPattern; 
@@ -634,9 +691,12 @@ begin
             
             -- random
             if (stall = 0) then
-               if (COP0_6_WIRED(5) = '0' and COP0_1_RANDOM(4 downto 0) = COP0_6_WIRED(4 downto 0)) then
-                  COP0_1_RANDOM <= 6x"1F";
-                  --COP0_1_RANDOM <= 6x"03"; -- DO NOT COMMIT AS ACTIVE!
+               -- SGI: Random cycles over [Wired, TLB_ENTRIES-1]. The extra
+               -- `= 0` arm bounds it when software writes a Wired the part
+               -- does not have: without it the counter would run past zero and
+               -- wrap through 63..48, which are not entries.
+               if (COP0_1_RANDOM = COP0_6_WIRED or COP0_1_RANDOM = 0) then
+                  COP0_1_RANDOM <= TLB_LAST;
                else
                   COP0_1_RANDOM <= COP0_1_RANDOM - 1;
                end if;
@@ -645,7 +705,7 @@ begin
             if (cop0Written6 > 0) then
                cop0Written6 <= cop0Written6 - 1;
                if (cop0Written6 = 1) then
-                  COP0_1_RANDOM   <= to_unsigned(31, 6);
+                  COP0_1_RANDOM   <= TLB_LAST;   -- SGI
                end if;
             end if;
             
@@ -965,7 +1025,11 @@ begin
                   elsif (TLB_Instr_fetchReq_saved = '1' or TLB_Instr_fetchReq = '1') then
                      TLB_Instr_fetchReq_saved <= '0';
                      TLB_readAddr             <= TLB_fetchSource;
-                     TLB_compareEnd           <= TLB_fetchSource - 1;
+                     if (TLB_fetchSource = 0) then   -- SGI
+                        TLB_compareEnd        <= TLB_LAST;
+                     else
+                        TLB_compareEnd        <= TLB_fetchSource - 1;
+                     end if;
                      TLBState                 <= TLBINSTR;
                      TLB_fetchAddrIn          <= TLB_Instr_fetchAddrIn;
                      TLB_fetchExcNotFound     <= '1';
@@ -974,7 +1038,11 @@ begin
                   elsif (TLB_Data_fetchReq_saved = '1' or TLB_Data_fetchReq = '1') then
                      TLB_Data_fetchReq_saved  <= '0';
                      TLB_readAddr             <= TLB_fetchSource;
-                     TLB_compareEnd           <= TLB_fetchSource - 1;
+                     if (TLB_fetchSource = 0) then   -- SGI
+                        TLB_compareEnd        <= TLB_LAST;
+                     else
+                        TLB_compareEnd        <= TLB_fetchSource - 1;
+                     end if;
                      TLBState                 <= TLBDATA;
                      TLB_fetchAddrIn          <= TLB_Data_fetchAddrIn;
                      TLB_fetchExcNotFound     <= '1';
@@ -984,8 +1052,13 @@ begin
                   end if;
                   
                when TLBPROBE =>
-                  TLB_readAddr <= TLB_readAddr + 1;
-                  if (TLB_readAddr = 31) then
+                  -- SGI: explicit wrap, see TLB_ENTRIES.
+                  if (TLB_readAddr = TLB_LAST) then
+                     TLB_readAddr <= (others => '0');
+                  else
+                     TLB_readAddr <= TLB_readAddr + 1;
+                  end if;
+                  if (TLB_readAddr = TLB_LAST) then
                      TLBState                  <= TLBIDLE;
                      COP0_0_INDEX_probefailure <= '1';
                      COP0_0_INDEX_tlbEntry     <= (others => '0');
@@ -996,14 +1069,18 @@ begin
                         if (TLBREAD_global = '1' or (COP0_10_ENTRYHI_addressSpaceID = TLBREAD_ASID)) then
                            TLBState                  <= TLBIDLE;
                            COP0_0_INDEX_probefailure <= '0';
-                           COP0_0_INDEX_tlbEntry     <= '0' & TLB_readAddr;
+                           COP0_0_INDEX_tlbEntry     <= TLB_readAddr;   -- SGI
                            TLBDone                   <= '1';
                         end if;
                      end if;
                   end if;
                   
                when TLBDATA | TLBINSTR =>
-                  TLB_readAddr <= TLB_readAddr + 1;
+                  if (TLB_readAddr = TLB_LAST) then   -- SGI: explicit wrap
+                     TLB_readAddr <= (others => '0');
+                  else
+                     TLB_readAddr <= TLB_readAddr + 1;
+                  end if;
                   if (TLB_readAddr = TLB_compareEnd) then
                      TLBState           <= TLBIDLE;
                      if (TLBState = TLBINSTR) then
@@ -1060,7 +1137,7 @@ begin
                TLB_init         <= '1';
                TLB_resetAddr    <= TLB_InstrClearIndex;
             else
-               TLB_resetAddr    <= (others => '1');
+               TLB_resetAddr    <= TLB_LAST;        -- SGI
                TLB_resetMode    <= '1';
             end if;
             TLBINIT_global   <= '0';
@@ -1082,7 +1159,7 @@ begin
          if (TLB_resetMode = '1') then
             TLB_resetAddr <= TLB_resetAddr + 1;
             TLB_init      <= '1';
-            if (TLB_resetAddr = 30) then
+            if (TLB_resetAddr = TLB_LAST_PREV) then   -- SGI
                TLB_resetMode <= '0';
             end if;
          end if;
@@ -1108,7 +1185,7 @@ begin
          end if;
          
          if (SS_wren_CPU = '1' and SS_Adr >= 256 and SS_Adr < 320) then
-            TLB_resetAddr <= SS_Adr(5 downto 1);
+            TLB_resetAddr <= SS_Adr(6 downto 1);   -- SGI: six-bit index
             TLB_init      <= SS_Adr(0);
          end if;
          
@@ -1168,14 +1245,14 @@ begin
                          '0';
    
    TLBMEM_writeAddr <= std_logic_vector(TLB_resetAddr) when (TLB_init = '1') else
-                       std_logic_vector(COP0_0_INDEX_tlbEntry(4 downto 0)) when (TLBWI = '1') else
-                       std_logic_vector(COP0_1_RANDOM(4 downto 0));
+                       std_logic_vector(COP0_0_INDEX_tlbEntry) when (TLBWI = '1') else
+                       std_logic_vector(COP0_1_RANDOM);
    
    iTLBMEM : entity mem.RamMLAB
 	GENERIC MAP 
    (
       width      => 101,
-      widthad    => 5
+      widthad    => 6      -- SGI: 48 entries, see TLB_ENTRIES
 	)
 	PORT MAP (
       inclock    => clk93,
@@ -1186,7 +1263,7 @@ begin
       q          => TLBMEM_readData
 	);
    
-   TLBMEM_readAddr <= std_logic_vector(COP0_0_INDEX_tlbEntry(4 downto 0)) when (TLBState = TLBIDLE) else
+   TLBMEM_readAddr <= std_logic_vector(COP0_0_INDEX_tlbEntry) when (TLBState = TLBIDLE) else
                       std_logic_vector(TLB_readAddr);
    
    TLBREAD_global   <= TLBMEM_readData(0);           

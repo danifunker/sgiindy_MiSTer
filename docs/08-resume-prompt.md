@@ -62,12 +62,11 @@ Its expectations come from the R4000 manual, not from golden recordings, and it
 deliberately *reports* rather than asserts where the architecture is silent —
 read `cpu-tests/docs/oracle.md` and honour that policy.
 
-**The R4300i is not an R4400 and the suite will say so.** This has been done:
-`CPU_R4300` is in the suite harness, and the divergences are settled in
-`docs/10-r4300-integration.md`. `PRId` is `0x0B22`, `FIR` is `0x0A00`, there
-are 32 TLB entries, and the cache geometry is 16 KB/32 B I$ with 8 KB/16 B D$
-— which the `Config` register does report correctly, contrary to what
-`docs/04` and `docs/09` originally said.
+**The R4300i is not an R4400** — so it was made to present as one, because an
+Indy never shipped with an R4300 and software infers the TLB entry count from
+`PRId`. See `docs/10-r4300-integration.md`. The suite's `CPU_R4300` cell is
+still there and still tested, for the build that reports the underlying part
+honestly.
 
 Then, for each divergence, **decide deliberately and write the decision down**:
 fix the core where the PROM or IRIX depends on the behaviour (the `Config`
@@ -191,11 +190,17 @@ record of how, and it is where the byte-lane contract lives.
   backend — no Yosys, no checked-in netlist), wrapped by
   `rtl/cpu/r4300_wrap.vhd`, and bridged to the SGI bus by
   `rtl/cpu/r4300_bus.sv`.
+- **It presents as an R4400**, which is what an Indy has. That is not just
+  `PRId`: nothing reports the TLB entry count architecturally, so software
+  infers it from the CPU identity, and the TLB was widened from 32 to 48
+  entries to make the claim true. Cache geometry, COP2 and the MIPS IV traps
+  moved with it. `PRESENT_AS_R4400` in `cpu_cop0.vhd` is the switch, and both
+  settings are tested.
 - **It is measured.** `tests/run-cputest.sh` runs the 240-test suite on it:
-  2114 checks passed / 9 failed, against 2101 / 61 for IRIS's R4400. Three
-  tests fail, all diagnosed. Seven bugs in the vendored CPU were found and
-  fixed; `rtl/cpu/r4300/UPSTREAM.md` lists them and `tools/diff_upstream.sh`
-  proves the list complete.
+  2155 checks passed / 9 failed against R4400 expectations, versus 2101 / 61
+  for IRIS's own R4400. Three tests fail, all diagnosed. Eight bugs in the
+  vendored CPU were found and fixed; `rtl/cpu/r4300/UPSTREAM.md` lists them and
+  `tools/diff_upstream.sh` proves the list complete.
 - **The SCC transmits.** `rtl/sgi/z8530_scc.sv` behind `rtl/sgi/sgi_scc.sv`,
   proved by `tests/run-scc.sh` — a bare-metal image that programs the part the
   way the PROM does, checked both at the byte tap and by decoding the `txdb`
@@ -212,9 +217,8 @@ record of how, and it is where the byte-lane contract lives.
 **M2 — the MC, enough to survive `realstart`.** `SYSID`, `CPUCTRL0/1`
 readback, and a genuinely free-running `RPSS_CTR`. `~/mistersgi/sgi_mc.v` has a
 working register file to start from. Note that one worry M2 carried has
-evaporated: the R4300i *does* drive `Config`'s cache-geometry fields
-(`0x7006E460`), so `realstart` will not derive nonsense refresh timing from
-them.
+evaporated: `Config`'s cache-geometry fields are driven, and now report R4400
+geometry, so `realstart` will not derive nonsense refresh timing from them.
 
 Then M3: load a PROM image with `--prom`, boot from `0xBFC00000` (the harness
 already does this — `boot_pc` defaults to it), and chase the first banner line

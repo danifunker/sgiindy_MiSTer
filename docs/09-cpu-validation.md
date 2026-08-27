@@ -78,10 +78,10 @@ Verified against `~/mistersgi/R4300_VHDL/cpu_cop0.vhd`:
 
 | | R4400 (suite expects) | R5000 | **N64 R4300i** | Consequence |
 |---|---|---|---|---|
-| `PRId` | `0x00000440` | `0x00002321` | **`0x00000B22`** (`cpu_cop0.vhd:431`) | `identity/t_prid` fails; suite picks R4400 expectations by default |
-| `FIR` | `0x00000500` | `0x00002300` | R4300 value | `identity/t_fir` fails |
-| TLB entries | 48 | 48 | **32** (`cpu_cop0.vhd:321`, `array(0 to 31)`) | `identity/t_tlb_size` and parts of `tlb/` fail |
-| I$ / D$ | 16 KB / 16 KB, 16-byte lines | 32 KB / 32 KB, 32-byte lines | 16 KB / 8 KB | `identity/t_config_cache_geometry` fails |
+| `PRId` | `0x00000440` | `0x00002321` | **`0x00000B22`** (`cpu_cop0.vhd:431`) | handled — imp `0x0B` selects the R4300 cell (`iris.h:113`), revision checked loosely |
+| `FIR` | `0x00000500` | `0x00002300` | **`0x00000A00`** | handled — `FIR_R4300` (`iris.h:88`) |
+| TLB entries | 48 | 48 | **32** (`cpu_cop0.vhd:321`, `array(0 to 31)`) | handled — `TLB_ENTRIES_R4300` (`iris.h:257`), selected in `testlib.c:187` |
+| I$ / D$ | 16 KB / 16 KB, 16-byte lines | 32 KB / 32 KB, 32-byte lines | 16 KB / 8 KB | handled — `is_r4300()` branches in `identity.c:54` and `cache.c:49` |
 | `Config` IC/DC/IB/DB fields | populated | populated | **populated** — measured `0x7006E460` | ✅ 16 KB/32 B I$, 8 KB/16 B D$; the "reads as 4 KB" worry was wrong |
 | Endianness | big | big | **big** — `COP0_16_CONFIG_bigEndian <= '1'` at reset (`cpu_cop0.vhd:582`) | ✅ correct for SGI |
 | MIPS IV | absent (must raise RI) | present | absent | `mips4/` should behave like R4400 ✅ |
@@ -165,7 +165,13 @@ Reference results, measured rather than quoted — the suite has grown since
 | | checks passed | failed | tests failing |
 |---|---:|---:|---:|
 | IRIS, R4400 expectations | 2101 | 61 | 25 |
-| **this core, R4300** | **2114** | **9** | **3** |
+| **this core, as R4400** | **2155** | **9** | **3** |
+| this core, as R4300 | 2114 | 9 | 3 |
+
+The core presents as an R4400, so the first two rows are the same expectations
+applied to two implementations. The R4300 row is the same core with
+`PRESENT_AS_R4400` off, kept working so the suite's `CPU_R4300` cell stays
+exercised.
 
 `tests/baseline/iris-r4400.log` is the IRIS run, kept as the reference;
 `tests/compare.py` diffs against it test by test. IRIS's failures are known
@@ -194,3 +200,9 @@ The path to running the suite under Verilator:
 That gives a CPU regression suite running in simulation before a single line of
 MC, HPC3 or NVRAM code exists — and it is the same binary that boots on real
 hardware, so any result can be checked against iron.
+
+## Running it on real hardware
+
+The same binary boots on a real SGI — see
+[11-running-on-hardware.md](11-running-on-hardware.md). **Note that the suite is
+MIPS III / n32 and will not run on an R3000 machine.**

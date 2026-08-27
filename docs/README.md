@@ -5,9 +5,9 @@ MiSTer, distilled from an earlier exploratory project at `~/mistersgi` (a
 DE1-based Quartus/Verilator sandbox, not a MiSTer core).
 
 The knowledge base the core is built from, plus a record of what has been
-built. Milestones M0 and M1 are done: the R4300i runs the 240-test bare-metal
-MIPS suite under Verilator at 2114 checks passed / 9 failed, and the Z8530
-transmits. `tests/` has both regressions.
+built. Milestones M0 and M1 are done: the CPU runs the 240-test bare-metal MIPS
+suite under Verilator at 2155 checks passed / 9 failed against full R4400
+expectations, and the Z8530 transmits. `tests/` has both regressions.
 
 Anything below that predates the build is still the plan; where the build
 proved a plan wrong, the doc says so rather than being quietly rewritten.
@@ -24,7 +24,8 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | [07-mister-port-plan.md](07-mister-port-plan.md) | Proposed plan for turning this into a real MiSTer core |
 | **[08-resume-prompt.md](08-resume-prompt.md)** | **Start here if you are picking this work up** — the agent entry point |
 | [09-cpu-validation.md](09-cpu-validation.md) | The IRIS bare-metal CPU test suite, and IRIS as behavioural oracle |
-| **[10-r4300-integration.md](10-r4300-integration.md)** | **The CPU as built** — the byte-lane contract, the seven fixes, the numbers |
+| **[10-r4300-integration.md](10-r4300-integration.md)** | **The CPU as built** — the byte-lane contract, turning an R4300 into an R4400, the fixes, the numbers |
+| [11-running-on-hardware.md](11-running-on-hardware.md) | Building and booting the CPU test suite on a real SGI |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
 ## Machines under consideration

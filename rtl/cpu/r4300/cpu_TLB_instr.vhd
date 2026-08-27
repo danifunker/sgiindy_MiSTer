@@ -26,7 +26,7 @@ entity cpu_TLB_instr is
       TLB_ExcMiss          : out std_logic := '0';
       
       TLB_ClearEna         : out std_logic := '0';
-      TLB_ClearIndex       : out unsigned(4 downto 0) := (others => '0');
+      TLB_ClearIndex       : out unsigned(5 downto 0) := (others => '0');   -- SGI: 48 entries
       
       TLB_fetchReq         : out std_logic := '0';
       TLB_fetchAddrIn      : out unsigned(63 downto 0) := (others => '0');
@@ -35,7 +35,7 @@ entity cpu_TLB_instr is
       TLB_fetchExcNotFound : in  std_logic;
       TLB_fetchCached      : in  std_logic;
       TLB_fetchRandom      : in  std_logic;
-      TLB_fetchSource      : in  unsigned(4 downto 0);
+      TLB_fetchSource      : in  unsigned(5 downto 0);   -- SGI: 48 entries
       TLB_fetchAddrOut     : in  unsigned(31 downto 0)
    );
 end entity;
