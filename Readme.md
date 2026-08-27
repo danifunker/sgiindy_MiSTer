@@ -35,7 +35,7 @@ the numbers. If you are picking this work up,
 | `tests/` | the CPU and SCC regressions, and their reference logs |
 | `tools/` | VHDL→Verilog lowering, upstream diff, PROM tooling |
 | `docs/` | design notes, address maps, PROM analysis, port plan |
-| `roms/` | boot PROM images (**gitignored** — SGI firmware) |
+| `roms/` | boot PROM images for IP12/IP20/IP22/IP24 — SGI firmware, see `NOTICE.md` |
 | `reference/` | chip specs, full PROM disassembly, MAME sources (**gitignored**) |
 
 ## Building
@@ -73,4 +73,5 @@ project's GPL-3.0 CPU, so it cannot be GPL-2.0-only; MiSTer's `sys/` is
 - aoR3000 R3000A core: Aleksander Osman (BSD) — the documented fallback for an
   Indigo/IP12 target.
 
-Boot PROM images are copyrighted SGI firmware and are not distributed here.
+Boot PROM images under `roms/` are copyrighted SGI firmware and are not
+covered by this repository's licence. See [`NOTICE.md`](NOTICE.md).

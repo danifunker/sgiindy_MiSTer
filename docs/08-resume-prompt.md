@@ -168,9 +168,10 @@ IRIS's `rex3.rs` / `vc2.rs` / `xmap9.rs` are a complete working reference.
   in any committed file or commit message. Upstream project attribution
   (MiSTer-devel, IRIS, aoR3000, the MiSTer N64 project, OzOnE, MAME) is correct
   and should stay.
-- **Do not commit PROM images.** `roms/` and `reference/` are gitignored. The
-  images are SGI-copyrighted firmware; the core loads them from SD at runtime
-  like every other MiSTer core's BIOS.
+- **PROM images are in `roms/`** at the repository owner's decision, and are
+  SGI-copyrighted firmware not covered by this repository's licence (see
+  `NOTICE.md`). Nothing embeds them: the core loads a PROM from SD at runtime
+  like every other MiSTer core's BIOS. `reference/` is still gitignored.
 - **Vendor VHDL, not netlists.**
 - Check licences before vendoring anything: aoR3000 is BSD but its `linux/` and
   `sim/vmips/` subdirectories are GPL. Check the N64 `cpu.vhd` licence and

@@ -2,9 +2,10 @@ scratch/
 .DS_Store
 ._*
 
-# SGI boot PROM images are copyrighted SGI firmware - kept locally for
-# development, never committed. Users supply their own at runtime.
-roms/
+# roms/ holds SGI boot PROM images. They are SGI-copyrighted firmware and are
+# committed here at the repository owner's decision; the core still loads one
+# from the SD card at runtime rather than embedding it, so a fork that would
+# rather not carry them can delete the directory without touching the RTL.
 
 # Bulky derived artefacts (PROM disassembly, chip specs, MAME sources).
 # Kept locally as working reference; not part of the core.

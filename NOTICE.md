@@ -21,14 +21,23 @@ forking this and wanting GPL-2.0 has to replace the CPU.
 `tools/diff_upstream.sh` prints the delta so that list can be checked rather
 than trusted.
 
+## Boot PROM images
+
+`roms/` holds SGI boot PROM dumps for IP12, IP20, IP22 and IP24. They are
+**SGI-copyrighted firmware**, not covered by this repository's licence, and
+they are here at the repository owner's decision rather than because anything
+needs them to be: the core loads a PROM from the SD card at runtime, the way
+every MiSTer core loads a BIOS, so deleting `roms/` breaks nothing in the RTL.
+
+Anyone redistributing this repository should decide for themselves whether to
+carry them.
+
 ## What is deliberately not here
 
-- **SGI boot PROM images.** They are copyrighted SGI firmware. The core loads
-  one from the SD card at runtime, the way every MiSTer core loads a BIOS.
-  `roms/` is gitignored.
 - **The `cpu-tests` suite.** It lives in the IRIS project (BSD-3-Clause) and is
   used from there rather than forked; `tests/run-cputest.sh` points at a
   checkout. The R4300 support this core needs was contributed to that copy -
   see `docs/09-cpu-validation.md`.
-- **Chip specifications and MAME sources** kept locally as reference under
-  `reference/`, also gitignored.
+- **Chip specifications, MAME sources and the full PROM disassembly**, kept
+  locally under `reference/` and gitignored - 26 MB of derived and
+  third-party material that the core does not need to build.

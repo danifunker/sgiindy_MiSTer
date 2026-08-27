@@ -1,0 +1,2 @@
+ip24prom.070-9101-007.bin: SGI Version 5.0 Rev B6 IP24 Sep 28, 1994
+ip24prom.070-9101-011.bin: SGI Version 5.3 Rev B10 R4X00/R5000 IP24 Feb 12, 1996
