@@ -29,10 +29,12 @@
 # MESSAGE OUT phase to receive the SDTR in. Both ends of that are built now -
 # see docs/13-scsi-dma-plan.md - and the string is on the forbidden list below.
 #
-# WHAT IS STILL MISSING: `hinv` lists no disk. That is NOT what this script
-# tests, and two theories about why have already been wrong - the negotiation
-# was not it, and neither is "this PROM's hinv does not report SCSI". The disk
-# is missing from the ARCS device tree; docs/13 has where to pick that up.
+# `hinv` LISTS THE DISK, and this script is what used to say it did not. The
+# run ended on --stop-on 'Mbytes', and the PROM prints the SCSI lines *after*
+# "Memory size:" - so the one line that mattered was cut off by the harness a
+# few thousand cycles before it was transmitted. Three theories were built on
+# top of that missing line and all three were about a machine that was already
+# working. The stop condition is now the disk line itself.
 #
 #   tests/run-scsi.sh [--no-build]
 
@@ -52,6 +54,12 @@ EXPECT=(
     "System Maintenance Menu"                # POST still passes with a disk on
     "Command Monitor."
     "Memory size: 64 Mbytes"
+    # The ARCS device tree, walked by hinv. The PROM builds it as
+    # adapter(type 0x0b) -> controller(0x0e) -> disk(class 6, type 0x1a), and
+    # the node printer at 0xBFC41368 only reaches "SCSI Disk" if the disk's
+    # grandparent is the type-0x0b adapter - so this one line asserts the whole
+    # chain, not just that a disk answered INQUIRY.
+    "SCSI Disk: scsi(0)disk(1)"
 )
 
 FORBID=(
@@ -85,7 +93,7 @@ echo "booting $(basename "$PROM") with a disk on ID 1 ..."
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \
-       --stop-on 'Mbytes' \
+       --stop-on 'disk(1)' \
        --console "$OUT" >/dev/null 2>&1
 
 fail=0

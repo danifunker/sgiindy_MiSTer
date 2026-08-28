@@ -19,6 +19,7 @@ simulation/
 greybox_tmp/
 obj_dir/
 obj_dir_gui/
+obj_dir_dmadbg/
 # Per-user ImGui window layout, written to whatever directory the GUI
 # harness is launched from.
 imgui.ini

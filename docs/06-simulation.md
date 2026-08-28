@@ -88,6 +88,18 @@ Everything docs recommended porting from the sandbox is there:
   addresses finds the same failure and names the register, which the PC alone
   would not;
 - `--hot`, the most-accessed addresses on exit;
+- `--watch HEX`, repeatable: every bus access to that doubleword, with cycle,
+  direction and data, and a count on exit. **On PROM text this is a PC watch.**
+  The PROM runs from `0xBFC…`, which is KSEG1 and which the architecture defines
+  as uncached, so every instruction it executes is a bus read - a watch on a
+  PROM address therefore says whether a routine was reached, and one on a RAM
+  address says what a pointer was set to. It answers "is this code even
+  running" without a trace of four million transactions, and it is what showed
+  that the PROM was printing the `hinv` disk line all along and the harness was
+  exiting first (`docs/13`). **Read the counts as a lower bound, not as an
+  execution count**: they are bus cycles, and an address fetched inside a loop
+  is not fetched once per iteration. Zero means never reached; anything else
+  means reached;
 - `--no-icache` / `--no-dcache`, which run with one or both primary caches off.
   They exist because a cache bug looks like a CPU bug: the fill path was
   brought up by bisecting each symptom onto one cache from the command line

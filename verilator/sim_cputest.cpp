@@ -117,6 +117,12 @@ struct Options {
     uint32_t ram_mb       = 64;
     uint64_t trace_from   = 0;
     uint64_t trace_count  = 2000;
+    // Addresses to report every bus access to, doubleword-aligned. The PROM
+    // runs from KSEG1, which the architecture defines as uncached, so every
+    // instruction it executes is a bus read - which makes an address watch on
+    // a PROM text address a PC watch, and the cheapest way to answer "is this
+    // routine reached at all" without a trace of four million transactions.
+    std::vector<uint32_t> watch;
     // Which cpu_error bits abort the run. See kErrorNames: only the two that
     // mean the core itself is wedged are fatal by default.
     uint32_t fatal_errors = (1u << 1) | (1u << 4);   // stall, fifo
@@ -197,7 +203,8 @@ static void usage()
         "  --trace-from N    start the trace at cycle N\n"
         "  --trace-count N   how many transactions to print (default 2000)\n"
         "  --hot             on exit, list the most-accessed addresses\n"
-        "  --uart            also decode the SCC's txdb line and compare\n"
+        "  --watch HEX       report every bus access to HEX (repeatable). PROM\n"
+        "                    text is uncached, so this is a PC watch\n"        "  --uart            also decode the SCC's txdb line and compare\n"
         "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1)\n"
         "  --key TEXT        type TEXT at the PC keyboard port (not the console)\n"
         "  --key-on TRIG TEXT  the same, once TRIG has appeared on the console\n"
@@ -235,6 +242,8 @@ int main(int argc, char **argv)
         else if (a == "--trace")       opt.trace = true;
         else if (a == "--irq")         opt.irq = true;
         else if (a == "--hot")         opt.hot = true;
+        else if (a == "--watch")       opt.watch.push_back(
+                 static_cast<uint32_t>(strtoul(next("--watch"), nullptr, 16)) & ~7u);
         else if (a == "--uart")        opt.uart = true;
         else if (a == "--disk") {
             // --disk ID=PATH, or --disk PATH for ID 1 (ID 0 is the host
@@ -331,6 +340,7 @@ int main(int argc, char **argv)
     // ---- run ----
     std::string console;
     std::map<uint32_t, uint64_t> hits;
+    std::map<uint32_t, uint64_t> watch_hits;
     struct Unclaimed { uint64_t count = 0, first = 0, last = 0; unsigned we = 0, re = 0; };
     std::map<uint32_t, Unclaimed> unclaimed;
     uint64_t cycle = 0, traced = 0, txns = 0;
@@ -460,6 +470,20 @@ int main(int argc, char **argv)
                            top->bus_we ? top->bus_wdata : top->bus_rdata),
                        top->bus_be);
                 traced++;
+            }
+            for (uint32_t w : opt.watch) {
+                if ((a & ~7u) == w) {
+                    watch_hits[w]++;
+                    if (watch_hits[w] <= 20)
+                        printf("[%10llu] WATCH %08x %s %08x data %016llx be %02x"
+                               "  hit %llu\n",
+                               static_cast<unsigned long long>(cycle), w,
+                               top->bus_we ? "WR" : "RD", a,
+                               static_cast<unsigned long long>(
+                                   top->bus_we ? top->bus_wdata : top->bus_rdata),
+                               top->bus_be,
+                               static_cast<unsigned long long>(watch_hits[w]));
+                }
             }
             if (a == stuck_addr) stuck_hits++; else { stuck_addr = a; stuck_hits = 1; }
         }
@@ -650,6 +674,13 @@ int main(int argc, char **argv)
                    static_cast<unsigned long long>(e.second.first),
                    static_cast<unsigned long long>(e.second.last));
         }
+    }
+
+    if (!opt.watch.empty()) {
+        printf("watched addresses:\n");
+        for (uint32_t w : opt.watch)
+            printf("  %08x %llu hits\n", w,
+                   static_cast<unsigned long long>(watch_hits[w]));
     }
 
     if (opt.hot) {
