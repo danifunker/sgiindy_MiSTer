@@ -56,8 +56,18 @@ PROM Monitor SGI Version 5.3 Rev B10 R4X00/R5000 IP24 Feb 12, 1996 (BE)
 
 `tests/run-prom.sh` reproduces all of that and checks each line, so a change
 that moves the boot backwards fails a test rather than surprising you later.
-**"16 Mhz" is measured, not claimed**: the PROM times itself against the 8254,
-which simulation runs ten times fast.
+
+**"16 Mhz" is a real measurement of this core, and it is not a clock rate.**
+`FUN_bfc31594` derives it from CP0 `Count` across a fixed 512-iteration loop,
+so what it reports is how many clocks that loop actually took. `Count` itself
+is right - `cpu_cop0.vhd` increments a 33-bit counter every cycle and reads
+back bits `[32:1]`, half the pipeline clock, as an R4400 does. The loop is
+slow because **both caches are off and every instruction is a bus round trip**:
+about 9 cycles per bus transaction times two instructions is ~20 clocks an
+iteration, against ~2 on a real R4400. That 9-10x gap against a real Indy's
+100-150 MHz is the 16. It is an honest report of instruction throughput, it
+has nothing to do with FPGA timing, and the instruction cache is what fixes
+it.
 
 Against `docs/07-mister-port-plan.md`'s milestones: **M0–M3 done, M6 — the "it
 boots" milestone — reached, M4 and M5 partly done.** Every failure above is a
@@ -213,26 +223,71 @@ any hardware-confirmed result under `tests/hardware/`.
 
 ## Where to pick up
 
-In rough order of value:
+### 1. The instruction cache - do this first
 
-1. **The instruction cache.** Every fetch is a bus round trip today, which is
-   both the simulation's speed limit and a performance floor on hardware.
-   `cpu_instrcache.vhd` fills from the N64's RDRAM port, tied off in
-   `r4300_wrap.vhd`; pointing it at this bus is the single biggest change
-   available and would make every PROM run several times faster.
-2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
+It is the simulation's speed limit, the hardware performance floor, and the
+reason `hinv` reports 16 MHz. Nothing else on this list changes as much.
+
+The request side **already works**, which is the thing worth knowing before
+planning it. `cpu_instrcache.vhd` raises `ram_request`, and `cpu.vhd` pushes
+that into the same write FIFO as an ordinary fetch (cpu.vhd:751-758) with
+`writefifo_Din(107)` tagging it a fill and the address forced to a 32-byte
+boundary. When the entry issues, `mem_size` is set to `"100"` and
+`instrcache_active` goes high (cpu.vhd:852-855), and the transaction ends on
+`mem_done` like any other. So a fill arrives on the ordinary `mem_*` port,
+already distinguishable: **`mem_size = "100"` means "instruction cache line
+fill"**. `sgi_indy.sv` currently discards that signal as `mem_size_unused`.
+
+What is missing is the **response** side. The cache does not take its data
+from `mem_dataRead`; it wants four 64-bit beats on `ddr3_DOUT` with
+`ddr3_DOUT_READY`, gated by `ram_grant`/`ram_active`, writing until
+`cache_addr_a(1 downto 0) = "11"` (cpu_instrcache.vhd:145-161). Those are tied
+off in `r4300_wrap.vhd:183-190` with a comment saying exactly why. The job is
+to see a fill on the bus, read four consecutive doublewords, and feed them
+back on that port.
+
+Settle these before writing much:
+
+- How `rdram_granted2x` and `rdram_done` at `cpu.vhd`'s boundary map onto the
+  cache's `ram_grant` / `ram_active` / `ram_done`. The wrapper ties the former;
+  the cache sees the latter.
+- **Line size.** The fill path aligns to 32 bytes, but `Config` deliberately
+  reports 16-byte lines as R4400 geometry - see `docs/10-r4300-integration.md`,
+  which argues the report is in the safe direction for index-based flushes.
+  That argument was made with the cache off. Re-check it with the cache on.
+- Whether the fill should read through the same decode as a normal cycle. A
+  line straddling the end of a MEMCFG bank, or crossing out of the PROM, has
+  to do something defined.
+
+**The acceptance test already exists.** `cache/hit_inv_discards` and
+`cache/index_tag_rt` are two of the three tests `tests/run-cputest.sh` reports
+as failing, and they fail *because* the caches are off. They should pass when
+this is right, taking the suite from 2155/9 to 2157/7 or better. That is a far
+better signal than "it seems faster", and it is the reason to do this before
+anything else on the list: it is the last item with a ready-made oracle.
+
+Watch for a second-order effect: with the I-cache on, the PROM's own timing
+measurements change, so `Processor: N Mhz` in `tests/run-prom.sh` will move.
+That is the point. Update the expected string; do not weaken the assertion to
+a wildcard.
+
+### 2. Everything after that
+
+1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
    that does not.
-3. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
+2. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
    and a start reports instant completion; no data moves.
-4. **Interrupts.** INT2 has masks and no sources. `sgi_ioc.sv` takes
+3. **Interrupts.** INT2 has masks and no sources. `sgi_ioc.sv` takes
    `l0_source`/`l1_source` as inputs precisely so wiring them changes nothing
    else.
-5. **SCSI and Ethernet**, if you want to boot something.
-6. **Newport**, which is the rest of the machine, and `sgiindy.sv`'s real top
-   level — still the stock MiSTer template, so nothing has been through Quartus
-   and no resource numbers exist.
+4. **SCSI and Ethernet**, if you want to boot something.
+5. **Newport**, which is the rest of the machine, and `sgiindy.sv`'s real top
+   level - still the stock MiSTer template, so nothing has been through Quartus
+   and no resource numbers exist. The MiSTer N64 core runs this same CPU at
+   93.75 MHz on a DE10-Nano (`N64_MiSTer/rtl/pll.v`), which is the only real
+   evidence available about what this design might close timing at.
 
 ### One thing to ask the user for
 
@@ -300,6 +355,16 @@ Do not rediscover these:
 - **GHDL 6.0.0 crashes** (`netlists-utils.adb:166`) on a `numeric_std`
   comparison whose operands differ in width. The generator works around the one
   instance in `cpu.vhd`; if a new one appears, that is the symptom.
+- **Do not change what the CPU reports itself as.** An Indy shipped with an
+  R4000PC, R4400SC, R4600 or R5000, and it is tempting to read that list as a
+  menu. It is not: the identity is load-bearing, because nothing reports the
+  TLB entry count architecturally and software infers it from `PRId`. IRIX
+  writes TLB indices up to 47, and a part claiming 32 entries aliases those
+  onto 0-15 and corrupts its own page tables. `docs/10-r4300-integration.md`
+  has the argument. Changing the identity would also do nothing for speed -
+  it is the same RTL with different identity registers.
+- **`hinv`'s clock figure is a throughput measurement, not a clock.** See
+  "Where this is" above before concluding the core is too slow.
 - **Three clocks run fast in simulation** and are parameterised so hardware
   keeps the real value: `sclk`, `RTC_TICK_DIV` and `PIT_TICK_DIV`. See
   `docs/12-chipset.md` — `calibrate_delay` restarts forever if the 8254 is made
