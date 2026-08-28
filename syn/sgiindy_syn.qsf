@@ -1,0 +1,30 @@
+# Fit-measurement project. See syn/README.md - this is NOT the MiSTer core.
+#
+# DE10-Nano: Cyclone V SE 5CSEBA6U23I7, the same device every MiSTer core
+# targets, so the numbers this reports are the numbers that matter.
+
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEBA6U23I7
+set_global_assignment -name TOP_LEVEL_ENTITY syn_top
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+
+set_global_assignment -name SYSTEMVERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+
+# The core has no reset that clears every register, and Quartus needs to be
+# told that is deliberate rather than guessing at power-up values.
+set_global_assignment -name ALLOW_ANY_RAM_SIZE_FOR_RECOGNITION ON
+set_global_assignment -name ALLOW_ANY_ROM_SIZE_FOR_RECOGNITION ON
+
+set_global_assignment -name QIP_FILE files_core.qip
+set_global_assignment -name SDC_FILE sgiindy_syn.sdc
+
+# Five pins: the harness reduces the core's 39 ports to this so the fitter has
+# something it can place. See syn/syn_top.sv.
+set_location_assignment PIN_V11 -to CLK_50
+set_location_assignment PIN_AH17 -to RESET_N
+set_location_assignment PIN_AH16 -to SEED
+set_location_assignment PIN_W15  -to OUT_BIT
+set_location_assignment PIN_AA24 -to LOCKED

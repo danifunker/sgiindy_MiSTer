@@ -23,6 +23,15 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_ds1386.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_scc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/z8530_scc.sv
 
+# --- SCSI ----------------------------------------------------------------
+# scsi.v is Verilog, not SystemVerilog, and expects scsi_vendor.vh on the
+# search path.
+set_global_assignment -name SEARCH_PATH rtl/scsi
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/sgi_scsi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/wd33c93.sv
+set_global_assignment -name VERILOG_FILE      rtl/scsi/scsi.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/cd_audio.sv
+
 # Nothing here has been through Quartus yet - sgiindy.sv is still the stock
 # MiSTer template, so the core has no top level to synthesise. The list is
 # kept current anyway so that when it does, the manifest is not the thing
