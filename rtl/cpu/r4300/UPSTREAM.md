@@ -72,3 +72,26 @@ reasoning and the safety argument for the cache-geometry report.
 | `cpu.vhd` | COP2 is always unusable, `Cause.CE = 2` | An R4400 has no coprocessor 2; the R4300's data latch made `mfc2` succeed |
 | `cpu.vhd` | MIPS IV COP1 function codes 0x11/0x12/0x13/0x15/0x16 raise Reserved Instruction | They reached the FPU and came back as Unimplemented Operation, which makes an R4400 look like an R5000 to software probing for MIPS IV |
 
+
+### Machine size — N64 assumptions that an IP24 breaks
+
+The N64's whole physical address space is 512 MB, so upstream truncates
+physical addresses to 29 bits in several places and nothing there can notice.
+An Indy puts **high local memory at physical `0x20000000`–`0x2FFFFFFF`**, and
+the PROM's memory sizing runs entirely in it: `map_high_memory`
+(`0xBFC01A00`) installs four 16 MB TLB pages there and `szmem` probes through
+them. With the truncation in place every one of those accesses came out at
+`0x00000000`, POST reported "No usable memory found. Make sure you have a full
+bank (4 SIMMs)", and no amount of work on the memory controller could have
+fixed it.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_cop0.vhd` | `TLB_fetchAddrOutMasked` passes the TLB's translation through instead of `"000" & …(28 downto 0)` | A real R4000/R4400 builds a 36-bit physical address out of the PFN and truncates nothing. Upstream's own comment says this line is "only for 32bit mode" |
+| `cpu.vhd` | the kseg0/kseg1 strip moved off the write FIFO and onto the *unmapped* fetch path, and onto the reset PC | `mem1_address` now carries a physical address in every case. Stripping the top three bits in the FIFO was correct only because every fetch there was unmapped; it silently undid the TLB fix above |
+
+Data accesses never needed this: `executeMemAddress` already takes the TLB
+output unchanged and only strips the address on the unmapped path.
+
+The 240-test suite is unchanged by all of it — 2155 checks pass, 9 fail, the
+same three tests as before.

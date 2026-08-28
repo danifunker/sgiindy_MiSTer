@@ -750,24 +750,24 @@ begin
                end if;
             elsif (mem1_request = '1' or instrcache_request = '1') then
                writefifo_wr                 <= '1';
-               writefifo_Din( 95 downto 64) <= "000" & std_logic_vector(mem1_address(28 downto 0));
+               writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical
                writefifo_Din(104)           <= '0';
                writefifo_Din(105)           <= '1';
                writefifo_Din(106)           <= '0';
                writefifo_Din(107)           <= instrcache_request;
                if (instrcache_request = '1') then
-                  writefifo_Din( 95 downto 64) <= "000" & std_logic_vector(mem1_address(28 downto 5)) & "00000";
+                  writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
                end if;  
             elsif (mem1_request_latched = '1') then
                mem1_request_latched         <= '0';
                writefifo_wr                 <= '1';
-               writefifo_Din( 95 downto 64) <= "000" & std_logic_vector(mem1_address(28 downto 0));
+               writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical
                writefifo_Din(104)           <= '0';
                writefifo_Din(105)           <= '1';
                writefifo_Din(106)           <= '0';
                writefifo_Din(107)           <= mem1_cache_latched;
                if (mem1_cache_latched = '1') then
-                  writefifo_Din( 95 downto 64) <= "000" & std_logic_vector(mem1_address(28 downto 5)) & "00000";
+                  writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
                end if;  
             end if;
             
@@ -1088,12 +1088,17 @@ begin
                      
             mem1_request   <= not TLB_instrMapped;
             TLB_ss_load    <= TLB_instrMapped;
+            -- SGI: mem1_address carries a PHYSICAL address now that the write
+            -- FIFO no longer truncates it, so the reset PC has to be stripped
+            -- here the way an unmapped fetch is stripped further down. A
+            -- TLB-mapped reset PC discards this value anyway - TLB_ss_load
+            -- above re-derives it through the TLB.
             if (ss_in(16)(3) = '1') then
-               mem1_address   <= unsigned(ss_in(5)(31 downto 0)); -- last was branch -> should be patched in the savestate already
+               mem1_address   <= "000" & unsigned(ss_in(5)(28 downto 0)); -- last was branch -> should be patched in the savestate already
                fill_addrTag   <= unsigned(ss_in(5)(31 downto 0));
                PC             <= unsigned(ss_in(5)); 
             else
-               mem1_address   <= unsigned(ss_in(0)(31 downto 0)); -- x"FFFFFFFFBFC00000";    
+               mem1_address   <= "000" & unsigned(ss_in(0)(28 downto 0)); -- x"FFFFFFFFBFC00000";    
                fill_addrTag   <= unsigned(ss_in(0)(31 downto 0));
                PC             <= unsigned(ss_in(0)); -- x"FFFFFFFFBFC00000";                    
             end if;
@@ -1152,7 +1157,11 @@ begin
                   mem1_address <= TLB_instrAddrOutFound;
                   fill_addrTag <= FetchAddr(31 downto 0);
                else
-                  mem1_address <= FetchAddr(31 downto 0);
+                  -- SGI: the kseg0/kseg1 strip moved here from the write FIFO
+                  -- below. It is only correct for an UNMAPPED fetch - taking
+                  -- the top three bits off a TLB translation loses high local
+                  -- memory, see cpu_cop0.vhd's TLB_fetchAddrOutMasked.
+                  mem1_address <= "000" & FetchAddr(28 downto 0);
                   fill_addrTag <= FetchAddr(31 downto 0);
                end if;
       

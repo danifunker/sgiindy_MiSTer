@@ -1281,7 +1281,16 @@ begin
    TLBREAD_region   <= unsigned(TLBMEM_readData(99 downto 98));
    TLBREAD_random   <= TLBMEM_readData(100);
    
-   TLB_fetchAddrOutMasked <= "000" & TLB_fetchAddrOut(28 downto 0); -- only for 32bit mode, 64bit needs addr &= 0x7FFFFFFF;
+   -- SGI: was `"000" & TLB_fetchAddrOut(28 downto 0)`. Upstream truncates every
+   -- TLB translation to 29 bits because the N64's whole physical address space
+   -- is 512 MB, so nothing there can notice. On an IP24 it is fatal: high local
+   -- memory lives at physical 0x20000000-0x2FFFFFFF and the PROM's memory
+   -- sizing runs entirely in it (map_high_memory at 0xBFC01A00 puts four 16 MB
+   -- TLB pages there, then szmem probes through them), so every access came out
+   -- at 0x00000000 and POST concluded there was no memory at all. A real
+   -- R4000/R4400 forms a 36-bit physical address from the PFN and truncates
+   -- nothing; 32 bits is this core's limit and is the right one to keep.
+   TLB_fetchAddrOutMasked <= TLB_fetchAddrOut;
    
    icpu_TLB_instr : entity work.cpu_TLB_instr
    port map
