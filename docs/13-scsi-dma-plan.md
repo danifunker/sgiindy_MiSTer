@@ -312,48 +312,155 @@ not by a test, because every test passed. Fixing the race is what revealed that
 a genuine reject makes the machine worse, which is the whole of point 4 above:
 **a passing test said nothing about whether the thing under it was real.**
 
-### And `hinv` still lists no disk
+### `hinv` lists the disk, and the harness was hiding it
 
-This is worth being blunt about, because the plan called it the definition of
-done and two successive theories about it have now been wrong.
+```
+>> hinv
+                   System: IP22
+                Processor: 16 Mhz R4400, with FPU
+     Primary I-cache size: 16 Kbytes
+     Primary D-cache size: 16 Kbytes
+              Memory size: 64 Mbytes
+                SCSI Disk: scsi(0)disk(1)
+```
 
-The previous version of this document said the failed negotiation was the
-likely cause. **It was not.** The negotiation now completes - cleanly, with a
-reject and an asynchronous fallback - the boot prints no SCSI error at all, the
-disk reads, and `hinv` is exactly as empty as before.
+**Nothing was ever wrong with the device tree.** `tests/run-scsi.sh` ended its
+run on `--stop-on 'Mbytes'`, and the PROM prints the SCSI lines *after*
+`Memory size:` - so the simulator was being stopped a few thousand cycles
+before the one line anybody was looking for was transmitted. Every "the disk is
+missing from the ARCS device tree" claim in this repository was a claim about a
+console log that had been truncated by our own test script.
 
-The other theory, that this PROM's `hinv` does not report SCSI at all, is
-**also** dead, and that one can be settled from the disassembly rather than by
-argument. `hinv` is `FUN_bfc40ac0`, which at `0xBFC40BE8` calls the recursive
-ARCS device-tree walker `FUN_bfc416e0` (child at `0xBFC2C204`, sibling at
-`0xBFC2C1F8`), which prints each node through `FUN_bfc4119c` - and that
-function carries `"SCSI Disk"` and `"%*s: scsi(%u)disk(%u)\n"`. It would print
-a disk if the tree had one.
+Three theories were built on top of that missing line. The sync negotiation was
+not it, this PROM's `hinv` does report SCSI, and the probe was not failing to
+run: all three were investigations into a machine that already worked. The
+first two were at least disproved cheaply. The third was not, and it would have
+cost a lot more, because the next step in the plan was to start building
+device-tree registration that the PROM was already doing correctly.
 
-So the disk is missing from the ARCS device tree, and neither the DMA engine
-nor the message phases is why. Where to pick it up:
+**What settled it was watching the printf, not reading the tree.** The
+`--watch` flag added for this run reports every bus access to an address, and
+PROM text is uncached, so a watch on a PROM address is a PC watch. Watching
+`0xBFC41370` - the instruction that loads `"SCSI Disk"` into the printf
+argument - showed one hit. The PROM was printing the line. From there the only
+remaining question was where the line went, and the answer was that the harness
+had already exited.
 
-* `FUN_bfc1b934` is the `scsidisk` probe - the string `"scsidisk"` at
-  `0xBFC4F2A8` points at it, and it is reached as a function pointer from
-  `0xBFC1B918`, not by a direct call.
-* It registers a node with `FUN_bfc2c284` (the tree's add-child) at
-  `0xBFC1BAE8`, `0xBFC1BBB8`, `0xBFC1BC30` and four other sites in
-  `0xBFC1B854..0xBFC1BD3C`.
-* It filters on the INQUIRY response: `0xBFC1B9E0` skips the device when
-  `byte0 & 0x10` is set, and `0xBFC1BB0C` picks fixed (type `0x1a`) or
-  removable (type `0x1b`) from byte 1's RMB bit. This target answers byte 0 =
-  0x00 and byte 1 = 0x00, so it passes that filter.
-* The open question is therefore **whether that probe runs at all**, and if it
-  does, what it does between `0xBFC1B9C8` (`FUN_bfc1c0a8`, which returns the
-  INQUIRY buffer or zero) and the registration. Watching for a bus access to
-  the SCSI registers while `hinv` is running would say immediately whether the
-  probe is even reached, and that is one traced run.
+The path the watches confirmed, and which the test now asserts as one line:
 
-One thing this target does that a real disk does not: its INQUIRY reports
-**ANSI version 0** (byte 2) and response data format 0 (byte 3), i.e. a
-pre-standard SCSI-1 device. Nothing has been shown to care, but it is the most
-obvious difference between this and the drives an IP24 shipped with, and it is
-a one-line change in `rtl/scsi/scsi.v` if it turns out to matter.
+| Address | What it proves |
+|---|---|
+| `0xBFC1B854` | the adapter node is created from the template at `0xBFC77D78`, class 4 **type 0x0b** |
+| `0xBFC1BAE8` | the disk *controller* node is added under it, type `0x0e` |
+| `0xBFC1BB98` | the INQUIRY said fixed disk, so the `"scsidisk"` branch was taken, not `"floppy"` |
+| `0xBFC1BBB8` | the disk node itself is added, class 6 type `0x1a` |
+| `0xBFC0BEE8` | **zero hits** - no `AddChild` on that path failed |
+| `0xBFC41370` | the node printer reached `"SCSI Disk"` |
+
+The node printer is where the chain has to be right rather than merely present.
+`FUN_bfc4119c` dispatches on `(class << 24) | type`, so the disk is
+`0x0600001A`, and that case at `0xBFC4130C` walks *two* levels up: it bails
+unless the node's **grandparent** has type `0x0b`, and then picks CDROM or disk
+from the parent's type. So `SCSI Disk: scsi(0)disk(1)` asserts
+adapter(`0x0b`) -> controller(`0x0e`) -> disk(`0x1a`) as a shape, which is why
+`tests/run-scsi.sh` now expects that exact line instead of a `dks0d1s0`
+substring.
+
+**The rule this cost enough to be worth writing down: `--stop-on` fires on the
+cycle its substring completes, and a substring is not a line.** Stopping on
+`Mbytes` truncated the run; the first fix, stopping on `disk(`, truncated the
+line itself and printed `scsi(0)disk(` into a test that was looking for
+`scsi(0)disk(1)`. `tests/run-prom.sh` had already written this rule down at the
+top of the file for the number after a label, and this was the same rule one
+level up. When a run is stopped on console text, stop on text that comes after
+everything being asserted, not on the last thing you expect to see.
+
+### DATA OUT works, and finding out cost four bugs
+
+`tests/run-scsiwr.sh` writes a 512-byte block through Select-and-Transfer and
+the DMA channel, reads the same block back, and compares. It passes. That is
+the first byte this core has ever sent to a disk.
+
+It is also the most productive test in the repository, because **three of the
+four bugs it found were in code that every boot runs**, and one of them had
+been corrupting every disk read since the day SCSI was fitted.
+
+| Where | What was wrong |
+|---|---|
+| `rtl/scsi/sgi_scsi.sv` | the target's `sd_buff_din` was unconnected and the module's own output tied to `16'h0000` |
+| `rtl/scsi/sgi_scsi.sv` | the replacement mux selected on `sd_wr`, which drops on the first ack |
+| `rtl/scsi/wd33c93.sv` | one CDB byte too many, every command |
+| `rtl/scsi/wd33c93.sv` | **every DATA IN byte after the first was the previous one** |
+
+**The tie-off was the expected one.** `scsi.v` assembles a written block
+correctly and offers it; the wrapper threw it away, so every byte written to a
+disk would have arrived as zero. Nothing could see that without writing a byte
+and reading it back.
+
+**The mux that replaced it was wrong in a more interesting way.** Selecting the
+flush source with `sd_wr` looks right - that is the write request line - but
+`scsi.v` clears `io_wr` the moment the ack arrives, and the flush that follows
+runs for the whole ack session. The block came back with its first word intact
+and 510 zero bytes behind it, which is nearly indistinguishable from the
+tie-off it replaced. `sd_ack` is the line that holds for a session, and it is
+the one to mux on.
+
+**The extra CDB byte is the same race this file has now hit three times.** The
+target holds REQ for one cycle past the last handshake of a phase before it
+changes the phase lines, and this sequencer reads REQ as a level, so every
+phase needs its own bound:
+
+| Phase | Bound | When it was found |
+|---|---|---|
+| MESSAGE OUT | `sat_identify_sent` | the IDENTIFY went twice, and the second landed as `cmd[0] = 0x80` |
+| COMMAND | `sat_cdb_sent` | here |
+| DATA IN / DATA OUT | the Transfer Count | here |
+
+On a WRITE the seventh CDB byte lands in the cycle the target has already moved
+to DATA OUT, so the target takes the stale `data_latch` - the control byte,
+`0x00` - as data byte 0, every real byte arrives one place late, and the last
+one falls off the end. A READ survives it, because an extra initiator ACK
+cannot manufacture a byte the target is driving. That is why it had never been
+seen.
+
+**And the DATA IN bug is the one to remember.** `scsi.v` serves DATA IN out of
+a dual-port RAM whose address advances on the FALLING edge of the previous ACK,
+so the byte is not on the bus when REQ rises. Its own `scsi_dpram` header says
+so - the timing contract is that the outputs are consistent "no later than 7
+clocks after the advance", and the MacLC initiator it was written for holds
+DREQ down for `dma_settle` = 8 cycles to cover it. This initiator had no
+equivalent and sampled on the cycle it saw REQ.
+
+The result is that **byte 0 of every DATA IN transfer is correct and every byte
+after it is the previous one.** Four measured clocks of settle fix it and
+`DIN_SETTLE` is six.
+
+Nothing in a boot could see that either, and it is worth being precise about
+why, because it is the same reason three times over: the INQUIRY response this
+target sends is mostly zeroes, the volume header on `blank8m.img` is entirely
+zeroes, and a block of zeroes shifted by one byte is a block of zeroes. **Every
+consumer of DATA IN in this project so far has been reading data that could not
+show the bug.** A round trip through a pattern with no repeats can, which is
+what `fill()` in `tests/scsiwr/scsiwr.c` is for.
+
+### What the test image itself got wrong
+
+Two of the failures on the way were in the test, not the core, and both are
+worth knowing before writing another bare-metal image against this engine.
+
+**The channel starts from `NBDP`, not `CBP`.** Priming `cbp` with descriptor 0
+and `nbdp` with the EOX marker reads like "here is the chain and here is its
+end" and is wrong: the engine fetches from `nbdp`, so it starts on the marker,
+retires an empty descriptor, reports the chain complete without moving a byte,
+and the WD33C93B then waits forever for an engine that has already stopped.
+`tests/dma/dmatest.c`'s `start()` has always done this correctly.
+
+**`ch_reset` resets the chip, not just the channel.** The HPC3 spec's words are
+"resets both external controller and this DMA channel", and `wd33c93.sv`
+honours them. Writing it between two commands throws away the `CONTROL`
+register that selects DMA mode - so the next command silently runs in PIO, on
+the DBR path, and completes without the engine moving anything. It completed
+and reported `0x16`, which is what a working command looks like.
 
 ## What to be suspicious of
 
@@ -361,7 +468,9 @@ a one-line change in `rtl/scsi/scsi.v` if it turns out to matter.
   descriptors do not set XIE. Everything the boot proves about this engine, it
   proves about the polled path only. `tests/run-dma.sh` is the only evidence
   the interrupt path works.
-* **DATA OUT has never moved a byte.** See stage 5.
+* **DATA OUT is tested but narrow.** One WRITE(6) of one block through
+  Select-and-Transfer and DMA, and nothing else: no multi-block write, no
+  descriptor chain longer than one data descriptor, no WRITE(10).
 * **The INT2 `intstat` register is wiring, not a tested path.** It is
   implemented per the spec, including the documented read-back bug that splits
   it across `0x1FBB0000` and `0x1FBB000C`, and nothing has ever read it.

@@ -230,6 +230,7 @@ module wd33c93 #(
         ST_SAT_REQ,         // a byte is due in the current phase
         ST_SAT_ACK,
         ST_SAT_REL,
+        ST_SAT_DIN,         // DATA IN: let the target's byte settle first
         ST_SAT_DMA,         // a data byte is with the HPC3 DMA engine
         ST_SAT_END
     } state_t;
@@ -261,6 +262,15 @@ module wd33c93 #(
     // treated as 6, which is what the chip does with an unknown group beyond
     // also flagging it.
     logic [3:0] cdb_idx;
+    // Clocks to wait after REQ before believing the target's DATA IN byte.
+    // See PH_DATA_IN. MEASURED, not chosen: tests/run-scsiwr.sh fails at 1, 2
+    // and 3 and passes at 4, 5 and 6, so four is what this target needs and
+    // six is two clocks of headroom. It costs nothing worth counting - the DMA
+    // round trip that follows it is longer than the wait - and the headroom is
+    // deliberate, because the number belongs to scsi.v's RAM timing rather
+    // than to anything specified, and scsi.v is vendored.
+    localparam int DIN_SETTLE = 6;
+    logic [2:0] din_settle;
     // True while a DMA data phase is running, so that leaving the phase can be
     // reported to the engine as an end of transfer exactly once.
     logic       dma_in_data;
@@ -272,6 +282,21 @@ module wd33c93 #(
     // a target that answers selection and then never recognises the command,
     // with cmd[0] = 0x80.
     logic       sat_identify_sent;
+    // AND THIS IS THE SAME BUG ONE PHASE LATER. The CDB is cdb_len bytes and
+    // the chip sends exactly that many; the target needs a clock to leave
+    // COMMAND after the last ACK falls, and the sequencer is back in
+    // ST_SAT_PHASE before that, sees COMMAND and REQ still asserted, and sends
+    // a seventh byte. Clamping cdb_idx at cdb_len-1 does not stop it - it just
+    // makes the extra byte a copy of the last one.
+    //
+    // What that costs is a whole block of data, and only on a WRITE. The extra
+    // ACK lands in the cycle the target has already moved to DATA OUT, so the
+    // target takes the stale data_latch - the CDB's control byte, 0x00 - as
+    // data byte 0 and every real byte arrives one place late, with the last
+    // one dropped off the end. A READ survives it because the target is the
+    // one driving data and an extra initiator ACK there does not manufacture a
+    // byte, which is why every boot this project has ever done looked fine.
+    logic       sat_cdb_sent;
     wire  [2:0] cdb_group = reg_file[R_CDB1][7:5];
     wire  [3:0] cdb_len   = (cdb_group == 3'd1 || cdb_group == 3'd2) ? 4'd10
                           : (cdb_group == 3'd5)                      ? 4'd12
@@ -445,6 +470,7 @@ module wd33c93 #(
                                             cdb_idx   <= 4'd0;
                                             dma_in_data <= 1'b0;
                                             sat_identify_sent <= 1'b0;
+                                            sat_cdb_sent      <= 1'b0;
                                             reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
                                             state     <= ST_SAT_SEL;
                                         end
@@ -761,11 +787,37 @@ module wd33c93 #(
                                 // anything, until the target moves on.
                             end
                             PH_COMMAND: begin
-                                data_latch <= reg_file[R_CDB1 + cdb_idx];
-                                state      <= ST_SAT_ACK;
+                                if (!sat_cdb_sent) begin
+                                    data_latch <= reg_file[R_CDB1 + cdb_idx];
+                                    state      <= ST_SAT_ACK;
+                                end
+                                // Otherwise wait here, exactly as MESSAGE OUT
+                                // does above, until the target moves on.
                             end
+                            // AND ONCE MORE AT THE END OF THE DATA PHASE.
+                            // The target holds REQ for a cycle past the last
+                            // byte of every phase before it changes the phase
+                            // lines, and this sequencer reads REQ as a level,
+                            // so each phase needs its own bound or it sends
+                            // one byte too many. MESSAGE OUT's bound is
+                            // sat_identify_sent, COMMAND's is sat_cdb_sent,
+                            // and a data phase's is the Transfer Count - which
+                            // is what the register is for on the real part: a
+                            // Select-and-Transfer moves exactly the count it
+                            // was given.
+                            //
+                            // Overrunning it costs more than a byte here. The
+                            // descriptor has run out too, so the engine has
+                            // nothing to answer with, and the initiator waits
+                            // in ST_SAT_DMA forever with dma_req asserted -
+                            // the command never interrupts and the driver
+                            // times out.
                             PH_DATA_OUT: begin
-                                if (use_dma) begin
+                                if (xfer_count == 24'd0) begin
+                                    // Count exhausted. Wait for the target to
+                                    // move on, exactly as the two phases above
+                                    // do.
+                                end else if (use_dma) begin
                                     dma_req     <= 1'b1;
                                     dma_dir_in  <= 1'b0;
                                     dma_in_data <= 1'b1;
@@ -780,20 +832,37 @@ module wd33c93 #(
                                     dbr <= 1'b1;
                                 end
                             end
+                            // THE TARGET'S DATA IS NOT VALID THE CYCLE REQ
+                            // RISES. scsi.v serves DATA IN out of a dual-port
+                            // RAM whose output register is addressed by the
+                            // byte counter, and that counter advances on the
+                            // FALLING edge of the previous ACK - so the byte
+                            // lands a few clocks after REQ. Its own header
+                            // says so: the prefetch controller's timing
+                            // contract in scsi_dpram is that q_b/q_c/q_d are
+                            // consistent "no later than 7 clocks after the
+                            // advance", and the MacLC initiator it was written
+                            // for holds DREQ down for `dma_settle` = 8 cycles
+                            // to cover exactly that.
+                            //
+                            // This sequencer had no equivalent and sampled on
+                            // the cycle it saw REQ, which is one to two clocks
+                            // after the advance. The result is subtle enough
+                            // to have survived every boot: byte 0 is right,
+                            // because the phase change gives it time, and
+                            // every byte after it is the previous one. An
+                            // INQUIRY response of mostly zeroes and a volume
+                            // header of all zeroes both read back correct
+                            // under that, which is why DATA IN has looked
+                            // finished since the day it was written.
                             PH_DATA_IN: begin
-                                if (use_dma) begin
-                                    // The byte goes straight to the engine.
-                                    // data_latch is still loaded so a driver
-                                    // that reads the DATA register mid-
-                                    // transfer sees the last byte rather than
-                                    // stale bus state, but DBR stays clear:
-                                    // nothing is waiting to be collected.
-                                    data_latch  <= scsi_din;
-                                    dma_wdata   <= scsi_din;
-                                    dma_req     <= 1'b1;
+                                if (xfer_count == 24'd0) begin
+                                    // See PH_DATA_OUT.
+                                end else if (use_dma) begin
                                     dma_dir_in  <= 1'b1;
                                     dma_in_data <= 1'b1;
-                                    state       <= ST_SAT_DMA;
+                                    din_settle  <= DIN_SETTLE;
+                                    state       <= ST_SAT_DIN;
                                 end else if (!dbr) begin
                                     // Target sends. Take the byte and hold it
                                     // in the data register until the driver
@@ -817,6 +886,21 @@ module wd33c93 #(
                             end
                             default: state <= ST_SAT_ACK;
                         endcase
+                    end
+                end
+
+                // Wait out the target's access time, then take the byte.
+                // data_latch is loaded too, so a driver that reads the DATA
+                // register mid-transfer sees the last byte rather than stale
+                // bus state; DBR stays clear, because nothing is waiting to be
+                // collected.
+                ST_SAT_DIN: begin
+                    if (din_settle != 0) din_settle <= din_settle - 3'd1;
+                    else begin
+                        data_latch <= scsi_din;
+                        dma_wdata  <= scsi_din;
+                        dma_req    <= 1'b1;
+                        state      <= ST_SAT_DMA;
                     end
                 end
 
@@ -845,6 +929,7 @@ module wd33c93 #(
                             PH_COMMAND: begin
                                 reg_file[R_CMD_PHASE] <= CP_CMD_START + {4'h0, cdb_idx} + 8'd1;
                                 if (cdb_idx + 4'd1 < cdb_len) cdb_idx <= cdb_idx + 4'd1;
+                                else                          sat_cdb_sent <= 1'b1;
                             end
                             PH_DATA_OUT, PH_DATA_IN: begin
                                 if (xfer_count != 24'd0) begin

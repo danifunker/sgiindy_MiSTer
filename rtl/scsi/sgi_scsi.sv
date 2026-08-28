@@ -84,6 +84,7 @@ module sgi_scsi #(
     // not a constant expression, so the per-target LBA has to live in an
     // array at module scope for the mux below to select from it.
     wire [31:0]            t_lba  [NUM_TARGETS];
+    wire [15:0]            t_din  [NUM_TARGETS];
 
     // Open-collector OR. Only the selected target drives anything.
     wire bus_bsy = |t_bsy;
@@ -174,7 +175,7 @@ module sgi_scsi #(
                 .sd_buff_addr   (sd_buff_addr),
                 .sd_buff_addr_hi(5'd0),
                 .sd_buff_dout   (sd_buff_dout),
-                .sd_buff_din    (),
+                .sd_buff_din    (t_din[t]),
                 .sd_buff_wr     (sd_buff_wr),
                 .dbg_mounted    (),
                 .dbg_phase      (),
@@ -219,6 +220,28 @@ module sgi_scsi #(
             if (sd_rd[k] || sd_wr[k]) sd_lba = t_lba[k];
     end
 
-    assign sd_buff_din = 16'h0000;
+    // The write flush, muxed the same way and off the same request lines. This
+    // was tied to zero for as long as SCSI has been fitted, which is why the
+    // DATA OUT path could look finished from the initiator's end and still put
+    // 512 zero bytes on the disk: scsi.v assembles the block correctly and the
+    // wrapper then threw it away. `sd_buff_din` is the port-A read of a
+    // registered dual-port RAM inside the target, so it carries the pair for
+    // whatever `sd_buff_addr` was presented ONE clock earlier - the reader on
+    // the other side has to sample with that delay, and verilator/sim_scsi.h
+    // does.
+    //
+    // SELECTED BY THE ACK, NOT BY THE REQUEST. sd_wr is the request line and
+    // scsi.v drops it the moment the ack arrives (`if(io_ack) io_wr <= 0`),
+    // but the flush that follows runs for the whole ack session - hundreds of
+    // cycles. Muxing on sd_wr therefore selects the right target for the first
+    // cycle or two and then feeds zeros to the rest of the block, which reads
+    // back as a disk full of zeros with the first word or two correct: the
+    // same symptom as this output being tied off, and the reason to say out
+    // loud which line holds for the length of a session. sd_ack is that line.
+    always_comb begin
+        sd_buff_din = 16'h0000;
+        for (int k = 0; k < NUM_TARGETS; k++)
+            if (sd_wr[k] || sd_ack[k]) sd_buff_din = t_din[k];
+    end
 
 endmodule

@@ -98,18 +98,50 @@ it does not implement. The PROM's synchronous-transfer negotiation completes -
 rejected, falling back to asynchronous - where it used to time out and reset the
 bus on every boot.
 
-What it does **not** do is get the disk into `hinv`, which is what the plan for
-this work called done, and **two theories about why have already been wrong**.
-It is not the negotiation: that is fixed and `hinv` is exactly as empty as
-before. And it is not "this PROM's `hinv` does not report SCSI": `hinv` is
-`FUN_bfc40ac0`, it walks the ARCS device tree through `FUN_bfc416e0`, and the
-node printer `FUN_bfc4119c` carries `"SCSI Disk"` and `"%*s: scsi(%u)disk(%u)"`.
+**SCSI writes to a disk, and that test found four bugs.**
+`tests/run-scsiwr.sh` sends a 512-byte block out through Select-and-Transfer
+and the DMA channel, reads it back and compares. It passes, and it is the most
+productive test in the repository, because **three of the four bugs it found
+were in code every boot runs**:
 
-So the disk is missing from the device tree. `docs/13-scsi-dma-plan.md` has the
-addresses to pick that up from, including the `scsidisk` probe at
-`FUN_bfc1b934` and the INQUIRY filter it applies. **Do not start a third theory
-without a traced run**: one trace of the SCSI registers while `hinv` executes
-says whether the probe is even reached.
+- `sgi_scsi.sv` left the target's `sd_buff_din` unconnected and tied its own
+  output to zero, so every byte written to a disk arrived as zero.
+- The mux that replaced it selected on `sd_wr`, which drops on the first ack;
+  the flush runs for the whole ack session. `sd_ack` is the line that holds.
+- The initiator sent **one CDB byte too many, on every command** - the same
+  REQ-as-a-level race that `sat_identify_sent` already fixed for MESSAGE OUT.
+- **Every DATA IN byte after the first was the previous one.** `scsi.v` serves
+  reads out of a RAM whose address advances on the falling edge of the previous
+  ACK, and this initiator sampled on the cycle REQ rose.
+
+That last one had been corrupting every disk read since SCSI was fitted, and
+**no boot could see it**: the INQUIRY response is mostly zeroes, `blank8m.img`
+is entirely zeroes, and a block of zeroes shifted by one byte is a block of
+zeroes. `docs/13-scsi-dma-plan.md` has all four and the two bugs the test image
+itself had.
+
+**And the disk is in `hinv`.**
+
+```
+>> hinv
+                   System: IP22
+                Processor: 16 Mhz R4400, with FPU
+     Primary I-cache size: 16 Kbytes
+     Primary D-cache size: 16 Kbytes
+              Memory size: 64 Mbytes
+                SCSI Disk: scsi(0)disk(1)
+```
+
+**It always was.** Everything this file used to say about the disk being
+missing from the ARCS device tree was wrong, and so were the three theories
+built on top of it. `tests/run-scsi.sh` ended its run on `--stop-on 'Mbytes'`,
+and the PROM prints the SCSI lines *after* `Memory size:`. The simulator was
+being stopped a few thousand cycles before the only line anyone was looking for
+was transmitted. `docs/13-scsi-dma-plan.md` has the whole diagnosis and the six
+addresses that settled it.
+
+`tests/run-scsi.sh` now stops on the disk line and asserts it, so this cannot
+quietly come undone. It passes in about 55 seconds.
 
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
@@ -137,16 +169,13 @@ What is *not* done, and is worth knowing before you plan anything:
   not exist yet, and `ERR_STAT` is a real zero, so `Cause.IP6` never fires.
 - **No Ethernet or graphics.** SCSI is fitted; Newport and the SEEQ 8003 are
   the two devices still answering as unclaimed cycles.
-- **SCSI has never written to a disk.** DATA IN works and is what the boot
-  uses; the DATA OUT path through the DMA engine exists and its descriptor side
-  is tested, but no byte has ever gone out through it. Nothing in a boot writes
-  to a disk and the bare-metal image has no device to write to.
+- **SCSI writes are tested but narrow.** `tests/run-scsiwr.sh` does one
+  WRITE(6) of one block and reads it back. No multi-block write, no WRITE(10),
+  no descriptor chain longer than one data descriptor.
 - **The SCSI message phases are minimal.** MESSAGE OUT receives and rejects
   anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
   COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
   reselects, and the target's INQUIRY still reports ANSI version 0.
-- **The disk is not in the ARCS device tree**, so `hinv` does not list it even
-  though the PROM can read the disk. Cause not established - see above.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -181,6 +210,7 @@ tests/uart/run.sh         # the harness's serial decoder, no simulator, ~1 s
 tests/run-scc.sh          # the Z8530, ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end, ~6 s
 tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it, ~12 s
+tests/run-scsiwr.sh       # a block written to a disk and read back, ~30 s
 tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
 tests/run-prom.sh         # boot the PROM to the Command Monitor, ~50 s
 tests/run-scsi.sh         # the same boot with a disk, and a block read off it
@@ -222,6 +252,8 @@ The headless harness (`verilator/sim_cputest.cpp`) gives you:
 | `--trace`, `--trace-from`, `--trace-count` | timestamped bus trace with decoded register names |
 | `--stuck N` | no-forward-progress detector — names the address being hammered |
 | `--hot` | the most-accessed addresses on exit |
+| `--watch HEX` | every bus access to HEX, repeatable. PROM text is uncached, so this is a PC watch: zero hits means a routine was never reached |
+| `make -C verilator cputest-dma-debug` | the same harness with the SCSI DMA engine's per-cycle state trace, in its own `obj_dir_dmadbg` |
 | `--uart` | decode the SCC's `txdb` line and compare it with the byte tap |
 | `--testdev` | fit the IRIS test device in GIO64 slot 0 |
 | `--no-icache`, `--no-dcache` | run with one or both primary caches off |
@@ -329,6 +361,20 @@ for it got wrong.
 
 ### A warning about what this file used to say
 
+**This file has now been confidently wrong twice, both times about SCSI, and
+the second one was worse.** The first is below: it named the missing interrupt
+line as the cause of six phantom disconnects, and the real cause was the `LCI`
+rule. The second was three successive theories about why the disk was missing
+from the ARCS device tree, when the disk had never been missing from it - the
+harness was stopping the run one line early. Nobody checked whether the PROM
+was printing the line before working out why it was not.
+
+**So: before explaining an absent line, prove the line is absent.** One
+`--watch` on the address of the `printf` that would emit it costs one run and
+settles it. That is cheaper than any theory about why it did not happen, and it
+is the check that both of these failures skipped.
+
+
 The previous version of this section said the SCSI scan's six phantom
 disconnects were caused by the missing interrupt line, and that wiring INT2 to
 the CPU would fix them. **That was wrong, and it was written with enough
@@ -352,34 +398,15 @@ wrong theory.
 
 ### 3. Everything after that
 
-1. **Find out why the disk is not in the ARCS device tree.** The DMA engine
-   and the message phases are both built, the PROM reads blocks off the disk,
-   and the boot is free of SCSI errors - and `hinv` still lists nothing. Start
-   with a traced run of the SCSI registers while `hinv` executes: if the
-   `scsidisk` probe at `FUN_bfc1b934` is not touching the bus, it is not being
-   reached, and that is a different search from it being reached and bailing.
-   `docs/13-scsi-dma-plan.md` has the addresses.
-
-   **Two theories have already been tried and neither was it**, which is why
-   the traced run comes first this time:
-
-   - *The failed sync negotiation.* Built the whole MESSAGE OUT path for it -
-     it was a real gap and the boot is better for it - and `hinv` came out
-     exactly as empty as before.
-   - *This PROM's `hinv` not reporting SCSI.* Dead from the disassembly:
-     `hinv` is `FUN_bfc40ac0`, it walks the device tree through
-     `FUN_bfc416e0`, and `FUN_bfc4119c` carries `"SCSI Disk"`.
-
-   The boot with a disk now prints one line about it and no errors:
-
-   ```
-   dks0d1s0: volume header not valid          <- correct, the image is zeroes
-   ```
-
-2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
+1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
    that does not.
+
+2. **Widen the SCSI write path.** One WRITE(6) of one block is tested. A
+   multi-block write, WRITE(10), and a descriptor chain with more than one data
+   descriptor are all still untried, and the four bugs above are the argument
+   for trying them.
 3. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
    and a start reports instant completion; no data moves.
 4. **Ethernet**, the last device still answering as an unclaimed cycle

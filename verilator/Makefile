@@ -155,3 +155,14 @@ gui: $(RTL)/cpu/generated/r4300_wrap.v
 	   -o ../obj_dir/Vsim_gui $(CPUTEST_V) $(GUI_C)
 
 .PHONY: cputest gui all clean
+
+# --- the same harness with the DMA engine's per-cycle state trace ----------
+# hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal
+# build; this target turns it on into its own obj_dir so the ratchets keep
+# running against the quiet binary. One line per cycle - redirect it.
+#   make cputest-dma-debug && ./obj_dir_dmadbg/Vsim_top --elf ... 2>&1 | less
+cputest-dma-debug: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_dmadbg --top-module sim_top \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) +define+DMA_DEBUG \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)

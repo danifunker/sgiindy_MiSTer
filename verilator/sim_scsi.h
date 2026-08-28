@@ -11,6 +11,7 @@
 // then only appears on hardware.
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include "sim_devices.h"
 
 class ScsiBlockDev {
@@ -114,9 +115,7 @@ public:
             ack |= (1u << i);
 
             // A read streams the block into the target's buffer, one 16-bit
-            // word per cycle - 256 words for a 512-byte block. A write is
-            // consumed but not stored yet; nothing writes to a disk before
-            // there is a filesystem on one.
+            // word per cycle - 256 words for a 512-byte block.
             if (!d.writing) {
                 int idx = XFER_CYCLES - d.countdown;
                 if (idx >= 0 && idx < 256) {
@@ -127,9 +126,43 @@ public:
                         (uint16_t)((d.sector[idx * 2] << 8) | d.sector[idx * 2 + 1]);
                     top->scsi_sd_buff_wr = 1;
                 }
+            } else {
+                // A write runs the same walk in reverse, and it is ONE CYCLE
+                // BEHIND. `sd_buff_din` is the registered q_a of the target's
+                // dual-port RAM, so the pair for the address presented this
+                // cycle is only valid on the next one. Sampling it in the same
+                // cycle the address is driven reads the previous byte pair and
+                // shifts the whole block by two bytes - which looks exactly
+                // like an endianness bug and is not one.
+                //
+                // No sd_buff_wr here: that line is the HPS *writing into* the
+                // target, and raising it during a flush would overwrite the
+                // block being read out.
+                int idx = XFER_CYCLES - d.countdown;
+                if (idx >= 0 && idx < 256)
+                    top->scsi_sd_buff_addr = (uint8_t)idx;
+                if (idx >= 1 && idx <= 256) {
+                    int prev = idx - 1;
+                    uint16_t w = top->scsi_sd_buff_din;
+                    d.sector[prev * 2]     = (uint8_t)(w >> 8);
+                    d.sector[prev * 2 + 1] = (uint8_t)(w & 0xff);
+                }
             }
 
-            if (--d.countdown <= 0) d.busy = false;
+            if (--d.countdown <= 0) {
+                // Commit the block. Only the in-memory image is updated: the
+                // file on disk is left alone, because every disk this harness
+                // is pointed at is a checked-in fixture and a test that
+                // rewrites its own fixture stops being a test the second time
+                // it runs. A write followed by a read in the same run sees the
+                // new data, which is what proves the path.
+                if (d.writing) {
+                    size_t off = (size_t)d.lba * 512;
+                    if (off + 512 <= d.image.size())
+                        memcpy(&d.image[off], d.sector, 512);
+                }
+                d.busy = false;
+            }
         }
 
         top->scsi_sd_ack = ack;
