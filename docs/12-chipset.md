@@ -242,3 +242,50 @@ for it either.
 
 `sgiindy.sv` is still the stock template and does not instantiate the core, so
 there is no `hps_io` connection on hardware.
+
+## SCSI
+
+`rtl/scsi/` — the WD33C93B at `0x1FBC0000`, and seven `scsi.v` disk targets
+behind it. See `rtl/scsi/README.md` for what came from where.
+
+Working:
+
+- The PROM's **data path test and SCSI controller diagnostic both pass**. They
+  used to be the first two `*FAILED*` lines of POST and now print nothing.
+- Selection, the full Select-and-Transfer sequence (COMMAND → data → STATUS →
+  MESSAGE IN), the `COMMAND_PHASE` progression, and the status byte landing in
+  `TARGET_LUN`.
+- A disk image attaches with `--disk ID=PATH`, and the block device moves
+  512-byte blocks through the shared sector buffer.
+
+### Open: six phantom disconnects on the bus scan
+
+POST prints, for IDs 2 through 7:
+
+```
+sc0,2,0: cmd=0x12 illegal disconnection interrupt: phase 0.  Resetting SCSI bus
+```
+
+**The oracle says this is ours.** IRIS, running the same PROM with the same
+blank image, prints none of these — it goes straight to `dks0d1s0: volume
+header not valid`, which is the right answer for a blank disk. So the PROM is
+not being unreasonable; the chip model is answering an empty ID wrongly.
+
+What is known:
+
+- The driver reads `SCSI_STATUS = 0x42` (SELECTION_TIMEOUT) and
+  `COMMAND_PHASE = 0x00`, which is what the datasheet says a timeout looks
+  like, and yet reports a disconnection.
+- ID 1 never appears in the list, with or without a disk attached, so it is
+  not simply "every empty ID".
+- Two hypotheses have been tested and disproved: ATN left asserted after a
+  timeout, and selection latching the *level* of a shared BSY rather than its
+  rising edge. Both were real defects and are fixed; neither was this.
+- IRIS's own comment at `wd33c93a.rs:1756` says IRIX's driver consumes **two**
+  interrupts on a selection timeout — `0x42`, then `0x41` (UNEXPECTED_DISCONNECT)
+  — "consumed by wd33c93_poll's wd33c93_loop call". This model raises one.
+  That is the most promising lead and has not been tried.
+
+The way to settle it is a register-level differential against IRIS for a single
+empty-ID selection, rather than more reasoning about what the driver might
+want.

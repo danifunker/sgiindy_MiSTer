@@ -184,6 +184,15 @@ module wd33c93 #(
     localparam int SEL_TIMEOUT = 4096;
     logic [15:0] sel_timer;
 
+    // BSY is the OR of every target's, so "a target is on the bus" and "the
+    // target I just selected answered" are not the same question. Selection
+    // has to start from a free bus and then watch BSY *rise*; taking the level
+    // means that once one target is holding the bus, every later selection
+    // appears to succeed instantly. That is what made a scan of eight IDs on a
+    // machine with one disk report six phantom disconnects: ID 1 answered and
+    // held BSY, and 2 through 7 then "selected" it.
+    logic bsy_q;
+
     // The byte in flight, and which way it is going.
     logic [7:0] data_latch;
     // How far through the CDB a Select-and-Transfer has got. The length comes
@@ -233,8 +242,10 @@ module wd33c93 #(
             scsi_ack    <= 1'b0;
             data_latch  <= 8'h00;
             sel_timer   <= 16'h0;
+            bsy_q       <= 1'b0;
             dout_r      <= 8'h00;
         end else if (ce) begin
+            bsy_q <= scsi_bsy;
 
             // ---- register access -------------------------------------------
             if (sel) begin
@@ -344,9 +355,18 @@ module wd33c93 #(
                 ST_IDLE: ;
 
                 ST_SEL_ASSERT: begin
-                    scsi_sel  <= 1'b1;
-                    data_latch<= (8'h01 << HOST_ID) | (8'h01 << reg_file[R_DEST_ID][2:0]);
-                    state     <= ST_SEL_WAIT;
+                    sel_timer <= sel_timer + 16'd1;
+                    if (!scsi_bsy) begin
+                        scsi_sel  <= 1'b1;
+                        data_latch<= (8'h01 << HOST_ID) | (8'h01 << reg_file[R_DEST_ID][2:0]);
+                        state     <= ST_SEL_WAIT;
+                    end else if (sel_timer >= SEL_TIMEOUT) begin
+                        scsi_atn <= 1'b0;
+                        cip      <= 1'b0;
+                        reg_file[R_SCSI_STATUS] <= S_SELECT_TIMEOUT;
+                        int_pending <= 1'b1;
+                        state    <= ST_IDLE;
+                    end
                 end
 
                 // A present target answers selection by asserting BSY. An
@@ -354,11 +374,16 @@ module wd33c93 #(
                 // that ends a scan of the seven IDs with nothing on them.
                 ST_SEL_WAIT: begin
                     sel_timer <= sel_timer + 16'd1;
-                    if (scsi_bsy) begin
+                    if (scsi_bsy && !bsy_q) begin
                         scsi_sel <= 1'b0;
                         state    <= ST_SEL_DONE;
                     end else if (sel_timer >= SEL_TIMEOUT) begin
                         scsi_sel <= 1'b0;
+                        // ATN has to come down with it. Left asserted from a
+                        // SELECT-with-ATN, it is still up when the driver
+                        // tries the next ID, and every selection after the
+                        // first empty one starts polluted.
+                        scsi_atn <= 1'b0;
                         cip      <= 1'b0;
                         reg_file[R_SCSI_STATUS] <= S_SELECT_TIMEOUT;
                         int_pending <= 1'b1;
@@ -434,20 +459,32 @@ module wd33c93 #(
 
                 // ---- Select-and-Transfer -------------------------------
                 ST_SAT_SEL: begin
-                    scsi_sel   <= 1'b1;
-                    data_latch <= (8'h01 << HOST_ID) | (8'h01 << reg_file[R_DEST_ID][2:0]);
-                    state      <= ST_SAT_WAIT;
+                    sel_timer <= sel_timer + 16'd1;
+                    if (!scsi_bsy) begin
+                        scsi_sel   <= 1'b1;
+                        data_latch <= (8'h01 << HOST_ID) | (8'h01 << reg_file[R_DEST_ID][2:0]);
+                        state      <= ST_SAT_WAIT;
+                    end else if (sel_timer >= SEL_TIMEOUT) begin
+                        scsi_atn <= 1'b0;
+                        cip      <= 1'b0;
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECTED;
+                        reg_file[R_SCSI_STATUS] <= S_SELECT_TIMEOUT;
+                        int_pending <= 1'b1;
+                        state    <= ST_IDLE;
+                    end
                 end
 
                 ST_SAT_WAIT: begin
                     sel_timer <= sel_timer + 16'd1;
-                    if (scsi_bsy) begin
+                    if (scsi_bsy && !bsy_q) begin
                         scsi_sel <= 1'b0;
                         reg_file[R_CMD_PHASE] <= CP_SELECTED;
                         state    <= ST_SAT_PHASE;
                     end else if (sel_timer >= SEL_TIMEOUT) begin
                         scsi_sel <= 1'b0;
+                        scsi_atn <= 1'b0;   // see the note in ST_SEL_WAIT
                         cip      <= 1'b0;
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECTED;
                         reg_file[R_SCSI_STATUS] <= S_SELECT_TIMEOUT;
                         int_pending <= 1'b1;
                         state    <= ST_IDLE;
