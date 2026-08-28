@@ -40,6 +40,7 @@
 #include <map>
 #include <deque>
 #include <vector>
+#include <tuple>
 #include <algorithm>
 
 using namespace sgisim;
@@ -132,7 +133,9 @@ struct Options {
     // console, which is the only way to exercise the PC keyboard path.
     std::vector<std::pair<std::string, std::string>> keys;
     // Disk images, as ID=path. Repeatable; IDs 0..6.
-    std::vector<std::pair<int, std::string>> disks;
+    // (id, path, writable). See ScsiDisk in sim_devices.h for what writable
+    // costs and buys: --disk keeps the host file untouched, --disk-rw does not.
+    std::vector<std::tuple<int, std::string, bool>> disks;
     // Primary caches. Both on; the flags exist to bisect a failure onto one
     // of them without rebuilding, which is how the fill path was brought up.
     bool     icache       = true;
@@ -205,7 +208,9 @@ static void usage()
         "  --hot             on exit, list the most-accessed addresses\n"
         "  --watch HEX       report every bus access to HEX (repeatable). PROM\n"
         "                    text is uncached, so this is a PC watch\n"        "  --uart            also decode the SCC's txdb line and compare\n"
-        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1)\n"
+        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1),\n"
+        "                    read-only: writes are kept in memory for the run\n"
+        "  --disk-rw ID=PATH the same, but writes go through to the host file\n"
         "  --key TEXT        type TEXT at the PC keyboard port (not the console)\n"
         "  --key-on TRIG TEXT  the same, once TRIG has appeared on the console\n"
         "  --no-icache       run with the primary instruction cache off\n"
@@ -250,8 +255,17 @@ int main(int argc, char **argv)
             // adapter's own ID on SGI, so a disk never lives there).
             std::string spec = next("--disk");
             size_t eq = spec.find('=');
-            if (eq == std::string::npos) opt.disks.push_back({1, spec});
-            else opt.disks.push_back({atoi(spec.substr(0, eq).c_str()), spec.substr(eq + 1)});
+            if (eq == std::string::npos) opt.disks.push_back({1, spec, false});
+            else opt.disks.push_back({atoi(spec.substr(0, eq).c_str()), spec.substr(eq + 1), false});
+        }
+        else if (a == "--disk-rw") {
+            // The same, but writes go through to the host file. Deliberately a
+            // separate flag: an install target wants persistence, and every
+            // checked-in fixture wants protection from it.
+            std::string spec = next("--disk-rw");
+            size_t eq = spec.find('=');
+            if (eq == std::string::npos) opt.disks.push_back({1, spec, true});
+            else opt.disks.push_back({atoi(spec.substr(0, eq).c_str()), spec.substr(eq + 1), true});
         }
         else if (a == "--key")         opt.keys.push_back({"", unescape(next("--key"))});
         else if (a == "--key-on") {
@@ -301,11 +315,13 @@ int main(int argc, char **argv)
         if (opt.boot_pc == 0xBFC00000) boot_pc = r.entry;
     }
 
-    for (auto &d : opt.disks) {
+    for (auto &dd : opt.disks) {
+        std::pair<int, std::string> d{std::get<0>(dd), std::get<1>(dd)};
+        bool d_rw = std::get<2>(dd);
         if (d.first < 0 || d.first > 6) {
             fprintf(stderr, "SCSI id %d out of range (0..6)\n", d.first); return 2;
         }
-        if (!g_dev.scsi[d.first].load(d.second)) {
+        if (!g_dev.scsi[d.first].load(d.second, d_rw)) {
             fprintf(stderr, "cannot open disk %s\n", d.second.c_str()); return 2;
         }
         printf("SCSI %d: %s (%zu blocks)\n", d.first, d.second.c_str(),

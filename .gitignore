@@ -40,3 +40,6 @@ rtl/cpu/generated/
 
 # Test disk images are generated, not tracked.
 tests/disks/
+
+# a scratch install target; 2 GB sparse, not something to track
+disks/

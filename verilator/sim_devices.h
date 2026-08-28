@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <map>
 
 namespace sgisim {
 
@@ -43,10 +44,36 @@ struct TestDevice {
 // byte order within a word is the HPS's, not the guest's - scsi.v unpacks it
 // (see its buf0/buf1 comment). The harness therefore has to pack it the same
 // way round, which is the "sim packs byte0 in high half" branch there.
+//
+// FILE-BACKED, NOT LOADED. An install target is gigabytes and the guest touches
+// a few megabytes of it, so the image stays on disk and blocks are moved a
+// sector at a time. Loading it into a vector cost one byte of host memory per
+// byte of guest disk, which is fine for an 8 MB fixture and absurd for a 2 GB
+// one.
+//
+// WRITES GO TO ONE OF TWO PLACES, and which one is an explicit choice at mount:
+//
+//   --disk     read-only. Writes land in `overlay`, an in-memory map of the
+//              sectors that have been written, and reads consult it first. The
+//              guest sees a coherent read-write disk for the length of the run
+//              and the file on the host is never touched. This is what every
+//              test mounts, because a test that rewrites its own fixture stops
+//              being a test the second time it runs.
+//
+//   --disk-rw  read-write. Writes go through to the file. This is what an
+//              install target wants, and it is deliberately not the default:
+//              the difference between the two is whether a bug in the guest,
+//              or in this harness, can destroy a checked-in image.
 struct ScsiDisk {
-    bool                 mounted = false;
-    std::vector<uint8_t> image;
-    std::string          path;
+    bool        mounted  = false;
+    bool        writable = false;
+    int         fd       = -1;
+    uint64_t    size_bytes = 0;
+    std::string path;
+
+    // Sectors written to a read-only mount, by LBA. Bounded by what the guest
+    // actually writes, which for every test here is a handful of blocks.
+    std::map<uint32_t, std::vector<uint8_t>> overlay;
 
     // Set when a transfer is in flight, so the harness can step it over the
     // several cycles a real HPS session takes rather than answering instantly
@@ -58,8 +85,14 @@ struct ScsiDisk {
     int      countdown = 0;
     uint8_t  sector[512] = {0};
 
-    bool   load(const std::string &p);
-    size_t blocks() const { return image.size() / 512; }
+    bool   load(const std::string &p, bool rw = false);
+    size_t blocks() const { return (size_t)(size_bytes / 512); }
+
+    // Both return false only if the host I/O itself failed; a read past the end
+    // of the image yields zeros, which is what a short tail on a real disk
+    // would do rather than a bus error.
+    bool   read_block(uint32_t lba, uint8_t *dst);
+    bool   write_block(uint32_t lba, const uint8_t *src);
 };
 
 struct Devices {

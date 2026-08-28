@@ -7,6 +7,9 @@
 // established.
 
 #include "sim_devices.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -214,24 +217,48 @@ extern "C" void sgi_dpi_write(uint32_t space, uint32_t addr, uint64_t data, uint
 
 namespace sgisim {
 
-bool ScsiDisk::load(const std::string &p)
+bool ScsiDisk::load(const std::string &p, bool rw)
 {
-    FILE *f = fopen(p.c_str(), "rb");
-    if (!f) return false;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n <= 0) { fclose(f); return false; }
-    // Round up to a whole block. A short tail would otherwise read back as
-    // whatever was in the vector, and a disk whose last sector is half there
-    // is not a thing the guest can be expected to cope with.
-    size_t blocks = (size_t)((n + 511) / 512);
-    image.assign(blocks * 512, 0);
-    size_t got = fread(image.data(), 1, (size_t)n, f);
-    fclose(f);
-    if (got != (size_t)n) return false;
-    path    = p;
-    mounted = true;
+    int f = ::open(p.c_str(), rw ? O_RDWR : O_RDONLY);
+    if (f < 0) return false;
+    off_t n = ::lseek(f, 0, SEEK_END);
+    if (n <= 0) { ::close(f); return false; }
+
+    // Round the reported size up to a whole block. A disk whose last sector is
+    // half there is not a thing the guest can be expected to cope with; the
+    // short tail reads back as zeros.
+    fd         = f;
+    size_bytes = ((uint64_t)n + 511u) / 512u * 512u;
+    writable   = rw;
+    path       = p;
+    overlay.clear();
+    mounted    = true;
+    return true;
+}
+
+bool ScsiDisk::read_block(uint32_t lba, uint8_t *dst)
+{
+    // A sector the guest has already written to a read-only mount comes from
+    // the overlay rather than the file. Without that, a write followed by a
+    // read in the same run would return what was there before it - which is
+    // exactly what tests/run-scsiwr.sh checks does not happen.
+    auto it = overlay.find(lba);
+    if (it != overlay.end()) { memcpy(dst, it->second.data(), 512); return true; }
+
+    memset(dst, 0, 512);
+    if (fd < 0) return false;
+    uint64_t off = (uint64_t)lba * 512u;
+    if (off >= size_bytes) return true;          // past the end reads as zeros
+    return ::pread(fd, dst, 512, (off_t)off) >= 0;
+}
+
+bool ScsiDisk::write_block(uint32_t lba, const uint8_t *src)
+{
+    if (!writable) { overlay[lba].assign(src, src + 512); return true; }
+    if (fd < 0) return false;
+    uint64_t off = (uint64_t)lba * 512u;
+    if (::pwrite(fd, src, 512, (off_t)off) != 512) return false;
+    if (off + 512u > size_bytes) size_bytes = off + 512u;
     return true;
 }
 

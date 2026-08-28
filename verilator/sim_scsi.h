@@ -99,11 +99,7 @@ public:
                     d.writing   = want_wr;
                     d.lba       = top->scsi_sd_lba;
                     d.countdown = XFER_CYCLES;
-                    if (!d.writing) {
-                        size_t off = (size_t)d.lba * 512;
-                        for (int b = 0; b < 512; b++)
-                            d.sector[b] = (off + b < d.image.size()) ? d.image[off + b] : 0;
-                    }
+                    if (!d.writing) d.read_block(d.lba, d.sector);
                 }
                 continue;
             }
@@ -156,11 +152,7 @@ public:
                 // rewrites its own fixture stops being a test the second time
                 // it runs. A write followed by a read in the same run sees the
                 // new data, which is what proves the path.
-                if (d.writing) {
-                    size_t off = (size_t)d.lba * 512;
-                    if (off + 512 <= d.image.size())
-                        memcpy(&d.image[off], d.sector, 512);
-                }
+                if (d.writing) d.write_block(d.lba, d.sector);
                 d.busy = false;
             }
         }

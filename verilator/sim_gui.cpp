@@ -142,7 +142,9 @@ static void usage()
         "  --boot-pc HEX     override the reset PC (default 0xBFC00000)\n"
         "  --testdev         fit the IRIS test device in GIO64 slot 0\n"
         "  --ram-mb N        main memory size (default 64)\n"
-        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1)\n"
+        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1),\n"
+        "                    read-only: writes are kept in memory for the run\n"
+        "  --disk-rw ID=PATH the same, but writes go through to the host file\n"
         "  --run             start running immediately\n");
 }
 
@@ -197,7 +199,8 @@ int main(int argc, char **argv)
     std::string prom_path, elf_path;
     uint32_t boot_pc = 0xBFC00000, ram_mb = 64;
     bool testdev = false, start_running = false;
-    std::vector<std::pair<int, std::string>> disks;
+    struct Mount { int id; std::string path; bool rw; };
+    std::vector<Mount> disks;
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -219,7 +222,16 @@ int main(int argc, char **argv)
             int id = 1;
             if (eq != std::string::npos) { id = atoi(spec.substr(0, eq).c_str()); spec = spec.substr(eq + 1); }
             if (id < 0 || id > 6) { fprintf(stderr, "--disk: target %d is out of range\n", id); return 2; }
-            disks.push_back({id, spec});
+            disks.push_back({id, spec, false});
+        }
+        else if (a == "--disk-rw") {
+            // Writes go through to the host file. See sim_devices.h.
+            std::string spec = next("--disk-rw");
+            size_t eq = spec.find('=');
+            int id = 1;
+            if (eq != std::string::npos) { id = atoi(spec.substr(0, eq).c_str()); spec = spec.substr(eq + 1); }
+            if (id < 0 || id > 6) { fprintf(stderr, "--disk-rw: target %d is out of range\n", id); return 2; }
+            disks.push_back({id, spec, true});
         }
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (a.rfind("+", 0) == 0 || a.rfind("-V", 0) == 0) { }
@@ -231,12 +243,12 @@ int main(int argc, char **argv)
     g_dev.testdev.present = testdev;
 
     for (auto &d : disks) {
-        if (!g_dev.scsi[d.first].load(d.second)) {
-            fprintf(stderr, "cannot open disk %s\n", d.second.c_str());
+        if (!g_dev.scsi[d.id].load(d.path, d.rw)) {
+            fprintf(stderr, "cannot open disk %s\n", d.path.c_str());
             return 2;
         }
-        printf("SCSI %d: %s (%zu blocks)\n", d.first, d.second.c_str(),
-               g_dev.scsi[d.first].blocks());
+        printf("SCSI %d: %s (%zu blocks%s)\n", d.id, d.path.c_str(),
+               g_dev.scsi[d.id].blocks(), d.rw ? ", read-write" : "");
     }
 
     std::string load_msg;
