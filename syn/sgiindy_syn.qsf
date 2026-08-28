@@ -1,30 +1,40 @@
 # Fit-measurement project. See syn/README.md - this is NOT the MiSTer core.
 #
-# DE10-Nano: Cyclone V SE 5CSEBA6U23I7, the same device every MiSTer core
-# targets, so the numbers this reports are the numbers that matter.
+# Deliberately minimal. Every assignment here is one the root sgiindy.qsf or
+# sys/sys.tcl already uses, because this project's whole job is to be the thing
+# that is not wrong when the compile fails.
 
+# Same device every MiSTer core targets, copied from sys/sys.tcl - this project
+# does not source that file, because sys.tcl brings the whole framework with it
+# and there is no framework here to bring.
 set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name DEVICE 5CSEBA6U23I7
+
 set_global_assignment -name TOP_LEVEL_ENTITY syn_top
-set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Standard Edition"
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 
-set_global_assignment -name SYSTEMVERILOG_INPUT_VERSION SYSTEMVERILOG_2005
-set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
-set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+# NO VHDL_INPUT_VERSION HERE, and that is deliberate. The vendored CPU's
+# SyncFifo and dpram sources use plain, non-protected shared variables, which
+# VHDL-2008 downgrades from a warning to an ERROR - tools/gen_r4300_verilog.sh
+# has to pass GHDL -frelaxed for exactly this reason. Quartus defaults to
+# VHDL-1993, which accepts them, so the right move is to leave it alone.
+#
+# There is likewise no VERILOG_INPUT_VERSION: Quartus takes SystemVerilog from
+# the .sv extension, and sys/sys.tcl does not set it either.
 
-# The core has no reset that clears every register, and Quartus needs to be
-# told that is deliberate rather than guessing at power-up values.
-set_global_assignment -name ALLOW_ANY_RAM_SIZE_FOR_RECOGNITION ON
-set_global_assignment -name ALLOW_ANY_ROM_SIZE_FOR_RECOGNITION ON
-
-set_global_assignment -name QIP_FILE files_core.qip
 set_global_assignment -name SDC_FILE sgiindy_syn.sdc
 
 # Five pins: the harness reduces the core's 39 ports to this so the fitter has
-# something it can place. See syn/syn_top.sv.
-set_location_assignment PIN_V11 -to CLK_50
+# something it can place. See syn/syn_top.sv. Locations are arbitrary DE10-Nano
+# user I/O - nothing is wired to anything, so only the count matters.
+set_location_assignment PIN_V11  -to CLK_50
 set_location_assignment PIN_AH17 -to RESET_N
 set_location_assignment PIN_AH16 -to SEED
 set_location_assignment PIN_W15  -to OUT_BIT
 set_location_assignment PIN_AA24 -to LOCKED
+
+# `source`, not QIP_FILE: this is how the root sgiindy.qsf pulls in files.qip,
+# so it is the mechanism known to work in this project.
+source files_core.qip
