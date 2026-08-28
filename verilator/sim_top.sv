@@ -37,6 +37,19 @@ module sim_top
     input  wire [10:0] ps2_key,
     input  wire [24:0] ps2_mouse,
 
+    // SCSI block device, one slot per target. The harness models the disk in
+    // C++ (sim_devices.cpp) the way hps_io does on hardware.
+    input  wire  [6:0] scsi_img_mounted,
+    input  wire [31:0] scsi_img_blocks,
+    output wire [31:0] scsi_sd_lba,
+    output wire  [6:0] scsi_sd_rd,
+    output wire  [6:0] scsi_sd_wr,
+    input  wire  [6:0] scsi_sd_ack,
+    input  wire  [7:0] scsi_sd_buff_addr,
+    input  wire [15:0] scsi_sd_buff_dout,
+    output wire [15:0] scsi_sd_buff_din,
+    input  wire        scsi_sd_buff_wr,
+
     // Console tap: one pulse per byte handed to the SCC transmitter.
     output wire        tx_valid,
     output wire  [7:0] tx_data,
@@ -97,6 +110,17 @@ module sim_top
 
         .ps2_key       (ps2_key),
         .ps2_mouse     (ps2_mouse),
+
+        .scsi_img_mounted (scsi_img_mounted),
+        .scsi_img_blocks  (scsi_img_blocks),
+        .scsi_sd_lba      (scsi_sd_lba),
+        .scsi_sd_rd       (scsi_sd_rd),
+        .scsi_sd_wr       (scsi_sd_wr),
+        .scsi_sd_ack      (scsi_sd_ack),
+        .scsi_sd_buff_addr(scsi_sd_buff_addr),
+        .scsi_sd_buff_dout(scsi_sd_buff_dout),
+        .scsi_sd_buff_din (scsi_sd_buff_din),
+        .scsi_sd_buff_wr  (scsi_sd_buff_wr),
 
         .ram_req       (ram_req),
         .ram_we        (ram_we),

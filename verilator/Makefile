@@ -102,6 +102,9 @@ CPUTEST_V = \
 	$(RTL)/sgi/sgi_hpc3.sv \
 	$(RTL)/sgi/sgi_ioc.sv \
 	$(RTL)/sgi/i8042.sv \
+	$(RTL)/scsi/sgi_scsi.sv \
+	$(RTL)/scsi/wd33c93.sv \
+	$(RTL)/scsi/scsi.v \
 	$(RTL)/sgi/pit8254.sv \
 	$(RTL)/sgi/sgi_memmap.sv \
 	$(RTL)/sgi/sgi_ds1386.sv \
@@ -113,7 +116,7 @@ CPUTEST_V = \
 
 CPUTEST_C = sim_cputest.cpp sim_devices.cpp
 
-CPUTEST_W = -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST \
+CPUTEST_W = +incdir+$(RTL)/scsi -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST \
             -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-DECLFILENAME \
             -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-SYNCASYNCNET
 

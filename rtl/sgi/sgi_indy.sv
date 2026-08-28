@@ -67,6 +67,20 @@ module sgi_indy #(
     input  logic        icache_en,
     input  logic        dcache_en,
 
+    // ---- SCSI block device ----------------------------------------------
+    // One hps_io slot per target. On hardware these come from the HPS; in
+    // simulation from sim_blkdevice.
+    input  logic  [6:0] scsi_img_mounted,
+    input  logic [31:0] scsi_img_blocks,
+    output logic [31:0] scsi_sd_lba,
+    output logic  [6:0] scsi_sd_rd,
+    output logic  [6:0] scsi_sd_wr,
+    input  logic  [6:0] scsi_sd_ack,
+    input  logic  [7:0] scsi_sd_buff_addr,
+    input  logic [15:0] scsi_sd_buff_dout,
+    output logic [15:0] scsi_sd_buff_din,
+    input  logic        scsi_sd_buff_wr,
+
     // ---- host input devices ---------------------------------------------
     // MiSTer's decoded PS/2 forms, straight from hps_io. Both are edge-coded
     // on their top bit; i8042.sv turns them back into what a PC keyboard and
@@ -153,6 +167,12 @@ module sgi_indy #(
     localparam logic [31:0] RTC_BASE   = 32'h1FBE_0000;
     localparam logic [31:0] RTC_SIZE   = 32'h0000_8000;   // 8 KB at stride 4
     localparam logic [31:0] IOC_BASE   = 32'h1FBD_9800;
+    // WD33C93B controller 0. The PROM's descriptor table at 0xBFC7B410 puts
+    // the address port at 0x1FBC0003 and the data port at 0x1FBC0007, i.e.
+    // the low bytes of the two words at the base. Controller 1 lives at
+    // 0x1FBC8000 and is not fitted.
+    localparam logic [31:0] SCSI0_BASE = 32'h1FBC_0000;
+    localparam logic [31:0] SCSI0_SIZE = 32'h0000_0008;
     localparam logic [31:0] IOC_SIZE   = 32'h0000_0100;
     localparam logic [31:0] PROM_BASE  = 32'h1FC0_0000;
     localparam logic [31:0] PROM_SIZE  = 32'h0008_0000;   // 512 KB
@@ -234,7 +254,7 @@ module sgi_indy #(
     //------------------------------------------------------------------
     // Address decode
     //------------------------------------------------------------------
-    logic sel_ram, sel_alias, sel_gio, sel_gfx, sel_mc, sel_hpc3, sel_ioc, sel_rtc,
+    logic sel_ram, sel_alias, sel_gio, sel_gfx, sel_mc, sel_hpc3, sel_ioc, sel_rtc, sel_scsi0,
           sel_prom, sel_none;
     logic hpc3_claimed;
 
@@ -261,6 +281,7 @@ module sgi_indy #(
         .hit     (mem_hit),
         .offset  (mem_off)
     );
+    assign sel_scsi0 = (bus_addr >= SCSI0_BASE) && (bus_addr < SCSI0_BASE + SCSI0_SIZE);
     assign sel_gio   = (bus_addr >= GIO0_BASE) && (bus_addr < GIO0_BASE + GIO0_SIZE);
     assign sel_mc    = (bus_addr >= MC_BASE)   && (bus_addr < MC_BASE + MC_SIZE);
     assign sel_ioc   = (bus_addr >= IOC_BASE)  && (bus_addr < IOC_BASE + IOC_SIZE);
@@ -282,7 +303,7 @@ module sgi_indy #(
     assign sel_hpc3  = (bus_addr >= HPC3_BASE) && (bus_addr < HPC3_BASE + HPC3_SIZE)
                        && !sel_ioc && !sel_rtc && hpc3_claimed;
     assign sel_none  = !(sel_ram | sel_gio | sel_gfx | sel_mc | sel_hpc3
-                       | sel_ioc | sel_rtc | sel_prom);
+                       | sel_ioc | sel_rtc | sel_prom | sel_scsi0);
 
     // A memory cycle only reaches the RAM model when MEMCFG has a valid bank
     // covering it. Everything else in the two memory windows is answered here
@@ -442,6 +463,33 @@ module sgi_indy #(
     logic kbd_ack;
     always_ff @(posedge clk) kbd_ack <= reset ? 1'b0 : kbd_sel;
 
+    // ---- SCSI controller 0 ----------------------------------------------
+    logic [63:0] scsi_rdata;
+    logic        scsi_ack, scsi_irq;
+
+    sgi_scsi u_scsi0 (
+        .clk          (clk),
+        .reset        (reset),
+        .ce           (ce),
+        .sel          (bus_req && sel_scsi0),
+        .we           (bus_we),
+        .aoff         (bus_aoff),
+        .wdata        (bus_wdata),
+        .rdata        (scsi_rdata),
+        .ack          (scsi_ack),
+        .irq          (scsi_irq),
+        .img_mounted  (scsi_img_mounted),
+        .img_blocks   (scsi_img_blocks),
+        .sd_lba       (scsi_sd_lba),
+        .sd_rd        (scsi_sd_rd),
+        .sd_wr        (scsi_sd_wr),
+        .sd_ack       (scsi_sd_ack),
+        .sd_buff_addr (scsi_sd_buff_addr),
+        .sd_buff_dout (scsi_sd_buff_dout),
+        .sd_buff_din  (scsi_sd_buff_din),
+        .sd_buff_wr   (scsi_sd_buff_wr)
+    );
+
     // The rest of the IOC window: panel, SYS_ID, reset/LED, and the INT2
     // interrupt controller at +0x80.
     logic [63:0] ioc_rdata;
@@ -513,7 +561,7 @@ module sgi_indy #(
     end
 
     assign bus_ack   = ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
-                     | ioc_ack | rtc_ack | scc_ack | kbd_ack | none_ack | gio_absent_ack
+                     | ioc_ack | rtc_ack | scc_ack | kbd_ack | scsi_ack | none_ack | gio_absent_ack
                      | mem_hole_ack | gfx_ack;
 
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
@@ -524,6 +572,7 @@ module sgi_indy #(
                      : gio_ack  ? gio_rdata
                      : mc_ack   ? mc_rdata
                      : hpc3_ack ? hpc3_rdata
+                     : scsi_ack ? scsi_rdata
                      : kbd_ack  ? {24'h0, kbd_dout, 24'h0, kbd_dout}
                      : scc_ack  ? {scc_rdata, scc_rdata}
                      : ioc_ack  ? ioc_rdata

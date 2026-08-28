@@ -35,10 +35,8 @@ OUT="$ROOT/tests/out/prom-console.txt"
 
 # Milestones, in the order the PROM prints them. Each is a substring.
 EXPECT=(
-    "Data path test"                       # the console itself works
-    "NVRAM checksum is incorrect"          # the RTC/NVRAM answers, and is blank
+    "NVRAM checksum is incorrect"          # the console works, and the RTC/NVRAM answers          # the RTC/NVRAM answers, and is blank
     "Running power-on diagnostics"         # POST started, so memory was found
-    "SCSI controller 0 diagnostic"         # POST got past the memory tests
     "Diagnostics failed"                   # POST finished and reported
     "System Maintenance Menu"              # the keystroke arrived: serial input
     "5) Enter Command Monitor"
@@ -62,6 +60,12 @@ FORBID=(
     # rather than deleted: the machine now gets further, and a regression that
     # brought the failure back would otherwise pass silently.
     "PC keyboard/mouse controller"
+    # Both of these were EXPECT lines when there was no SCSI controller at all:
+    # the question then was only whether POST got as far as complaining. The
+    # WD33C93B now passes its own diagnostic and the data path test, so neither
+    # prints. Same reasoning as the keyboard line above.
+    "WD SCSI0 path test"
+    "SCSI controller 0 diagnostic"
 )
 
 if [[ "${1:-}" != "--no-build" ]]; then

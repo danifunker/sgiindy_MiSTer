@@ -166,7 +166,26 @@ module sgi_scsi #(
                 .dbg_dma_long   (1'b0),
                 .dbg_dma_lowbyte(8'h00),
                 .dbg_wrsnap     (),
-                .dbg_selsnap    ()
+                .dbg_selsnap    (),
+                .dbg_wrstall    (),
+                .dbg_wrfb       (),
+                .dbg_ring       (),
+                // CD audio and BlueSCSI Toolbox: both compiled out by CDROM(0)
+                // and TOOLBOX_ENABLE(0), but the ports still exist. Listed
+                // rather than left to -Wno-PINMISSING, so a genuinely
+                // forgotten connection stays an error.
+                .dbg_cda0       (),
+                .dbg_cda1       (),
+                .dbg_cda2       (),
+                .dbg_cda3       (),
+                .dbg_cda4       (),
+                .dbg_cdur       (),
+                .tb_mounted     (1'b0),
+                .tb_lba         (),
+                .tb_rd          (),
+                .tb_wr          (),
+                .tb_ack         (1'b0),
+                .tb_buff_din    ()
             );
 
             assign sd_rd[t] = t_rd;
