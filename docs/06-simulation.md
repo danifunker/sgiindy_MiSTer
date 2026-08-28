@@ -37,10 +37,11 @@ closed because they are bulky and rarely what you want while watching a boot.
 This is core ImGui, **not the docking branch**, so there is no dockspace: the
 panels are plain windows tiled into three columns on first use and the user's
 business after that. Every one of them resizes from any edge or corner, and
-the layout is remembered in `verilator/imgui.ini`. The `View` menu toggles
-each panel and has a **Reset layout**, which is the escape hatch when a window
-ends up somewhere its resize grip cannot be reached — delete the ini file for
-the same effect.
+the layout is remembered in an `imgui.ini` written to whatever directory the
+harness was launched from (it is gitignored). The `View` menu toggles each
+panel and has a **Reset layout**, which is the escape hatch when a window ends
+up somewhere its resize grip cannot be reached — deleting the ini file does
+the same thing.
 
 Two things that made this look broken before and are worth not rediscovering:
 `MemoryEditor::DrawWindow` clamps its window's width to its own content, so a

@@ -19,6 +19,9 @@ simulation/
 greybox_tmp/
 obj_dir/
 obj_dir_gui/
+# Per-user ImGui window layout, written to whatever directory the GUI
+# harness is launched from.
+imgui.ini
 *.qws
 *.rpt
 *.summary
