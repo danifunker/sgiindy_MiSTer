@@ -39,18 +39,15 @@ sgiindy_MiSTer/
 
 Each milestone is defined by an observable, not by "component X is written".
 
-**Status: M0 and M1 are done.** `tests/run-cputest.sh` runs the 240-test suite
-on the core in about 35 seconds and reports 2155 checks passed / 9 failed
-against full R4400 expectations, versus 2101 / 61 for IRIS's own R4400. The
-core presents as an R4400PC - identity, 48 TLB entries, cache geometry, no
-COP2, MIPS IV traps as Reserved Instruction. `tests/run-scc.sh` proves the Z8530
-transmits, checked against a UART decode of its own output pin. See
-[10-r4300-integration.md](10-r4300-integration.md).
+**Status: M0–M3 are done, M4 and M5 are partly done, M6 is one step away.**
 
-M2 is next: the MC register file, enough of it to get `realstart` past
-`DELAY`/`calibrate_delay`. The `Config` cache-geometry worry that M2 was
-partly about turned out not to exist — the R4300i drives those fields
-correctly — so the free-running `RPSS_CTR` is the remaining trap.
+`tests/run-cputest.sh` runs the 240-test suite on the core in about 35 seconds
+and reports 2155 checks passed / 9 failed against full R4400 expectations,
+versus 2101 / 61 for IRIS's own R4400. `tests/run-scc.sh` proves the Z8530
+transmits, checked against a UART decode of its own output pin.
+`tests/run-prom.sh` boots the real IP24 PROM, which now runs its power-on
+diagnostics, prints them over serial, takes a keystroke back and reaches the
+**System Maintenance Menu**. See [12-chipset.md](12-chipset.md).
 
 ### M0 — infrastructure ✅
 Portable Verilator harness (no DX11), ELF loader into the RAM model, PROM
@@ -73,32 +70,72 @@ This is the CPU milestone; endianness needs no separate investigation, since
 the R4300i is natively big-endian (`Config.bigEndian = 1` at reset) — just do
 not carry `data_flipped` forward.
 
-### M2 — MC good enough to survive `realstart`
+### M2 — MC good enough to survive `realstart` ✅
 `SYSID`, `CPUCTRL0/1` readback, and a genuinely free-running `RPSS_CTR`.
 Success: the PROM gets past `DELAY`/`calibrate_delay` without hanging.
 
-### M3 — console output
+Done, and it took more than the MC: `calibrate_delay` also needs the 8254 in
+IOC2, and `realstart`'s HPC3 walking-bit tests come first.
+
+### M3 — console output ✅
 SCC on a real MiSTer UART (or the framework's virtual serial). Success: **the
 PROM's first banner line appears**, and matches the corresponding line in the
-real serial capture (`SGI BIOS ROM Images/IP24_Indy/`… — captures exist for
-IP6, IP15, IP17, IP22, IP26, IP28).
+real serial capture.
 
-### M4 — memory sizing
+Done, in simulation. Two caveats:
+
+- The blocking bug was not the SCC's serialiser but a missing register path:
+  the PROM prints through **WR8 on the command port**, and the model only
+  pushed the TX FIFO on data-port writes. See `rtl/sgi/z8530_scc.sv`.
+- **There is no IP24 serial capture in `roms/`** — only an IP22 one — so the
+  output has not been diffed against real hardware. That is a good thing to ask
+  the user for: a serial capture of a real Indy booting this PROM revision
+  would be a golden reference for everything from here on.
+
+### M4 — memory sizing — partly done
 `MEMCFG0/1` describing a real bank at phys `0x08000000`, plus the GIO DMA engine
 completing the VDMA memory clear. Success: no `DMA_RUN`/`DMA_CAUSE` dump; the
 PROM prints the correct memory size.
 
-### M5 — NVRAM
-Full DS1386 stride-4 aliasing, 256-byte checksummed window, `(nvram[1]&0x3f)==8`
-tag, backed by a file on the SD card so settings persist. Seed from
-`indy-prom/out/nvram-default-repaired.bin`. Success: `printenv` works and
-`setenv` survives a reset.
+`rtl/sgi/sgi_memmap.sv` makes the decode follow MEMCFG and POST's memory tests
+pass — no bank failures, no "No usable memory found". **The GIO DMA engine is
+still a stub**: its registers behave and a start reports instant completion, but
+nothing is copied, so the boot memory clear does not clear anything. The PROM
+does not print the DMA failure dump, which means it believes the clear worked.
 
-### M6 — **Command Monitor prompt**
+### M5 — NVRAM — partly done
+Full DS1386 stride-4 aliasing, 256-byte checksummed window, `(nvram[1]&0x3f)==8`
+tag, backed by a file on the SD card so settings persist. Success: `printenv`
+works and `setenv` survives a reset.
+
+`rtl/sgi/sgi_ds1386.sv` is the whole part with a BCD calendar, and the PROM's
+RTC path test passes. **It is volatile**, so the PROM prints "NVRAM checksum is
+incorrect: reinitializing" and rebuilds the environment on every boot. Nothing
+is seeded and nothing persists.
+
+### M6 — **Command Monitor prompt** — in progress
 INT2 readable, SCSI/Ethernet reporting absent-but-graceful, HAL2 returning
 REV bit 15. Success: an interactive `>>` prompt over serial, `hinv` and `help`
 respond. **This is the "it boots" milestone**, and it is reachable with zero
 graphics work.
+
+INT2 is readable, SCSI and Ethernet report absent and the PROM continues, HAL2
+returns REV bit 15, and the boot reaches:
+
+```
+System Maintenance Menu
+
+1) Start System
+2) Install System Software
+3) Run Diagnostics
+4) Recover System
+5) Enter Command Monitor
+
+Option?
+```
+
+Serial **input** works too — the harness types a real UART frame into `rxdb`
+and the PROM acts on it. Option 5 is the last step.
 
 ### M7 — graphics
 Newport: REX3 rasteriser at `0x1F0F0000` (`XSTART` `+0x100`, `XSTARTI` `+0x148`,

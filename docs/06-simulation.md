@@ -5,20 +5,60 @@ than argued about.
 
 ## What exists now, in this repo
 
-`verilator/` builds a **headless** harness — no SDL, no window, no ImGui — so
-CPU and SCC regressions run in seconds and in CI:
+`verilator/` builds **two** harnesses over the same `sim_top` and the same C++
+device models. One top level, one set of models: a GUI wrapping a different
+core would drift, and then "it works in the GUI" would stop meaning anything
+about what CI runs.
+
+**Headless** — no SDL, no window, no ImGui — so CPU and SCC regressions run in
+seconds and in CI:
 
 ```sh
 make -C verilator cputest
 ./verilator/obj_dir/Vsim_top --elf .../cputest.elf --testdev
+./verilator/obj_dir/Vsim_top --prom roms/IP24_Indy/ip24prom.070-9101-011.bin \
+    --stuck 20000000 --hot
 ```
+
+**Interactive** — SDL2 + OpenGL2 + Dear ImGui, from the MiSTer sim framework
+vendored in `verilator/sim/`:
+
+```sh
+make -C verilator gui
+./verilator/obj_dir/Vsim_gui --prom roms/IP24_Indy/ip24prom.070-9101-011.bin --run
+```
+
+Panels: Control (run/stop `F5`, single step `F11`, 5000-step `F6`, reset,
+cycles/s, `cpu_error` counts) · **Console**, with a box to type back at the
+machine · Bus trace with decoded register names · **Unclaimed addresses** ·
+Hot addresses · **PROM patches** · RAM and PROM hex editors.
+
+The console input is a real UART transmitter on `rxdb`, not a back door into
+the SCC's receive FIFO, so a keystroke only arrives if the receiver, the baud
+rate generator and the RX FIFO all work. Its bit rate is not configured: it is
+measured from the machine's own transmitter, so whatever the PROM programs into
+WR12/13 is automatically what the harness sends at — and the box stays disabled
+until the machine has printed something, because sending at a guessed rate
+produces plausible wrong characters, which is far worse to debug than "not
+connected yet".
+
+That measurement is worth more care than it looks. The PROM changes the console
+rate during boot — it announces "diagnostic baud rate set to 19200" before the
+System Maintenance Menu — so it is re-measured per burst of output rather than
+once, and a run shorter than the current bit time is taken immediately, because
+it is proof the machine has sped up. `tests/uart/run.sh` is a host-side unit
+test over exactly the waveforms that got this wrong, including the one-clock
+low on `txdb` at reset, which used to make the first character decode as a
+single `0xFF`.
 
 | File | What it is |
 |---|---|
 | `verilator/sim_top.sv` | the core wired to C++-backed memory, PROM and GIO models |
 | `verilator/sim_ram.v` | those models' RTL side; the storage is in C++, reached by DPI |
 | `verilator/sim_devices.cpp` | memory, the IRIS test device, and the ELF loader |
-| `verilator/sim_cputest.cpp` | the harness proper: options, console, bus trace, diagnostics |
+| `verilator/sim_cputest.cpp` | the headless harness: options, console, bus trace, diagnostics |
+| `verilator/sim_gui.cpp` | the interactive harness: the same, with panels and a keyboard |
+| `verilator/sim_uart.h` | the serial decoder and transmitter both harnesses share |
 
 Everything docs recommended porting from the sandbox is there:
 
@@ -32,17 +72,30 @@ Everything docs recommended porting from the sandbox is there:
   addresses finds the same failure and names the register, which the PC alone
   would not;
 - `--hot`, the most-accessed addresses on exit;
+- an **unclaimed-address summary** on exit: every bus cycle no device answered,
+  grouped by address with counts and first/last cycle. This is the single most
+  useful diagnostic for chipset bring-up — the next thing to build is nearly
+  always the address at the top of a poll loop — and it replaced a per-cycle
+  stderr line that buried everything else under 122000 copies of itself;
 - the SCC console tap, plus `--uart` to decode the `txdb` line independently;
 - an **ELF loader** that probes both ends of every segment after writing,
   because unmapped physical space accepts writes silently.
 
-The GUI harness (`sim.v`, module `emu`) is still to be written; it wraps the
-same core and is not needed for anything through M6.
+### Still missing
 
-Two things it does *not* have yet: the runtime-toggleable ROM/MMIO spoof
-tables, and the IRIS golden-log MMIO diff. Neither has been needed — the
-`cpu-tests` suite is a better oracle than a trace diff for CPU work — but both
-belong here before the PROM bring-up starts.
+- The **IRIS golden-log MMIO diff**: run the same PROM in both, diff the
+  traces, and the first divergence is the bug. It has not been needed yet, and
+  that is worth recording — every chipset stall through M2 was legible from the
+  unclaimed-address list plus the PROM's own disassembly, which is a faster
+  loop than building a differ. It earns its keep when behaviour is subtly
+  wrong rather than absent.
+- **MMIO** spoofing. The GUI's spoof table patches the PROM image, which covers
+  the sandbox's whole list of "known-hard spots"; overriding a device register
+  would need RTL support, since the devices are no longer in C++.
+- The **PC** panel. `cpu.vhd`'s PC is only observable through the savestate
+  export, which lives inside a `-- synthesis translate_off` block and so is not
+  in the netlist GHDL lowers for Verilator. Adding an `-- SGI:` debug output
+  outside that block would put it in reach.
 
 ## What the DE1 sandbox had
 

@@ -9,6 +9,13 @@ built. Milestones M0 and M1 are done: the CPU runs the 240-test bare-metal MIPS
 suite under Verilator at 2155 checks passed / 9 failed against full R4400
 expectations, and the Z8530 transmits. `tests/` has both regressions.
 
+**M6 — "it boots" — is reached.** The MC, HPC3, IOC2/INT2, the 8254, the
+Dallas RTC/NVRAM and a MEMCFG-driven memory decode are in, and the real IP24
+PROM runs its power-on diagnostics, prints them over the serial console, takes
+keystrokes back, and answers `version` and `hinv` at the `>>` prompt.
+[12-chipset.md](12-chipset.md) is the record of that;
+`tests/run-prom.sh` reproduces it.
+
 Anything below that predates the build is still the plan; where the build
 proved a plan wrong, the doc says so rather than being quietly rewritten.
 
@@ -20,13 +27,13 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | [03-boot-prom.md](03-boot-prom.md) | Boot PROM images, reset flow, NVRAM format, bring-up checklist |
 | [04-cpu.md](04-cpu.md) | CPU options: aoR3000 (R3000A) vs N64 R4300i vs a real R4400 |
 | [05-existing-rtl.md](05-existing-rtl.md) | How `DE1_TOP.v` is wired: bus gearbox, decode tree, peripheral models |
-| [06-simulation.md](06-simulation.md) | The Verilator + ImGui harness, spoofs, how to reproduce it |
+| [06-simulation.md](06-simulation.md) | The Verilator harnesses — headless and interactive — and what they are for |
 | [07-mister-port-plan.md](07-mister-port-plan.md) | Proposed plan for turning this into a real MiSTer core |
 | **[08-resume-prompt.md](08-resume-prompt.md)** | **Start here if you are picking this work up** — the agent entry point |
 | [09-cpu-validation.md](09-cpu-validation.md) | The IRIS bare-metal CPU test suite, and IRIS as behavioural oracle |
 | **[10-r4300-integration.md](10-r4300-integration.md)** | **The CPU as built** — the byte-lane contract, turning an R4300 into an R4400, the fixes, the numbers |
 | [11-running-on-hardware.md](11-running-on-hardware.md) | Running the same test binary on a real SGI, and which machines it applies to |
-| [11-running-on-hardware.md](11-running-on-hardware.md) | Building and booting the CPU test suite on a real SGI |
+| **[12-chipset.md](12-chipset.md)** | **The chipset as built** — MC, HPC3, IOC2/INT2, the timers, the RTC, and the order in which each one blocked the next |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
 ## Machines under consideration
