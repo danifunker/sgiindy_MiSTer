@@ -267,10 +267,40 @@ module wd33c93 #(
                         // a driver rewrites in place.
                         case (ar)
                             R_COMMAND: begin
-                                if (cip) begin
-                                    // The chip ignores a command issued while
-                                    // one is running and says so in LCI rather
-                                    // than corrupting the one in flight.
+                                // A command is refused, and LCI says so, while
+                                // one is still running OR while an interrupt
+                                // has not been serviced. The second half is not
+                                // a detail: the SCSI Status register holds the
+                                // result of the *last* command, so accepting a
+                                // new one before the driver has read it would
+                                // destroy the answer it is about to ask for.
+                                //
+                                // The PROM's command-issue routine is written
+                                // around exactly this, and reading it is how
+                                // the rule was established rather than guessed.
+                                // FUN_bfc1f64c: wait for CIP to clear, write
+                                // COMMAND, wait for CIP again, then test LCI -
+                                // and on LCI, call FUN_bfc1f230 ("is INT
+                                // pending?"), read register 0x17 to clear it,
+                                // and re-issue.
+                                //
+                                // Without it, a scan of the empty SCSI IDs
+                                // printed six "illegal disconnection interrupt"
+                                // lines a boot. The handler at 0xBFC1E304 is
+                                // silent on status 0x85 only while COMMAND
+                                // still reads 0x04, and the driver leaves the
+                                // DISCONNECT interrupt unserviced while it sets
+                                // up the next ID. On real hardware that next
+                                // command bounces off LCI and the driver eats
+                                // the stale interrupt itself; here it was
+                                // accepted, so the handler ran late against a
+                                // COMMAND register that had moved to 0x08.
+                                //
+                                // RESET is the exception, as it is on the part:
+                                // it is the escape hatch out of any state,
+                                // clears the interrupt itself, and a driver
+                                // with a wedged chip has nothing else left.
+                                if ((cip || int_pending) && din != C_RESET) begin
                                     lci <= 1'b1;
                                 end else begin
                                     reg_file[R_COMMAND] <= din;

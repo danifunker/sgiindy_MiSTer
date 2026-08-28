@@ -35,12 +35,12 @@ OUT="$ROOT/tests/out/prom-console.txt"
 
 # Milestones, in the order the PROM prints them. Each is a substring.
 EXPECT=(
-    "NVRAM checksum is incorrect"          # the console works, and the RTC/NVRAM answers          # the RTC/NVRAM answers, and is blank
+    "NVRAM checksum is incorrect"          # the console works, and the RTC/NVRAM answers
     "Running power-on diagnostics"         # POST started, so memory was found
-    "Diagnostics failed"                   # POST finished and reported
-    "System Maintenance Menu"              # the keystroke arrived: serial input
+    "Cannot open video() for output"       # POST ran to the end and found no graphics
+    "System Maintenance Menu"              # POST passed, so the menu comes up unprompted
     "5) Enter Command Monitor"
-    "Command Monitor."                     # and the menu took a second keystroke
+    "Command Monitor."                     # and the menu took a keystroke: serial input
     "PROM Monitor SGI Version 5.3"         # the >> prompt runs commands
     "Processor: 16 Mhz R4400, with FPU"    # the R4400 presentation, end to end
     "Primary I-cache size: 16 Kbytes"
@@ -66,6 +66,15 @@ FORBID=(
     # prints. Same reasoning as the keyboard line above.
     "WD SCSI0 path test"
     "SCSI controller 0 diagnostic"
+    # The bus scan of the empty IDs used to print one of these per ID and then
+    # fail POST. It was the chip accepting a command while an interrupt was
+    # still pending, where the part sets LCI and refuses; docs/12-chipset.md has
+    # the whole diagnosis. "Diagnostics failed" was an EXPECT line for as long
+    # as that was true - POST now passes, and with it the "[Press any key to
+    # continue.]" prompt that used to gate the menu is gone too.
+    "illegal disconnection interrupt"
+    "Diagnostics failed"
+    "Press any key to continue"
 )
 
 if [[ "${1:-}" != "--no-build" ]]; then
@@ -77,8 +86,10 @@ fi
 mkdir -p "$(dirname "$OUT")"
 
 echo "booting $(basename "$PROM") ..."
+# The triggers fire in order, so a trigger that never appears blocks every
+# keystroke behind it. There is no "[Press any key to continue.]" here any
+# more: POST passes and the menu comes up on its own.
 "$SIM" --prom "$PROM" --max-cycles 1200000000 --stuck 150000000 \
-       --type-on 'Press any key' ' ' \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'version\r' \
        --type-on 'PROM Monitor' 'hinv\r' \
