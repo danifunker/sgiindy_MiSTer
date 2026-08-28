@@ -36,6 +36,8 @@
 //============================================================================
 
 module sgi_indy #(
+    // Power-on default only; the live size arrives on mem_mb below. Kept as a
+    // parameter because MEMCFG0_POR has to be a constant.
     parameter int MEM_MB = 64,
     // System clocks per RTC centisecond. 500000 is real time at the 50 MHz
     // R4000 bus clock the MC's RPSS divider implies. Simulation overrides it
@@ -79,6 +81,10 @@ module sgi_indy #(
     input  logic  [7:0] scsi_sd_buff_addr,
     input  logic [15:0] scsi_sd_buff_dout,
     output logic [15:0] scsi_sd_buff_din,
+
+    // Megabytes of DRAM actually fitted. Drives the MC's bank decode; on
+    // hardware this is a constant and folds away.
+    input  logic [31:0] mem_mb,
     input  logic        scsi_sd_buff_wr,
 
     // ---- host input devices ---------------------------------------------
@@ -292,7 +298,8 @@ module sgi_indy #(
                      || ((bus_addr >= RAM_BASE)   && (bus_addr < LOMEM_END))
                      || ((bus_addr >= HIMEM_BASE) && (bus_addr < HIMEM_END));
 
-    sgi_memmap #(.BANK0_MB(MEM_MB)) u_memmap (
+    sgi_memmap u_memmap (
+        .mem_mb (mem_mb),
         .memcfg0 (mc_memcfg0),
         .memcfg1 (mc_memcfg1),
         .addr    (mem_addr),
@@ -374,7 +381,8 @@ module sgi_indy #(
     logic        dma_hit;
     logic [31:0] dma_off;
 
-    sgi_memmap #(.BANK0_MB(MEM_MB)) u_memmap_dma (
+    sgi_memmap u_memmap_dma (
+        .mem_mb (mem_mb),
         .memcfg0 (mc_memcfg0),
         .memcfg1 (mc_memcfg1),
         .addr    (dma_addr),

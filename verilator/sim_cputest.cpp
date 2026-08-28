@@ -345,6 +345,8 @@ int main(int argc, char **argv)
     top->reset       = 1;
     top->sclk        = 0;
     top->boot_pc     = boot_pc;
+    // The MC's bank decode must agree with the memory actually behind it.
+    top->mem_mb      = opt.ram_mb;
     top->gio_present = opt.testdev ? 1 : 0;
     top->icache_en   = opt.icache ? 1 : 0;
     top->dcache_en   = opt.dcache ? 1 : 0;

@@ -309,6 +309,7 @@ int main(int argc, char **argv)
     Vsim_top *top = new Vsim_top;
     top->reset = 1; top->sclk = 0; top->clk = 0;
     top->boot_pc = boot_pc;
+    top->mem_mb  = ram_mb;
     top->gio_present = testdev ? 1 : 0;
     top->icache_en = 1;
     top->dcache_en = 1;
@@ -448,6 +449,7 @@ int main(int argc, char **argv)
             top = new Vsim_top;
             top->reset = 1; top->sclk = 0; top->clk = 0;
             top->boot_pc = boot_pc; top->gio_present = testdev ? 1 : 0; top->rxdb = 1;
+            top->mem_mb  = ram_mb;
             top->icache_en = 1; top->dcache_en = 1;
             cycle = 0; console.clear(); trace.clear(); hot.clear(); holes.clear();
             urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;

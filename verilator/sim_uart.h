@@ -154,13 +154,33 @@ struct UartRx {
 // FIFO: a keystroke only arrives if the receiver, the baud rate generator and
 // the RX FIFO all work. One start bit, eight data bits LSB first, one stop bit,
 // at whatever bit time UartRx last committed.
+// TYPING IS PACED, and it has to be.
+//
+// The SCC's receive FIFO is FOUR bytes deep (`scc_async_fifo #(.DW(8), .AW(2))`
+// in z8530_scc.sv) and a byte that arrives into a full one is DROPPED, not
+// stalled: the RX_STOP state writes only `if (!rx_fifo_wfull_a)` and otherwise
+// just raises `rx_overrun_a`. Nothing retries it and nothing tells the sender.
+//
+// Sending a line back to back at line rate is therefore harsher than any real
+// terminal - a human types with enormous gaps, and even a paste is usually
+// flow-controlled. `hinv\r` is five bytes into a four-byte FIFO, so whether the
+// fifth survives depends on the PROM's polling loop getting round to draining
+// one in time. The fifth byte is the carriage return, which is why the symptom
+// was "sometimes the Enter does not take" rather than garbled text.
+//
+// GAP_BITS of idle between characters gives the machine a whole character time
+// to drain each byte. Against a four-deep FIFO that is a large margin, and it
+// costs only simulated time.
 struct UartTx {
+    static constexpr uint64_t GAP_BITS = 10;
+
     std::deque<uint8_t> queue;
-    uint64_t bit_time  = 0;
-    uint64_t next_edge = 0;
-    int      bit_idx   = -1;      // -1 idle, 0 start, 1..8 data, 9 stop
-    uint8_t  cur       = 0;
-    uint8_t  line      = 1;
+    uint64_t bit_time   = 0;
+    uint64_t next_edge  = 0;
+    uint64_t idle_until = 0;      // no new character may start before this
+    int      bit_idx    = -1;     // -1 idle, 0 start, 1..8 data, 9 stop
+    uint8_t  cur        = 0;
+    uint8_t  line       = 1;
 
     bool busy() const { return bit_idx >= 0 || !queue.empty(); }
 
@@ -172,7 +192,9 @@ struct UartTx {
 
         if (bit_time == 0) { line = 1; return; }
         if (bit_idx < 0) {
-            if (queue.empty()) { line = 1; return; }
+            line = 1;
+            if (queue.empty()) return;
+            if (cycle < idle_until) return;         // inter-character gap
             cur = queue.front(); queue.pop_front();
             bit_idx = 0; next_edge = cycle + bit_time; line = 0;   // start bit
             return;
@@ -182,7 +204,8 @@ struct UartTx {
         bit_idx++;
         if (bit_idx <= 8)      line = (cur >> (bit_idx - 1)) & 1;
         else if (bit_idx == 9) line = 1;                            // stop bit
-        else                   { bit_idx = -1; line = 1; }
+        else                   { bit_idx = -1; line = 1;
+                                  idle_until = cycle + GAP_BITS * bit_time; }
     }
 };
 

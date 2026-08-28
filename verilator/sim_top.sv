@@ -48,6 +48,7 @@ module sim_top
     input  wire  [7:0] scsi_sd_buff_addr,
     input  wire [15:0] scsi_sd_buff_dout,
     output wire [15:0] scsi_sd_buff_din,
+    input  wire [31:0] mem_mb,
     input  wire        scsi_sd_buff_wr,
 
     // Console tap: one pulse per byte handed to the SCC transmitter.
@@ -122,6 +123,7 @@ module sim_top
         .scsi_sd_buff_addr(scsi_sd_buff_addr),
         .scsi_sd_buff_dout(scsi_sd_buff_dout),
         .scsi_sd_buff_din (scsi_sd_buff_din),
+        .mem_mb           (mem_mb),
         .scsi_sd_buff_wr  (scsi_sd_buff_wr),
 
         .ram_req       (ram_req),
