@@ -8,11 +8,12 @@
 //  HPC3 chip specification's section 2 table, which agrees with IRIS's
 //  src/hpc3.rs offset constants throughout.
 //
-//  WHAT THIS IS AND IS NOT. This is the register file, not the DMA engine. It
-//  answers PIO accesses to the descriptor, control and configuration
-//  registers, which is what the PROM's power-on tests need; no channel moves
-//  any data. That is enough to get through POST and is deliberately all that
-//  is claimed here.
+//  WHAT THIS IS AND IS NOT. This is the register file plus the decode in front
+//  of it. Exactly one channel behind it is real: SCSI channel 0 (sub-block 8,
+//  0x1FB90000), whose registers and descriptor engine live in
+//  hpc3_scsi_dma.sv and which is this core's only bus master. Every other
+//  channel is plain storage that reads back what was written - enough for the
+//  PROM's power-on tests, and honest about moving no data.
 //
 //  Registers are 32 bits at a stride of four, unlike MC's - so both words of
 //  every doubleword bus cycle are live, and both are decoded.
@@ -39,10 +40,35 @@ module sgi_hpc3 (
     input  logic        sel,          // one-cycle request pulse, address in window
     input  logic        we,
     input  logic [18:0] addr,         // offset into the 512 KB window, 8-aligned
+    // Which word of the doubleword the CPU actually addressed. Byte enables
+    // cannot answer that on a read, and SCSI channel 0's control register
+    // clears its interrupt when it is read - so a driver reading the byte
+    // count beside it must not clear anything. See rtl/cpu/r4300_bus.sv.
+    input  logic  [2:0] aoff,
     input  logic  [7:0] be,
     input  logic [63:0] wdata,
     output logic [63:0] rdata,
     output logic        ack,
+
+    // ---- SCSI channel 0's bus master port, out to main memory ------------
+    output logic        dma_req,
+    output logic        dma_we,
+    output logic [31:0] dma_addr,
+    output logic [63:0] dma_wdata,
+    output logic  [7:0] dma_be,
+    input  logic [63:0] dma_rdata,
+    input  logic        dma_ack,
+
+    // ---- SCSI channel 0's device side, to the WD33C93B -------------------
+    input  logic        scsi_dev_req,
+    input  logic        scsi_dev_dir_in,
+    input  logic  [7:0] scsi_dev_wdata,
+    input  logic        scsi_dev_eop,
+    output logic        scsi_dev_ack,
+    output logic  [7:0] scsi_dev_rdata,
+    output logic        scsi_dev_reset,
+
+    output logic        scsi_dma_irq,
     // Combinational: 0 means this offset is not decoded here at all, and the
     // access should fall through to the core's unclaimed-cycle path.
     output logic        claimed
@@ -110,11 +136,90 @@ module sgi_hpc3 (
         ctrl_reg = {addr[4:3], w};
     endfunction
 
+    //------------------------------------------------------------------
+    // SCSI channel 0 - the one channel that is a real DMA engine
+    //------------------------------------------------------------------
+    // 0x1FB90000 is sub-block 8, and hpc3_scsi_dma.sv owns all eight of its
+    // registers: the arrays below never see them.
+    localparam logic [3:0] SUB_SCSI0 = 4'd8;
+    wire scsi0_blk = (blk == BLK_DESC || blk == BLK_CTRL) && (sub == SUB_SCSI0);
+
+    // The engine indexes its registers as {is_control_block, index}: 0x0 cbp,
+    // 0x1 nbdp, 0x8 bc, 0x9 control, 0xA gio, 0xB dev, 0xC dmacfg, 0xD piocfg.
+    function automatic logic [3:0] scsi0_reg(input logic w);
+        scsi0_reg = (blk == BLK_CTRL) ? {1'b1, ctrl_reg(w)}
+                                      : {3'b000, w};
+    endfunction
+
+    logic [31:0] scsi0_rd0, scsi0_rd1;
+    // Which word of the doubleword the access is really for. A 64-bit store
+    // covering both registers of a pair would need two write ports and no
+    // driver issues one - the PROM uses `sw` throughout - so the addressed
+    // word is the one that is written.
+    wire         scsi0_word = aoff[2];
+
+    // Declared before use in the write-merge below.
+    logic [31:0] wval [0:1];
+    logic  [1:0] wr_en;
+
+    hpc3_scsi_dma u_scsi0_dma (
+        .clk        (clk),
+        .reset      (reset),
+
+        .pio_sel    (sel && scsi0_blk),
+        .pio_reg    (scsi0_reg(scsi0_word)),
+        .pio_we     (we && wr_en[scsi0_word]),
+        .pio_wdata  (wval[scsi0_word]),
+        .rd_reg0    (scsi0_reg(1'b0)),
+        .rd_data0   (scsi0_rd0),
+        .rd_reg1    (scsi0_reg(1'b1)),
+        .rd_data1   (scsi0_rd1),
+
+        .dma_req    (dma_req),
+        .dma_we     (dma_we),
+        .dma_addr   (dma_addr),
+        .dma_wdata  (dma_wdata),
+        .dma_be     (dma_be),
+        .dma_rdata  (dma_rdata),
+        .dma_ack    (dma_ack),
+
+        .dev_req    (scsi_dev_req),
+        .dev_dir_in (scsi_dev_dir_in),
+        .dev_wdata  (scsi_dev_wdata),
+        .dev_eop    (scsi_dev_eop),
+        .dev_ack    (scsi_dev_ack),
+        .dev_rdata  (scsi_dev_rdata),
+        .dev_reset  (scsi_dev_reset),
+
+        .irq        (scsi_dma_irq)
+    );
+
+    // ---- the DMA interrupt status register -------------------------------
+    // gen.intstat, spec section 3.1: bits 7:0 are the PBUS channels, bit 8 is
+    // SCSI channel 0 and bit 9 SCSI channel 1. It is read-only and reading it
+    // does not disturb the status - the interrupt is acknowledged at the
+    // channel's own control port.
+    //
+    // *** SPEC BUG ***, quoted: "Instead of being in one piece, it is broken
+    // and can only be read in two pieces. Bits 4:0 can be read from
+    // 0x1fbb0000. Bits 9:5 can be read from 0x1fbb000c. All other bits in both
+    // registers should be ignored as they are indeterminate." SCSI0 is bit 8,
+    // so it only ever appears at +0x000C. Nothing has tested this: the PROM
+    // polls the WD33C93 and never looks here, and the descriptors it builds do
+    // not set XIE, so this whole path can be wrong without the boot noticing.
+    wire [9:0] intstat = {1'b0, scsi_dma_irq, 8'h00};
+
     function automatic logic [31:0] hpc3_rd(input logic w);
         case (blk)
-            BLK_DESC:   hpc3_rd = dma_desc[{sub, w}];
-            BLK_CTRL:   hpc3_rd = dma_ctrl[{sub, ctrl_reg(w)}];
-            BLK_GEN:    hpc3_rd = gen[{addr[4:3], w}];
+            BLK_DESC:   hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
+                                            : dma_desc[{sub, w}];
+            BLK_CTRL:   hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
+                                            : dma_ctrl[{sub, ctrl_reg(w)}];
+            // 0x1FBB0000 and 0x1FBB000C are the two halves of intstat and are
+            // generated, not stored; 0x1FBB0004 and 0x1FBB0008 are storage.
+            BLK_GEN:    hpc3_rd = ({addr[4:3], w} == 3'd0) ? {27'h0, intstat[4:0]}
+                                : ({addr[4:3], w} == 3'd3) ? {22'h0, intstat[9:5], 5'h0}
+                                :                            gen[{addr[4:3], w}];
             BLK_CFGDMA: hpc3_rd = cfgdma[addr[11:9]];
             BLK_CFGPIO: hpc3_rd = cfgpio[addr[11:8]];
             // HAL2 is not modelled. REV reading 0xFFFF is not a placeholder:
@@ -135,9 +240,6 @@ module sgi_hpc3 (
     // ---- write data ------------------------------------------------------
     // be[7-i] guards the byte at addr+i: bytes 0..3 are the w=0 register and
     // bytes 4..7 the w=1 one. Partial writes merge against the current value.
-    logic [31:0] wval [0:1];
-    logic  [1:0] wr_en;
-
     always_comb begin
         wr_en[0] = sel && we && (|be[7:4]);
         wr_en[1] = sel && we && (|be[3:0]);
@@ -163,8 +265,10 @@ module sgi_hpc3 (
             for (int w = 0; w < 2; w++) begin
                 if (wr_en[w]) begin
                     case (blk)
-                        BLK_DESC:   dma_desc[{sub, w[0]}]            <= wval[w];
-                        BLK_CTRL:   dma_ctrl[{sub, ctrl_reg(w[0])}]  <= wval[w];
+                        // SCSI channel 0's registers live in the engine, so
+                        // the arrays must not shadow them.
+                        BLK_DESC:   if (!scsi0_blk) dma_desc[{sub, w[0]}]           <= wval[w];
+                        BLK_CTRL:   if (!scsi0_blk) dma_ctrl[{sub, ctrl_reg(w[0])}] <= wval[w];
                         BLK_GEN:    gen[{addr[4:3], w[0]}]           <= wval[w];
                         BLK_CFGDMA: cfgdma[addr[11:9]]               <= wval[w];
                         BLK_CFGPIO: cfgpio[addr[11:8]]               <= wval[w];

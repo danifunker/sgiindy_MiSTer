@@ -1,13 +1,15 @@
 # Tests
 
-Five regressions, all headless.
+Seven regressions, all headless.
 
 ```sh
 tests/uart/run.sh         # the harness's serial decoder, no simulator       ~1 s
 tests/run-scc.sh          # the Z8530, driven the way the PROM drives it     ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end       ~6 s
+tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it        ~12 s
 tests/run-cputest.sh      # the 240-test MIPS III/IV suite, on the core     ~35 s
 tests/run-prom.sh         # boot the real IP24 PROM to the Command Monitor
+tests/run-scsi.sh         # the same boot with a disk on it, and a block read
 ```
 
 ## `run-cputest.sh` — the CPU
@@ -83,6 +85,30 @@ this core: **clearing a level-sensitive source and returning can re-enter the
 handler**, because the clearing store sits in the CPU's write FIFO and `eret`
 does not wait for it to drain. Read the device back before returning.
 
+## `run-dma.sh` — the HPC3 SCSI DMA channel
+
+Thirty-one checks on the descriptor engine, with **no SCSI in the image at
+all**: it builds descriptor chains in uncached memory, starts the channel, and
+reads back what the engine fetched. No byte moves, because there is no device
+to hand one over; what is proved is that HPC3 masters the memory bus and reads
+a descriptor chain the way the chip specification says.
+
+It exists because the boot exercises exactly one path through the engine and
+several of the others will be wrong when something needs them. The PROM's
+descriptors never set XIE, so the interrupt path is invisible to a boot; it
+never writes `ch_active_mask`; it never uses a link descriptor; and nothing in
+a boot points a chain at memory that is not there. All four are here.
+
+Two things in it are worth reading before writing a driver for this channel:
+
+- **Reading the control register acknowledges its interrupt.** A wait loop
+  that polls `ch_active` there loses the interrupt it is waiting for. The
+  first version of this image did exactly that and failed three of its own
+  checks. INT2's status register is the thing to watch instead.
+- **Clearing HPC3's `ch_reset` resets the WD33C93B**, which then comes up with
+  its own interrupt pending on the same INT2 line. It has to be acknowledged
+  before anything can tell the two sources apart.
+
 ## `run-prom.sh` — the chipset
 
 A **progress ratchet**, not a pass/fail test of the machine. The PROM is
@@ -106,6 +132,31 @@ pin — so it covers the receive path, not just transmit. The triggers fire in
 order, which is a trap worth knowing: a trigger string that stops being printed
 blocks every keystroke behind it. That is what `[Press any key to continue.]`
 did the moment POST started passing.
+
+## `run-scsi.sh` — the SCSI data path
+
+`run-prom.sh` boots with **no disk**, deliberately: it is the machine's own
+ratchet and must not depend on a block device. This is the same boot with
+`--disk 1=tests/disks/blank8m.img`, and the difference between the two is the
+whole DMA engine. Without it, every SCSI command printed
+
+```
+sc0,1,0: cmd=0x12 timeout after 2 sec.  Resetting SCSI bus
+```
+
+because the WD33C93B had taken the first INQUIRY byte, raised DBR and had
+nothing behind it. What is asserted now is that the PROM identifies the disk as
+`dks0d1s0` and reads its volume header — a real descriptor-driven transfer of a
+real block out of a real image file, a byte at a time.
+
+**The volume header is expected to be invalid.** `blank8m.img` is eight
+megabytes of zeroes. A test that wanted a valid header would be testing the
+fixture.
+
+`sc0,1,0: SYNC negotiation error` is expected too, and is deliberately not
+asserted either way: the PROM tries to negotiate synchronous transfer and the
+target model has no MESSAGE OUT phase to receive the message in. It is why
+`hinv` does not list the disk. See `docs/13-scsi-dma-plan.md`.
 
 ## `uart/run.sh` — the harness itself
 

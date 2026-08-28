@@ -35,6 +35,18 @@ module sgi_scsi #(
     output logic        ack,
     output logic        irq,
 
+    // The HPC3 channel's ch_reset, on to the controller and the bus.
+    input  logic        chip_reset,
+
+    // ---- the HPC3 SCSI DMA channel ---------------------------------------
+    // Straight through to the initiator; the targets never see it.
+    output logic        dma_req,
+    output logic        dma_dir_in,
+    output logic  [7:0] dma_wdata,
+    output logic        dma_eop,
+    input  logic        dma_ack,
+    input  logic  [7:0] dma_rdata,
+
     // ---- block device, from hps_io / the harness -------------------------
     input  logic [NUM_TARGETS-1:0]  img_mounted,
     input  logic [31:0]             img_blocks,
@@ -91,6 +103,7 @@ module sgi_scsi #(
         .clk       (clk),
         .reset     (reset),
         .ce        (ce),
+        .chip_reset(chip_reset),
         .sel       (sel),
         .we        (we),
         .is_data   (is_data),
@@ -107,6 +120,12 @@ module sgi_scsi #(
         .scsi_io   (bus_io),
         .scsi_req  (bus_req),
         .scsi_din  (bus_din),
+        .dma_req   (dma_req),
+        .dma_dir_in(dma_dir_in),
+        .dma_wdata (dma_wdata),
+        .dma_eop   (dma_eop),
+        .dma_ack   (dma_ack),
+        .dma_rdata (dma_rdata),
         .irq       (irq)
     );
 

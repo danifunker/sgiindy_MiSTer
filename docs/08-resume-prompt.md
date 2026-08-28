@@ -77,11 +77,20 @@ RTC. It is a measurement of uncached instruction throughput and nothing else.
 Against `docs/07-mister-port-plan.md`'s milestones: **M0–M3 done, M6 — the "it
 boots" milestone — reached, M4 and M5 partly done.**
 
-**SCSI works as far as the bus scan.** A WD33C93B and seven disk targets are
-fitted (`rtl/scsi/`, `docs/12-chipset.md`). The controller passes the PROM's
-data-path test and its own diagnostic, selection and Select-and-Transfer work,
-the scan of the empty IDs is silent, and a disk attaches with `--disk ID=PATH`.
-What is missing is the DMA engine that would move a block off it.
+**SCSI reads blocks off a disk image.** A WD33C93B and seven disk targets are
+fitted (`rtl/scsi/`, `docs/12-chipset.md`), and the HPC3's SCSI DMA channel
+behind them is real: `rtl/sgi/hpc3_scsi_dma.sv` is this core's first bus
+master. With `--disk 1=tests/disks/blank8m.img` the PROM completes its INQUIRY,
+names the disk `dks0d1s0` and reads its volume header through a descriptor
+chain in main memory. `tests/run-scsi.sh` holds that, and `tests/run-dma.sh`
+holds thirty-one properties of the channel that a boot cannot reach.
+
+What it does **not** do yet is get the disk into `hinv`, and the reason is not
+in the DMA engine. The PROM negotiates synchronous transfer with a
+SELECT-with-ATN and an SDTR message; `scsi.v` has no MESSAGE OUT phase and
+ignores `atn`, so the negotiation times out and the driver resets the bus. The
+diagnosis is complete, down to the two instructions in the PROM that are
+waiting for status `0x8E`, in `docs/13-scsi-dma-plan.md`.
 
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
@@ -109,12 +118,13 @@ What is *not* done, and is worth knowing before you plan anything:
   not exist yet, and `ERR_STAT` is a real zero, so `Cause.IP6` never fires.
 - **No Ethernet or graphics.** SCSI is fitted; Newport and the SEEQ 8003 are
   the two devices still answering as unclaimed cycles.
-- **SCSI moves no data yet.** The data phase is PIO through the chip's data
-  register; the HPC3 SCSI DMA engine is not written, so nothing has read a
-  block off a disk image in anger. A disk on a non-zero ID did not even *mount*
-  until this session - `sim_scsi.h` announced every slot against slot 0's size,
-  and `scsi.v` reads a mounted flag with `img_blocks` = 0 as "no medium". See
-  `docs/12-chipset.md`.
+- **SCSI has never written to a disk.** DATA IN works and is what the boot
+  uses; the DATA OUT path through the DMA engine exists and its descriptor side
+  is tested, but no byte has ever gone out through it. Nothing in a boot writes
+  to a disk and the bare-metal image has no device to write to.
+- **The SCSI bus has no message phases.** No MESSAGE OUT at all, and MESSAGE IN
+  only ever carries COMMAND COMPLETE. That is what stops `hinv` listing a disk;
+  see above.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -143,8 +153,10 @@ brew install messense/macos-cross-toolchains/mipsel-unknown-linux-gnu
 tests/uart/run.sh         # the harness's serial decoder, no simulator, ~1 s
 tests/run-scc.sh          # the Z8530, ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end, ~6 s
+tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it, ~12 s
 tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
 tests/run-prom.sh         # boot the PROM to the Command Monitor, ~50 s
+tests/run-scsi.sh         # the same boot with a disk, and a block read off it
 
 make -C verilator cputest # headless simulator
 make -C verilator gui     # interactive simulator (SDL2 + ImGui)
@@ -299,38 +311,31 @@ wrong theory.
 
 ### 3. Everything after that
 
-1. **The HPC3 SCSI DMA engine. This is the next thing, and it is now the only
-   thing between here and a disk the PROM can see.** As of this session a disk
-   mounts and answers selection, and the trace says exactly what is missing:
+1. **SCSI message phases, and with them the disk in `hinv`.** The DMA engine
+   is built and the PROM reads blocks through it, so what is left between here
+   and a disk the machine will admit to having is one bus phase this core has
+   never had. The PROM negotiates synchronous transfer:
 
    ```
-   [7511634] WR 1fb91010 HPC3-SCSI-DMA  data 00034801   DMA config
-   [7555154] WR 1fb90004 HPC3-SCSI-DMA  data 08747d20   descriptor address in RAM
-   [7555195] WR 1fb91004 HPC3-SCSI-DMA  data 00000010   control: go
-   [7556623] WR 1fbc0000 WD33C93-SCSI   data 08         Select-and-Transfer
-   [7559440] RD 1fbc0000 WD33C93-SCSI   data 31         ASR = BSY|CIP|DBR
-   ...
-   sc0,1,0: cmd=0x12 timeout after 2 sec.  Resetting SCSI bus
+   dks0d1s0: volume header not valid          <- correct, the image is zeroes
+   sc0,1,0: SYNC negotiation error, resetting SCSI bus
    ```
 
-   `ASR = 0x31` is the whole story: the chip has selected the target, walked
-   into DATA IN, taken the first INQUIRY byte and raised DBR — and nobody
-   drains it. The driver will not, because it asked for DMA: it writes
-   `Control = 0x8D`, and `Control[7:5]` is the DMA mode select (IRIS's
-   `Wd33c93a::use_dma` is `mode != 0`). Three registers accept the setup and
-   nothing is behind them.
+   Two pieces, and the diagnosis is already done - do not redo it, it is in
+   `docs/13-scsi-dma-plan.md` with the disassembly:
 
-   IRIS's `PdmaChannel` in `src/hpc3.rs` is the model to follow — descriptor
-   fetch (CBP / BC / NBDP with the EOX and XIE flags), byte-at-a-time into
-   system memory, `HPC3_INTSTAT_SCSI0_DMA` on completion. MAME's own
-   `indy_indigo2.cpp` header carries the note "Fix SCSI DMA to handle chains
-   properly", so chaining is fiddly even there.
+   - `wd33c93.sv` raises no interrupt after a plain SELECT completes. It needs
+     to watch for the target's first REQ and interrupt with `0x80 | phase`.
+     `0xBFC1CB24` reads the status register and does `andi $t0, $v0, 7; bne
+     $t0, 6` - it is looking for `0x8E`, "service required, MESSAGE OUT".
+   - `scsi.v` ignores `atn` and has no MESSAGE OUT phase. Its
+     `PHASE_MESSAGE_OUT` is MESSAGE IN in SCSI's naming (`{msg,cd,io} = 111`,
+     target to initiator) and only ever sends COMMAND COMPLETE. A real MESSAGE
+     OUT is `110` and receives; `PHASE_CMD_IN` is the model to copy.
 
-   The RTL side needs `sgi_hpc3.sv` to become a **bus master**, which nothing
-   in this core is yet, and `wd33c93.sv`'s SAT data phase to hand bytes to it
-   instead of parking on DBR. **`docs/13-scsi-dma-plan.md` is the plan** -
-   registers, descriptor format, a five-stage build with a test at each stage,
-   and the hazards worth knowing before you start.
+   The likely outcome once the message can be received is a MESSAGE REJECT and
+   an async fallback, which is all the PROM needs.
+
 2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
@@ -452,6 +457,31 @@ Do not rediscover these:
   correctly, out of a freshly filled line, at 3.5x the bus traffic of no cache
   at all. Nothing failed; it was only visible as a transaction count. Measure
   hit rates by counting bus cycles, not by watching tests pass.
+- **A bus master that is not the CPU must HOLD its request, not pulse it.** The
+  CPU pulses `bus_req` for one cycle because it is the only master and the port
+  is always its to take. The HPC3 DMA engine copied that shape, and on any
+  cycle the CPU wanted memory the request was dropped and the engine waited
+  forever for an answer nobody had heard. It did not present as an arbitration
+  bug: it presented as a transfer that moved exactly eight bytes and stopped,
+  which sent the first guess straight at byte lanes. Eight was a coincidence.
+- **`ram_ack` belongs to whoever asked for it.** `bus_ack` is an OR of every
+  device's ack, so a DMA cycle's answer completes the CPU's outstanding cycle
+  with the DMA's data on it unless something remembers who the outstanding
+  request belonged to. `ram_owner_dma` in `sgi_indy.sv` is that something.
+- **Reading HPC3's SCSI control register acknowledges its interrupt**, and the
+  byte count sits in the same doubleword. A driver polling `ch_active` there
+  loses its own interrupt, and a device model that does not take `bus_aoff`
+  cannot tell the two reads apart. `tests/dma/dmatest.c` covers both.
+- **Nothing could free a wedged SCSI target until this session.**
+  `wd33c93.sv`'s `scsi_rst` was hardwired to zero, so a target left holding BSY
+  held it for the rest of the boot and the ASR read `0x20` forever. HPC3's
+  `ch_reset` falling edge now resets the controller and pulses RST on the bus,
+  which is what the driver's "resetting SCSI bus" message always claimed.
+- **The PROM's SCSI buffers and descriptors are all in KSEG1**, so the DMA
+  engine has no cache-coherence problem with them. That is a property of this
+  software, not of the machine: an OS that used KSEG0 would break and nothing
+  here would detect it. Everything in `tests/dma/dmatest.c` is uncached for the
+  same reason.
 - **`--type-on` triggers fire in order, so one that stops being printed blocks
   every keystroke behind it.** POST passing removed `[Press any key to
   continue.]`, and the run then sat at the menu forever with a `5` queued

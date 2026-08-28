@@ -100,6 +100,7 @@ CPUTEST_V = \
 	$(RTL)/sgi/sgi_indy.sv \
 	$(RTL)/sgi/sgi_mc.sv \
 	$(RTL)/sgi/sgi_hpc3.sv \
+	$(RTL)/sgi/hpc3_scsi_dma.sv \
 	$(RTL)/sgi/sgi_ioc.sv \
 	$(RTL)/sgi/i8042.sv \
 	$(RTL)/scsi/sgi_scsi.sv \

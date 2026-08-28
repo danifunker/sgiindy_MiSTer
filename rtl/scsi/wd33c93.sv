@@ -26,11 +26,26 @@
 //  asks for. See rtl/scsi/README.md for the phase encoding, which reads
 //  backwards from scsi.v's own phase names.
 //
-//  SCOPE. Stage 1: the register file, RESET, SELECT, and TRANSFER INFO with
-//  data moving through the DATA register a byte at a time. That is enough for
-//  the PROM's bus scan - TEST UNIT READY and INQUIRY - which is what clears
-//  the POST failure. Select-and-Transfer (the chip's automatic mode, which is
-//  what IRIX actually uses) and the HPC3 DMA path come after.
+//  PIO OR DMA, and the driver chooses. Control[7:5] is the DMA mode select:
+//  000 is polled I/O, where a data byte sits in the DATA register behind DBR
+//  until the driver comes for it, and anything else hands the byte to the
+//  HPC3's SCSI DMA channel instead. IRIS reads the same field the same way
+//  (`Wd33c93a::use_dma` is `mode != 0`), and the IP24 PROM writes 0x8D, so
+//  every data phase in a real boot goes through DMA and none through DBR.
+//
+//  Both paths are here and the PIO one is untouched, because it is what the
+//  chip's own diagnostics and the data-path test use, and because a driver may
+//  legitimately mix them. The DMA handshake is a byte at a time with the
+//  engine in rtl/sgi/hpc3_scsi_dma.sv: `dma_req` says a byte is due, its
+//  direction comes from the SCSI phase rather than from anything the driver
+//  wrote, and `dma_ack` says it has moved. `dma_eop` is the other half of it -
+//  the target, not the count, decides when a data phase ends, and a response
+//  shorter than the allocation length has to finish the descriptor anyway.
+//
+//  SCOPE. The register file, RESET, SELECT, TRANSFER INFO through the DATA
+//  register, and Select-and-Transfer in both PIO and DMA. TRANSFER INFO in DMA
+//  mode is NOT implemented - it stays on the DBR path - because nothing this
+//  machine runs asks for it: the PROM and IRIX both use Select-and-Transfer.
 //============================================================================
 
 module wd33c93 #(
@@ -42,6 +57,13 @@ module wd33c93 #(
     input  logic        ce,
 
     // ---- register interface ---------------------------------------------
+    // The HPC3 channel's ch_reset, as a pulse. The spec's words are "resets
+    // both external controller and this DMA channel", and this is the external
+    // controller half: everything the chip's own Reset command does, plus RST
+    // asserted on the bus, because the driver that writes it prints
+    // "resetting SCSI bus" and expects to get a free bus back.
+    input  logic        chip_reset,
+
     input  logic        sel,        // one-cycle access pulse
     input  logic        we,
     input  logic        is_data,    // 0 = address port / ASR, 1 = data port
@@ -60,6 +82,16 @@ module wd33c93 #(
     input  logic        scsi_io,
     input  logic        scsi_req,
     input  logic  [7:0] scsi_din,   // target -> initiator
+
+    // ---- HPC3 SCSI DMA channel -------------------------------------------
+    // Held, not pulsed: `dma_req` stays up until the engine answers, because
+    // the engine may be part way through a descriptor fetch when it is raised.
+    output logic        dma_req,
+    output logic        dma_dir_in, // 1 = DATA IN, device -> main memory
+    output logic  [7:0] dma_wdata,  // the byte taken off the SCSI bus
+    output logic        dma_eop,    // pulse: the target ended the data phase
+    input  logic        dma_ack,
+    input  logic  [7:0] dma_rdata,  // the byte from main memory
 
     output logic        irq
 );
@@ -154,6 +186,9 @@ module wd33c93 #(
     localparam logic [2:0] PH_STATUS   = 3'b011;
     localparam logic [2:0] PH_MSG_IN   = 3'b111;
 
+    // Control[7:5] selects the DMA mode; zero is polled I/O. See the header.
+    wire use_dma = |reg_file[R_CONTROL][7:5];
+
     // ---- transfer counter --------------------------------------------------
     // 24 bits, MSB first across three registers, as the chip presents it.
     wire [23:0] xfer_count = {reg_file[R_COUNT_MSB],
@@ -179,6 +214,7 @@ module wd33c93 #(
         ST_SAT_REQ,         // a byte is due in the current phase
         ST_SAT_ACK,
         ST_SAT_REL,
+        ST_SAT_DMA,         // a data byte is with the HPC3 DMA engine
         ST_SAT_END
     } state_t;
 
@@ -209,6 +245,9 @@ module wd33c93 #(
     // treated as 6, which is what the chip does with an unknown group beyond
     // also flagging it.
     logic [3:0] cdb_idx;
+    // True while a DMA data phase is running, so that leaving the phase can be
+    // reported to the engine as an end of transfer exactly once.
+    logic       dma_in_data;
     wire  [2:0] cdb_group = reg_file[R_CDB1][7:5];
     wire  [3:0] cdb_len   = (cdb_group == 3'd1 || cdb_group == 3'd2) ? 4'd10
                           : (cdb_group == 3'd5)                      ? 4'd12
@@ -216,8 +255,23 @@ module wd33c93 #(
     wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND);
 
     assign scsi_dout = data_latch;
-    assign scsi_rst  = 1'b0;         // driven by the RESET command below, not held
     assign irq       = int_pending;
+
+    // ---- SCSI bus reset ---------------------------------------------------
+    // RST is the only way to get a wedged target off the bus, and until this
+    // existed there was none: a target that had been selected and then
+    // abandoned held BSY forever, the ASR read 0x20 for the rest of the boot,
+    // and every command after it failed. The driver's own recovery path is
+    // built on this - it writes HPC3's ch_reset, prints "resetting SCSI bus",
+    // and expects a free bus back.
+    //
+    // The bus specifies a minimum RST of 25 microseconds. Nothing here needs
+    // that: scsi.v samples the line on the system clock, so the hold below is
+    // "long enough to be unmissable" rather than a timing figure, and a real
+    // implementation on hardware should widen it.
+    localparam int RST_HOLD = 256;
+    logic [8:0] rst_timer;
+    assign scsi_rst = (rst_timer != 9'd0);
 
     // Register reads. The address port is the ASR; the data port is whatever
     // AR points at, with two registers answering from live state rather than
@@ -252,8 +306,37 @@ module wd33c93 #(
             sel_timer   <= 16'h0;
             bsy_q       <= 1'b0;
             dout_r      <= 8'h00;
+            dma_req     <= 1'b0;
+            dma_eop     <= 1'b0;
+            dma_dir_in  <= 1'b0;
+            dma_wdata   <= 8'h00;
+            dma_in_data <= 1'b0;
+            rst_timer   <= 9'd0;
         end else if (ce) begin
-            bsy_q <= scsi_bsy;
+            bsy_q   <= scsi_bsy;
+            dma_eop <= 1'b0;
+            if (rst_timer != 9'd0) rst_timer <= rst_timer - 9'd1;
+
+            // ---- the HPC3 channel's ch_reset -------------------------------
+            // Ahead of the register access below, so a driver that resets the
+            // channel and issues a command in the same breath gets the reset.
+            if (chip_reset) begin
+                for (i = 0; i < 32; i = i + 1) reg_file[i] <= 8'h00;
+                reg_file[R_OWN_ID] <= {5'b0, HOST_ID};
+                reg_file[R_SCSI_STATUS] <= S_RESET;
+                ar          <= 5'h00;
+                state       <= ST_IDLE;
+                dbr         <= 1'b0;
+                cip         <= 1'b0;
+                lci         <= 1'b0;
+                int_pending <= 1'b1;
+                scsi_sel    <= 1'b0;
+                scsi_atn    <= 1'b0;
+                scsi_ack    <= 1'b0;
+                dma_req     <= 1'b0;
+                dma_in_data <= 1'b0;
+                rst_timer   <= RST_HOLD[8:0];
+            end
 
             // ---- register access -------------------------------------------
             if (sel) begin
@@ -314,6 +397,10 @@ module wd33c93 #(
                                             scsi_ack    <= 1'b0;
                                             scsi_atn    <= 1'b0;
                                             dbr         <= 1'b0;
+                                            // Whatever the engine was waiting
+                                            // for is gone with the bus.
+                                            dma_req     <= 1'b0;
+                                            dma_in_data <= 1'b0;
                                         end
                                         C_SELECT, C_SELECT_ATN: begin
                                             scsi_atn  <= (din == C_SELECT_ATN);
@@ -330,6 +417,7 @@ module wd33c93 #(
                                             cip       <= 1'b1;
                                             sel_timer <= 16'h0;
                                             cdb_idx   <= 4'd0;
+                                            dma_in_data <= 1'b0;
                                             reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
                                             state     <= ST_SAT_SEL;
                                         end
@@ -553,8 +641,26 @@ module wd33c93 #(
                 // for commands with no data phase as well as ones with.
                 ST_SAT_PHASE: begin
                     if (!scsi_bsy) begin
-                        // Bus free: the target is done.
+                        // Bus free: the target is done. If a DMA data phase
+                        // was running it ends here too - see below.
+                        if (dma_in_data) begin
+                            dma_eop     <= 1'b1;
+                            dma_in_data <= 1'b0;
+                        end
                         state <= ST_SAT_END;
+                    end else if (dma_in_data && phase != PH_DATA_IN
+                                             && phase != PH_DATA_OUT) begin
+                        // THE TARGET DECIDES WHEN A DATA PHASE ENDS, not the
+                        // transfer count. A MODE SENSE answer shorter than the
+                        // allocation length leaves count and descriptor both
+                        // with room left, and the descriptor still has to
+                        // complete or the channel never goes inactive and the
+                        // next command finds it busy. One pulse, on the
+                        // transition out of the data phase, is what says so.
+                        dma_eop     <= 1'b1;
+                        dma_in_data <= 1'b0;
+                        // Stay here: the byte this new phase is asking for is
+                        // handled on the next pass.
                     end else if (scsi_req) begin
                         case (phase)
                             PH_COMMAND: begin
@@ -562,16 +668,39 @@ module wd33c93 #(
                                 state      <= ST_SAT_ACK;
                             end
                             PH_DATA_OUT: begin
-                                // Initiator sends. The driver must have put a
-                                // byte in the data register; DBR says we want
-                                // one, and we wait here until it does.
-                                if (!dbr) state <= ST_SAT_ACK;
-                                else      dbr   <= 1'b1;
+                                if (use_dma) begin
+                                    dma_req     <= 1'b1;
+                                    dma_dir_in  <= 1'b0;
+                                    dma_in_data <= 1'b1;
+                                    state       <= ST_SAT_DMA;
+                                end else if (!dbr) begin
+                                    // Initiator sends. The driver must have
+                                    // put a byte in the data register; DBR
+                                    // says we want one, and we wait here until
+                                    // it does.
+                                    state <= ST_SAT_ACK;
+                                end else begin
+                                    dbr <= 1'b1;
+                                end
                             end
                             PH_DATA_IN: begin
-                                // Target sends. Take the byte and hold it in
-                                // the data register until the driver reads it.
-                                if (!dbr) begin
+                                if (use_dma) begin
+                                    // The byte goes straight to the engine.
+                                    // data_latch is still loaded so a driver
+                                    // that reads the DATA register mid-
+                                    // transfer sees the last byte rather than
+                                    // stale bus state, but DBR stays clear:
+                                    // nothing is waiting to be collected.
+                                    data_latch  <= scsi_din;
+                                    dma_wdata   <= scsi_din;
+                                    dma_req     <= 1'b1;
+                                    dma_dir_in  <= 1'b1;
+                                    dma_in_data <= 1'b1;
+                                    state       <= ST_SAT_DMA;
+                                end else if (!dbr) begin
+                                    // Target sends. Take the byte and hold it
+                                    // in the data register until the driver
+                                    // reads it.
                                     data_latch <= scsi_din;
                                     dbr        <= 1'b1;
                                     state      <= ST_SAT_ACK;
@@ -591,6 +720,19 @@ module wd33c93 #(
                             end
                             default: state <= ST_SAT_ACK;
                         endcase
+                    end
+                end
+
+                // The byte is with the HPC3 DMA engine. It may be several
+                // cycles away - the engine could be part way through fetching
+                // a descriptor - so REQ is left asserted and the ACK the
+                // target is waiting for is not raised until the byte has
+                // actually moved.
+                ST_SAT_DMA: begin
+                    if (dma_ack) begin
+                        dma_req <= 1'b0;
+                        if (!dma_dir_in) data_latch <= dma_rdata;
+                        state <= ST_SAT_ACK;
                     end
                 end
 
@@ -627,6 +769,7 @@ module wd33c93 #(
                     cip      <= 1'b0;
                     scsi_atn <= 1'b0;
                     dbr      <= 1'b0;
+                    dma_req  <= 1'b0;
                     reg_file[R_SCSI_STATUS] <= S_SELECT_XFER_OK;
                     int_pending <= 1'b1;
                     state    <= ST_IDLE;

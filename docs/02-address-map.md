@@ -30,7 +30,8 @@ at MC + 0x1000 and 0x80 is the GIO64 arbiter. The table below is the spec's.
 | `0x1F400000` / `0x1F600000` | GIO expansion slots 1 / 0 | — | absent |
 | **`0x1FA00000`–`0x1FA1FFFF`** | **MC** — memory & GIO64 arbiter controller | `MC_CS` | real model (`sgi_mc.v`) |
 | `0x1FB80000`–`0x1FB8FFFF` | HPC3 PBUS DMA | `PBUSDMA_CS` | reads pass through to RAM data |
-| `0x1FB90000`–`0x1FB9FFFF` | HPC3 SCSI / Ethernet DMA | `HD_ENET_CS` | 4-register stub |
+| `0x1FB90000`–`0x1FB91FFF` | **HPC3 SCSI channel 0 DMA** | `HD_ENET_CS` | real: `rtl/sgi/hpc3_scsi_dma.sv` |
+| `0x1FB92000`–`0x1FB9FFFF` | HPC3 SCSI 1 / Ethernet DMA | `HD_ENET_CS` | storage that reads back |
 | `0x1FBB0000`–`0x1FBB0003` | `INTSTAT` (HPC3 scratch) | `SCRATCH_CS` | stub → `0xFFFFFFFF` |
 | `0x1FBB0010` | `GIO_BUS_ERROR` | — | absent |
 | `0x1FBC0000`–`0x1FBC7FFF` | **WD33C93B SCSI controller 0** | `HD0_CS` | 2-register loopback stub |
@@ -209,9 +210,37 @@ WD33C93 ports are byte-wide at word stride 4, data in the low byte (`…0003` /
 `…0007` are the byte lanes of the words at `…0000` / `…0004`).
 
 **Reset sequence** (`FUN_bfc2fd34`): write `0x40` to the HPC3 DMA control
-register, `DELAY(0x19)`, write `0`.
+register, `DELAY(0x19)`, write `0`. That is `ch_reset`, and the HPC3 spec says
+it "resets both external controller and this DMA channel" — so the falling edge
+of it is what resets the WD33C93B and pulses RST on the SCSI bus. It is also
+the register's power-on value, and `ch_active` cannot be set while it stands.
 
 SCSI may be absent — the PROM reports the failure and continues.
+
+**Channel 0's full register set**, confirmed against the HPC3 chip
+specification's section 3.3 rather than against the table above, which names
+only the six the PROM's descriptor uses:
+
+| Offset from `0x1FB90000` | Name | |
+|---|---|---|
+| `+0x0000` | `cbp` | current buffer pointer |
+| `+0x0004` | `nbdp` | next buffer descriptor pointer |
+| `+0x1000` | `bc` | byte count `13:0`, `XIE` bit 29, `EOX` bit 31 |
+| `+0x1004` | `control` | see below |
+| `+0x1008` / `+0x100C` | `gio` / `dev` | FIFO pointers; no FIFO is modelled |
+| `+0x1010` | `dmacfg` | bit 12 `dma_16`; reset value `0x00000800` |
+| `+0x1014` | `piocfg` | PIO timing |
+
+`control`: `0x01` interrupt (read-only, **cleared by reading this port**),
+`0x02` endian, `0x04` dir (1 = memory to device), `0x08` flush (**must not
+interrupt**), `0x10` `ch_active`, `0x20` `ch_active_mask` (write-only),
+`0x40` `ch_reset` (**set at power-on**), `0x80` parity error.
+
+A descriptor is **three** words at a 16-byte alignment — `BP`, `BC`, `DP` — and
+a zero byte count is not a transfer: with `EOX` it ends the chain, without it
+the next descriptor is fetched immediately. Every receive chain the PROM builds
+ends in a zero-count `EOX` descriptor, because the spec tells drivers to append
+one. `docs/13-scsi-dma-plan.md` has the whole thing.
 
 ---
 

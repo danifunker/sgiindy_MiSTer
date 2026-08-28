@@ -416,3 +416,46 @@ clearing store sits in the CPU's write FIFO and `eret` does not wait for it to
 drain. It presented as a second entry whose `Cause` had `IP4` already clear.
 A read back from the same device before returning orders behind the write and
 is what makes the clear stick.
+
+---
+
+## HPC3 becomes a bus master
+
+Everything above answers cycles the CPU starts. The HPC3's SCSI channel 0 does
+not: it is the first thing in this core that issues a bus cycle of its own, and
+that changed the shape of `sgi_indy.sv`. The engine, the register semantics and
+the descriptor format are in [13-scsi-dma-plan.md](13-scsi-dma-plan.md); what
+belongs here is the chipset consequence.
+
+Main memory now has an arbiter on it. It is not a bus arbiter — it covers one
+port, because that is where descriptors and DMA buffers live and nothing else
+in this design masters anything. Three things it has to get right, and the
+first two are the ones a naive version gets wrong:
+
+* **The DMA request is held, not pulsed.** The CPU pulses `bus_req` for one
+  cycle and then waits for `bus_ack`, because it has always been the only
+  master and the port is always its to take. The loser of a tie cannot do that:
+  a pulse on a cycle the CPU wanted memory is simply gone.
+* **`ram_ack` is tagged with whose request it answers.** `bus_ack` is an OR of
+  every device's ack, so without `ram_owner_dma` a DMA read completes the CPU's
+  outstanding cycle with the DMA's data on it.
+* **A second `sgi_memmap`**, because the CPU's `mem_hit` feeds the grant and
+  feeding the grant back into the address input closes a combinational loop.
+
+Two smaller things the same work forced:
+
+**`sgi_hpc3` now takes `bus_aoff`.** The doubleword at `0x1FB91000` is the byte
+count and the control register at once, byte enables say nothing on a read, and
+the control register clears its interrupt when read. Without knowing which word
+the CPU actually addressed, a driver reading the byte count acknowledges an
+interrupt it never saw. This is the same trap the SCC and the 8042 already had,
+in a device that had not needed it.
+
+**The SCSI bus can be reset now, and could not before.** `wd33c93.sv`'s
+`scsi_rst` was hardwired to zero. A target that had been selected and abandoned
+held BSY for the rest of the boot, the ASR read `0x20` forever, and every
+command after it failed — and the driver's recovery path, which prints
+"resetting SCSI bus", did nothing at all. HPC3's `ch_reset` falling edge now
+resets the controller and pulses RST, which is what the spec's "resets both
+external controller and this DMA channel" means on the wire. Until it existed
+the boot did not get past the first failed command.

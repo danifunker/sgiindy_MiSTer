@@ -18,6 +18,12 @@ keystrokes back, and answers `version` and `hinv` at the `>>` prompt.
 [12-chipset.md](12-chipset.md) is the record of that;
 `tests/run-prom.sh` reproduces it.
 
+**And it reads a disk.** The HPC3's SCSI DMA channel is the core's first bus
+master, and with a disk image attached the PROM completes its INQUIRY and reads
+the volume header off it through a descriptor chain in main memory.
+[13-scsi-dma-plan.md](13-scsi-dma-plan.md) is the record;
+`tests/run-scsi.sh` and `tests/run-dma.sh` hold it.
+
 Anything below that predates the build is still the plan; where the build
 proved a plan wrong, the doc says so rather than being quietly rewritten.
 
@@ -36,7 +42,7 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | **[10-r4300-integration.md](10-r4300-integration.md)** | **The CPU as built** — the byte-lane contract, turning an R4300 into an R4400, the fixes, the numbers |
 | [11-running-on-hardware.md](11-running-on-hardware.md) | Running the same test binary on a real SGI, and which machines it applies to |
 | **[12-chipset.md](12-chipset.md)** | **The chipset as built** — MC, HPC3, IOC2/INT2, the timers, the RTC, and the order in which each one blocked the next |
-| [13-scsi-dma-plan.md](13-scsi-dma-plan.md) | **The next piece** — the HPC3 SCSI DMA engine: where the boot stops, the registers, and a staged plan with a test per stage |
+| **[13-scsi-dma-plan.md](13-scsi-dma-plan.md)** | **The HPC3 SCSI DMA engine as built** — the spec-confirmed register map, the bus arbiter, what the plan got wrong, and the one bus phase still between here and a disk in `hinv` |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
 ## Machines under consideration

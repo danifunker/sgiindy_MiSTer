@@ -274,6 +274,18 @@ module sgi_indy #(
     logic [31:0] mem_off;
     logic [31:0] mc_memcfg0, mc_memcfg1;   // driven by the MC, below
 
+    // HPC3's SCSI DMA channel, as a master on the memory port and as a
+    // consumer of the WD33C93B's data phases. Declared here because both ends
+    // are instantiated further down and the arbiter sits between them.
+    logic        dma_req, dma_we, dma_ack;
+    logic [31:0] dma_addr;
+    logic [63:0] dma_wdata, dma_rdata;
+    logic  [7:0] dma_be;
+    logic        scsi_dev_req, scsi_dev_dir_in, scsi_dev_eop, scsi_dev_ack;
+    logic        scsi_dev_reset;
+    logic  [7:0] scsi_dev_wdata, scsi_dev_rdata;
+    logic        scsi_dma_irq;
+
     assign sel_alias = (bus_addr < ALIAS_SIZE);
     assign mem_addr  = sel_alias ? (bus_addr + RAM_BASE) : bus_addr;
     assign sel_ram   = sel_alias
@@ -311,14 +323,81 @@ module sgi_indy #(
     assign sel_none  = !(sel_ram | sel_gio | sel_gfx | sel_mc | sel_hpc3
                        | sel_ioc | sel_rtc | sel_prom | sel_scsi0);
 
+    //------------------------------------------------------------------
+    // The main memory port, and the two masters on it
+    //------------------------------------------------------------------
+    // THIS IS THE ONLY ARBITER IN THE CORE, and it is deliberately not a bus
+    // arbiter: it covers this one port, because the descriptors and buffers
+    // the HPC3's SCSI DMA channel touches are in main memory and nothing else
+    // in this design masters anything. The Ethernet channels will want the
+    // same port when they arrive and the same arbiter will serve; a general
+    // crossbar is work nobody has asked for.
+    //
+    // The CPU wins every tie. Its bus is a one-cycle request followed by a
+    // wait for `ack` (rtl/cpu/r4300_bus.sv), so there is exactly one
+    // transaction in flight and `ram_inflight` is what keeps the DMA out of
+    // the gap between a request and its answer. `ram_owner_dma` remembers
+    // whose answer is coming: without it a DMA read's `ram_ack` would land on
+    // the CPU as a completed cycle, with the DMA's data on it.
+    logic ram_inflight, ram_owner_dma;
+
     // A memory cycle only reaches the RAM model when MEMCFG has a valid bank
     // covering it. Everything else in the two memory windows is answered here
     // as zero - see sgi_memmap.sv on why that matters to POST.
-    assign ram_req   = bus_req && sel_ram && mem_hit;
-    assign ram_we    = bus_we;
-    assign ram_addr  = mem_off;
-    assign ram_wdata = bus_wdata;
-    assign ram_be    = bus_be;
+    wire cpu_ram_req = bus_req && sel_ram && mem_hit;
+    wire dma_grant   = dma_req && !ram_inflight && !cpu_ram_req && dma_hit;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            ram_inflight  <= 1'b0;
+            ram_owner_dma <= 1'b0;
+        end else if (ram_req) begin
+            // A fill re-requests in the same cycle it takes its ack, so a new
+            // request always wins over the clear below.
+            ram_inflight  <= 1'b1;
+            ram_owner_dma <= dma_grant;
+        end else if (ram_ack) begin
+            ram_inflight  <= 1'b0;
+        end
+    end
+
+    assign ram_req   = cpu_ram_req | dma_grant;
+    assign ram_we    = dma_grant ? dma_we    : bus_we;
+    assign ram_addr  = dma_grant ? dma_off   : mem_off;
+    assign ram_wdata = dma_grant ? dma_wdata : bus_wdata;
+    assign ram_be    = dma_grant ? dma_be    : bus_be;
+
+    // The engine's addresses are physical, so they go through the same MEMCFG
+    // decode the CPU's do. A second instance rather than a mux on one: the
+    // CPU's `mem_hit` feeds the grant, so feeding the grant back into the
+    // address would close a combinational loop.
+    logic        dma_hit;
+    logic [31:0] dma_off;
+
+    sgi_memmap #(.BANK0_MB(MEM_MB)) u_memmap_dma (
+        .memcfg0 (mc_memcfg0),
+        .memcfg1 (mc_memcfg1),
+        .addr    (dma_addr),
+        .hit     (dma_hit),
+        .offset  (dma_off)
+    );
+
+    // A DMA address outside any valid bank is a descriptor chain pointing at
+    // nothing. It is answered here with zeros - the same thing sgi_memmap does
+    // for a CPU access outside a valid bank - so that the engine keeps walking
+    // instead of wedging on an ack that never comes. A real HPC3 would take a
+    // GIO64 timeout; what must not happen is a hang three layers from its
+    // cause, and `tests/run-dma.sh` points a chain at 0x40000000 to check it.
+    //
+    // One shot: the engine holds `dma_req` until it is answered, so without
+    // the self-clear this would ack the same request on every cycle until the
+    // engine noticed the first one.
+    logic dma_miss_ack;
+    always_ff @(posedge clk)
+        dma_miss_ack <= !reset && dma_req && !dma_hit && !dma_miss_ack;
+
+    assign dma_ack   = (ram_ack && ram_owner_dma) | dma_miss_ack;
+    assign dma_rdata = dma_miss_ack ? 64'h0 : ram_rdata;
 
     assign prom_req  = bus_req && sel_prom;
     assign prom_addr = bus_addr - PROM_BASE;
@@ -384,11 +463,30 @@ module sgi_indy #(
                            && !sel_ioc && !sel_rtc),
         .we      (bus_we),
         .addr    (bus_addr[18:0]),
+        .aoff    (bus_aoff),
         .be      (bus_be),
         .wdata   (bus_wdata),
         .rdata   (hpc3_rdata),
         .ack     (hpc3_ack),
-        .claimed (hpc3_claimed)
+        .claimed (hpc3_claimed),
+
+        .dma_req   (dma_req),
+        .dma_we    (dma_we),
+        .dma_addr  (dma_addr),
+        .dma_wdata (dma_wdata),
+        .dma_be    (dma_be),
+        .dma_rdata (dma_rdata),
+        .dma_ack   (dma_ack),
+
+        .scsi_dev_req    (scsi_dev_req),
+        .scsi_dev_dir_in (scsi_dev_dir_in),
+        .scsi_dev_wdata  (scsi_dev_wdata),
+        .scsi_dev_eop    (scsi_dev_eop),
+        .scsi_dev_ack    (scsi_dev_ack),
+        .scsi_dev_rdata  (scsi_dev_rdata),
+        .scsi_dev_reset  (scsi_dev_reset),
+
+        .scsi_dma_irq    (scsi_dma_irq)
     );
 
     //------------------------------------------------------------------
@@ -484,6 +582,13 @@ module sgi_indy #(
         .rdata        (scsi_rdata),
         .ack          (scsi_ack),
         .irq          (scsi_irq),
+        .chip_reset   (scsi_dev_reset),
+        .dma_req      (scsi_dev_req),
+        .dma_dir_in   (scsi_dev_dir_in),
+        .dma_wdata    (scsi_dev_wdata),
+        .dma_eop      (scsi_dev_eop),
+        .dma_ack      (scsi_dev_ack),
+        .dma_rdata    (scsi_dev_rdata),
         .img_mounted  (scsi_img_mounted),
         .img_blocks   (scsi_img_blocks),
         .sd_lba       (scsi_sd_lba),
@@ -522,7 +627,12 @@ module sgi_indy #(
         //   MAP 6/7 the two GIO expansion slots
         // Bit 7 of L0 and bit 3 of L1 are the mappable summaries and are
         // generated inside the IOC, so what is passed there does not matter.
-        .l0_source ({7'h0, scsi_irq, 1'b0}),
+        // SCSI0's INT2 line is the OR of the controller's own interrupt and
+        // the HPC3 channel's DMA interrupt, which is what IRIS's callback
+        // does: `Scsi0 => intstat & (SCSI0_DEV | SCSI0_DMA) != 0`. Nothing has
+        // exercised the DMA half - the PROM polls and its descriptors do not
+        // set XIE - so this is wiring, not a tested path.
+        .l0_source ({7'h0, scsi_irq | scsi_dma_irq, 1'b0}),
         .l1_source (8'h00),
         // The SCC and the keyboard controller are mappable sources, not local
         // ones: they arrive through MAP_STAT and reach the CPU only if
@@ -581,14 +691,19 @@ module sgi_indy #(
         end
     end
 
-    assign bus_ack   = ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
+    // `ram_ack` belongs to whichever master asked for it - see the arbiter
+    // above. Letting a DMA cycle's ack through here would finish a CPU cycle
+    // that is still waiting, with the DMA's data on it.
+    wire cpu_ram_ack = ram_ack && !ram_owner_dma;
+
+    assign bus_ack   = cpu_ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
                      | ioc_ack | rtc_ack | scc_ack | kbd_ack | scsi_ack | none_ack | gio_absent_ack
                      | mem_hole_ack | gfx_ack;
 
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
     // read shift in r4300_bus lands on it whichever word was addressed.
     assign bus_rdata = (mem_hole_ack | gfx_ack) ? 64'h0
-                     : ram_ack  ? ram_rdata
+                     : cpu_ram_ack ? ram_rdata
                      : prom_ack ? prom_rdata
                      : gio_ack  ? gio_rdata
                      : mc_ack   ? mc_rdata
