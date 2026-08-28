@@ -36,7 +36,7 @@ at MC + 0x1000 and 0x80 is the GIO64 arbiter. The table below is the spec's.
 | `0x1FBB0010` | `GIO_BUS_ERROR` | — | absent |
 | `0x1FBC0000`–`0x1FBC7FFF` | **WD33C93B SCSI controller 0** | `HD0_CS` | 2-register loopback stub |
 | `0x1FBC8000`–`0x1FBCFFFF` | WD33C93B SCSI controller 1 | `UNKBUS0_CS` | absent |
-| `0x1FBD8000`–`0x1FBD83FF` | **HAL2 audio** | `HAL2_CS` | stub → `0xFFFFFFFF` |
+| `0x1FBD8000`–`0x1FBD83FF` | **HAL2 audio** | `HAL2_CS` | `REV` → `0x4010`, everything else `0` |
 | `0x1FBD8400`–`0x1FBD87FF` | HPC3 PBUS audio DMA descriptors | `HACK_CS` | stub |
 | `0x1FBD9000`–`0x1FBD93FF` | PBUS channel 4 regs | `PBUS4_CS` | 6-register loopback stub |
 | **`0x1FBD9800`–`0x1FBD9BFF`** | **IOC / INT2 / SCC / panel** | `IOC_CS` | partly real (SCC) |
@@ -301,7 +301,28 @@ and `0x9100`/`0x9104` (`RELAY_C`, the speaker relay).
 HPC3 PBUS DMA descriptors for audio live at `0x1FBD84A0`–`0x1FBD8500`; the boot
 path zeroes that block, then writes `0x1FBD8488 ← 0x83` and `0x1FBD848C ← 9`.
 
-**Minimum viable:** return `HAL2_REV` with bit 15 set → audio skipped entirely.
+**As built:** `HAL2_REV` returns `0x4010` and every other register reads `0`,
+which is enough for `hinv` to print
+
+```
+Audio: Iris Audio Processor: version A2 revision 4.1.0
+```
+
+The PROM's node printer at `0xBFC41664` splits `REV` as
+`(v >> 12) & 7 . (v >> 4) & 0xF . v & 0xF`, so `0x4010` is `4.1.0`; the `A2` is
+a hardcoded string at `0xBFC54B58`, not something the chip reports. The value is
+IRIS's (`src/hal2.rs`).
+
+**There is no audio behind it**, and clearing bit 15 is what commits to that:
+the init at `0xBFC00BD0` then writes `IAR`/`IDR` and spins on `ISR` bit 0 three
+times. Every register but `REV` reads `0`, so busy is always clear and each spin
+exits immediately, and the init never reads indirect data back — checked, not
+assumed: there are exactly four loads in `0xBFC00BD0`–`0xBFC00D50`, one `REV`
+and three `ISR`. If that stops being true this **hangs the boot** rather than
+skipping audio, which is the risk bit 15 was buying off.
+
+**Minimum viable, if audio ever needs backing out:** set `HAL2_REV` bit 15 and
+the whole audio path is skipped again.
 To get the boot tune, implement the ISR busy bit and the PBUS DMA path.
 
 ---

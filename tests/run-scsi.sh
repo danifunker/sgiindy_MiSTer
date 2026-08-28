@@ -60,6 +60,13 @@ EXPECT=(
     # grandparent is the type-0x0b adapter - so this one line asserts the whole
     # chain, not just that a disk answered INQUIRY.
     "SCSI Disk: scsi(0)disk(1)"
+    # HAL2 answering its revision register, which is the whole of the audio
+    # line - there is no audio path behind it. The PROM splits HAL2_REV as
+    # (v>>12)&7 . (v>>4)&0xF . v&0xF, so 0x4010 is 4.1.0; the "A2" is a
+    # hardcoded string at 0xBFC54B58. Asserted here because clearing REV bit 15
+    # commits this core to answering the init sequence at 0xBFC00BD0, and if
+    # that ever stops working it hangs the boot rather than skipping audio.
+    "Audio: Iris Audio Processor: version A2 revision 4.1.0"
 )
 
 FORBID=(
@@ -93,7 +100,7 @@ echo "booting $(basename "$PROM") with a disk on ID 1 ..."
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \
-       --stop-on 'disk(1)' \
+       --stop-on 'revision 4.1.0' \
        --console "$OUT" >/dev/null 2>&1
 
 fail=0

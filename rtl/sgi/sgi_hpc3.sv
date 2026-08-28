@@ -222,16 +222,35 @@ module sgi_hpc3 (
                                 :                            gen[{addr[4:3], w}];
             BLK_CFGDMA: hpc3_rd = cfgdma[addr[11:9]];
             BLK_CFGPIO: hpc3_rd = cfgpio[addr[11:8]];
-            // HAL2 is not modelled. REV reading 0xFFFF is not a placeholder:
-            // bit 15 set is how the part says "no audio present", and both the
-            // PROM and the IRIX driver then skip the whole audio path instead
-            // of spinning on the busy bit of a chip that is not there. Every
-            // other register reads 0 so ISR.busy is clear. Same convention as
-            // IRIS's hal2_absent_read.
+            // HAL2 ANSWERS ITS REVISION REGISTER AND NOTHING ELSE, and that
+            // is enough to be listed. There is no audio path behind this and
+            // there is not meant to be yet: `hinv` prints the audio line out
+            // of HAL2_REV, not out of anything that makes a sound.
+            //
+            //   0x4010, the value IRIS returns (src/hal2.rs). The PROM's node
+            //   printer at 0xBFC41664 splits it as
+            //     (v >> 12) & 7  .  (v >> 4) & 0xF  .  v & 0xF
+            //   so 0x4010 is revision 4.1.0, and the "A2" beside it is a
+            //   hardcoded string at 0xBFC54B58 rather than anything this chip
+            //   reports. That is the whole of
+            //     Audio: Iris Audio Processor: version A2 revision 4.1.0
+            //
+            // BIT 15 IS THE SWITCH. Set, it means "no audio present", and both
+            // the PROM and the IRIX driver skip the audio path entirely -
+            // which is what this returned before, deliberately, as IRIS's
+            // hal2_absent_read does. Clearing it commits to answering the
+            // init sequence at 0xBFC00BD0, which writes IAR/IDR and then spins
+            // on ISR bit 0 three times. Every register other than REV reads 0,
+            // so busy is always clear and each spin exits on its first pass;
+            // the init does not read indirect data back, so discarding the
+            // writes costs nothing. **If that ever stops being true this hangs
+            // the boot rather than skipping audio**, which is the risk bit 15
+            // was buying off.
+            //
             // The byte offset of the addressed register is addr with bit 2
             // replaced by w, so its 0x10-granular index is addr[7:4] whichever
             // half is being read.
-            BLK_HAL2:   hpc3_rd = (addr[7:4] == 4'h2) ? 32'h0000_FFFF
+            BLK_HAL2:   hpc3_rd = (addr[7:4] == 4'h2) ? 32'h0000_4010
                                                       : 32'h0000_0000;
             default:    hpc3_rd = 32'h0000_0000;
         endcase
