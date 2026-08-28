@@ -32,7 +32,24 @@ module sgi_scsi #(
     //
     // ID 6 by default, which is where SGI put the internal CD-ROM and what
     // every `dksc(0,6,8)` boot line in the world assumes.
-    parameter logic [6:0] CDROM_IDS = 7'b100_0000
+    parameter logic [6:0] CDROM_IDS = 7'b100_0000,
+
+    // WHICH IDS ARE ACTUALLY BUILT, one bit per target, LSB = ID 0.
+    //
+    // Every ID used to get a full target - its own WD33C93B-facing state
+    // machine and two 512-byte sector buffers - because in simulation that
+    // was free. On the device it is not: seven of them are ~7,900 ALUTs and
+    // 917,504 bits of M10K, and nothing uses more than a few. IDs are not
+    // interchangeable, though, so this is a mask and not a count: ID 6 is the
+    // CD-ROM (see CDROM_IDS) and ID 1 is where tests/run-scsi.sh and
+    // tests/run-cdrom.sh put the disk, so lowering NUM_TARGETS to 3 would
+    // build IDs 0..2 and delete the CD-ROM. The mask keeps the ID space at
+    // 0..6 and just does not build the targets nobody addresses.
+    //
+    // ID 0 is HOST_ID, the initiator's own address, so it was never usable.
+    // The default below is a disk on 1, a spare disk on 2, and the CD-ROM on
+    // 6. Set a bit to add a target back; the port widths do not change.
+    parameter logic [6:0] TARGET_EN = 7'b100_0110
 )(
     input  logic        clk,
     input  logic        reset,
@@ -153,92 +170,108 @@ module sgi_scsi #(
     genvar t;
     generate
         for (t = 0; t < NUM_TARGETS; t++) begin : g_target
-            wire [15:0] unused_snd_l, unused_snd_r;
-            wire        t_rd, t_wr;
+            if (TARGET_EN[t]) begin : g_live
+                wire [15:0] unused_snd_l, unused_snd_r;
+                wire        t_rd, t_wr;
 
-            scsi #(.ID(t[2:0]), .CDROM(CDROM_IDS[t] ? 1 : 0),
-                   .TOOLBOX_ENABLE(0)) u_target (
-                .clk            (clk),
-                .rst            (b_rst),
-                .sys_rst        (reset),
-                .sel            (b_sel),
-                // Every other target's BSY: a wedged one must not let a second
-                // selection put two targets on the bus at once.
-                .bus_busy       (|(t_bsy & ~(1 << t))),
-                .atn            (b_atn),
-                // A CD-ROM DRIVE IS PRESENT WHETHER OR NOT A DISC IS IN IT,
-                // and scsi.v takes that from here rather than from `mounted`:
-                //
-                //   if(sel && din[ID] && ((CDROM != 0) ? cd_enable : mounted)
-                //
-                // so a CD-ROM target with this tied low never answers a
-                // selection at all - the image mounts, the PROM scans the bus,
-                // and not one command is ever addressed to it. A disk keys off
-                // `mounted` and is unaffected, which is why this was invisible
-                // for as long as every target was a disk.
-                .cd_enable      (CDROM_IDS[t] ? 1'b1 : 1'b0),
-                .bsy            (t_bsy[t]),
-                .msg            (t_msg[t]),
-                .cd             (t_cd[t]),
-                .io             (t_io[t]),
-                .req            (t_req[t]),
-                .req_bus        (),
-                .ack            (b_ack),
-                // Initiator-side hints the MacLC core's NCR5380 uses to
-                // prefetch. This initiator is byte-at-a-time and asks for
-                // nothing early, so both stay low.
-                .host_csr_rd    (1'b0),
-                .host_data_rd   (1'b0),
-                .din            (b_dout_init),
-                .dout           (t_dout[t]),
-                .dout_pair      (),
-                .dout_pair_next (),
-                .cd_snd_l       (unused_snd_l),
-                .cd_snd_r       (unused_snd_r),
-                .img_mounted    (img_mounted[t]),
-                .img_blocks     (img_blocks),
-                .io_lba         (t_lba[t]),
-                .io_rd          (t_rd),
-                .io_wr          (t_wr),
-                .io_ack         (sd_ack[t]),
-                .sd_buff_addr   (sd_buff_addr),
-                .sd_buff_addr_hi(5'd0),
-                .sd_buff_dout   (sd_buff_dout),
-                .sd_buff_din    (t_din[t]),
-                .sd_buff_wr     (sd_buff_wr),
-                .dbg_mounted    (),
-                .dbg_phase      (),
-                .dbg_hs         (),
-                .dbg_hs2        (),
-                .dbg_cmd        (),
-                .dbg_dma_word   (1'b0),
-                .dbg_dma_long   (1'b0),
-                .dbg_dma_lowbyte(8'h00),
-                .dbg_wrsnap     (),
-                .dbg_selsnap    (),
-                .dbg_wrstall    (),
-                .dbg_wrfb       (),
-                .dbg_ring       (),
-                // CD audio and BlueSCSI Toolbox: both compiled out by CDROM(0)
-                // and TOOLBOX_ENABLE(0), but the ports still exist. Listed
-                // rather than left to -Wno-PINMISSING, so a genuinely
-                // forgotten connection stays an error.
-                .dbg_cda0       (),
-                .dbg_cda1       (),
-                .dbg_cda2       (),
-                .dbg_cda3       (),
-                .dbg_cda4       (),
-                .dbg_cdur       (),
-                .tb_mounted     (1'b0),
-                .tb_lba         (),
-                .tb_rd          (),
-                .tb_wr          (),
-                .tb_ack         (1'b0),
-                .tb_buff_din    ()
-            );
+                scsi #(.ID(t[2:0]), .CDROM(CDROM_IDS[t] ? 1 : 0),
+                       .TOOLBOX_ENABLE(0)) u_target (
+                    .clk            (clk),
+                    .rst            (b_rst),
+                    .sys_rst        (reset),
+                    .sel            (b_sel),
+                    // Every other target's BSY: a wedged one must not let a second
+                    // selection put two targets on the bus at once.
+                    .bus_busy       (|(t_bsy & ~(1 << t))),
+                    .atn            (b_atn),
+                    // A CD-ROM DRIVE IS PRESENT WHETHER OR NOT A DISC IS IN IT,
+                    // and scsi.v takes that from here rather than from `mounted`:
+                    //
+                    //   if(sel && din[ID] && ((CDROM != 0) ? cd_enable : mounted)
+                    //
+                    // so a CD-ROM target with this tied low never answers a
+                    // selection at all - the image mounts, the PROM scans the bus,
+                    // and not one command is ever addressed to it. A disk keys off
+                    // `mounted` and is unaffected, which is why this was invisible
+                    // for as long as every target was a disk.
+                    .cd_enable      (CDROM_IDS[t] ? 1'b1 : 1'b0),
+                    .bsy            (t_bsy[t]),
+                    .msg            (t_msg[t]),
+                    .cd             (t_cd[t]),
+                    .io             (t_io[t]),
+                    .req            (t_req[t]),
+                    .req_bus        (),
+                    .ack            (b_ack),
+                    // Initiator-side hints the MacLC core's NCR5380 uses to
+                    // prefetch. This initiator is byte-at-a-time and asks for
+                    // nothing early, so both stay low.
+                    .host_csr_rd    (1'b0),
+                    .host_data_rd   (1'b0),
+                    .din            (b_dout_init),
+                    .dout           (t_dout[t]),
+                    .dout_pair      (),
+                    .dout_pair_next (),
+                    .cd_snd_l       (unused_snd_l),
+                    .cd_snd_r       (unused_snd_r),
+                    .img_mounted    (img_mounted[t]),
+                    .img_blocks     (img_blocks),
+                    .io_lba         (t_lba[t]),
+                    .io_rd          (t_rd),
+                    .io_wr          (t_wr),
+                    .io_ack         (sd_ack[t]),
+                    .sd_buff_addr   (sd_buff_addr),
+                    .sd_buff_addr_hi(5'd0),
+                    .sd_buff_dout   (sd_buff_dout),
+                    .sd_buff_din    (t_din[t]),
+                    .sd_buff_wr     (sd_buff_wr),
+                    .dbg_mounted    (),
+                    .dbg_phase      (),
+                    .dbg_hs         (),
+                    .dbg_hs2        (),
+                    .dbg_cmd        (),
+                    .dbg_dma_word   (1'b0),
+                    .dbg_dma_long   (1'b0),
+                    .dbg_dma_lowbyte(8'h00),
+                    .dbg_wrsnap     (),
+                    .dbg_selsnap    (),
+                    .dbg_wrstall    (),
+                    .dbg_wrfb       (),
+                    .dbg_ring       (),
+                    // CD audio and BlueSCSI Toolbox: both compiled out by CDROM(0)
+                    // and TOOLBOX_ENABLE(0), but the ports still exist. Listed
+                    // rather than left to -Wno-PINMISSING, so a genuinely
+                    // forgotten connection stays an error.
+                    .dbg_cda0       (),
+                    .dbg_cda1       (),
+                    .dbg_cda2       (),
+                    .dbg_cda3       (),
+                    .dbg_cda4       (),
+                    .dbg_cdur       (),
+                    .tb_mounted     (1'b0),
+                    .tb_lba         (),
+                    .tb_rd          (),
+                    .tb_wr          (),
+                    .tb_ack         (1'b0),
+                    .tb_buff_din    ()
+                );
 
-            assign sd_rd[t] = t_rd;
-            assign sd_wr[t] = t_wr;
+                assign sd_rd[t] = t_rd;
+                assign sd_wr[t] = t_wr;
+            end else begin : g_absent
+                // Not built. Everything this target would have driven is an
+                // open-collector line the muxes below still read, so tie it off
+                // rather than leave it floating.
+                assign t_bsy[t]  = 1'b0;
+                assign t_msg[t]  = 1'b0;
+                assign t_cd[t]   = 1'b0;
+                assign t_io[t]   = 1'b0;
+                assign t_req[t]  = 1'b0;
+                assign t_dout[t] = 8'h00;
+                assign t_lba[t]  = 32'h0;
+                assign t_din[t]  = 16'h0;
+                assign sd_rd[t]  = 1'b0;
+                assign sd_wr[t]  = 1'b0;
+            end
         end
     endgenerate
 
