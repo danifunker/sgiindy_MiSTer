@@ -125,4 +125,28 @@ cputest: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
-.PHONY: cputest all clean
+# --- interactive harness ---------------------------------------------------
+# Same sim_top, same C++ device models as `cputest`, plus SDL2 + OpenGL2 +
+# Dear ImGui from the vendored MiSTer sim framework.
+#   make gui && ./obj_dir/Vsim_gui --prom ../roms/IP24_Indy/ip24prom....bin --run
+GUI_C = sim_gui.cpp sim_devices.cpp \
+	sim/imgui/imgui_impl_sdl.cpp sim/imgui/imgui_impl_opengl2.cpp \
+	sim/imgui/imgui_draw.cpp sim/imgui/imgui_widgets.cpp \
+	sim/imgui/imgui_tables.cpp sim/imgui/imgui.cpp
+
+# Paths are relative to obj_dir_gui/, where verilator runs the compile.
+GUI_CFLAGS = -O2 -std=c++17 -I.. -I../.. -I../sim/imgui $(shell sdl2-config --cflags)
+GUI_LDFLAGS = $(shell sdl2-config --libs)
+ifeq ($(UNAME_S), Darwin)
+	GUI_LDFLAGS += -framework OpenGL
+else
+	GUI_LDFLAGS += -lGL
+endif
+
+gui: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_gui --top-module sim_top \
+	   -O3 -CFLAGS "$(GUI_CFLAGS)" -LDFLAGS "$(GUI_LDFLAGS)" $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o ../obj_dir/Vsim_gui $(CPUTEST_V) $(GUI_C)
+
+.PHONY: cputest gui all clean

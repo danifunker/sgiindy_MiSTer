@@ -7,9 +7,9 @@
 //  the cpu-tests suite wants RAM, an SCC and (optionally) a device in GIO
 //  slot 0, and that is all this provides.
 //
-//  The GUI harness (`sim.v`, module `emu`) comes later and wraps the same
-//  core; keeping the headless top separate means CPU regressions can run in
-//  CI with no SDL, no window and no ImGui build.
+//  The GUI harness (`sim_gui.cpp`) drives this same module rather than a
+//  separate `emu` wrapper - one top level, one set of device models, and CPU
+//  regressions still run in CI with no SDL, no window and no ImGui build.
 //============================================================================
 
 module sim_top
@@ -23,6 +23,10 @@ module sim_top
     input  wire        sclk,
     input  wire [31:0] boot_pc,
     input  wire        gio_present,
+
+    // Serial receive for the console channel. Idle mark is 1; the GUI harness
+    // shifts typed characters out on it so the Command Monitor can be driven.
+    input  wire        rxdb,
 
     // Console tap: one pulse per byte handed to the SCC transmitter.
     output wire        tx_valid,
@@ -57,7 +61,22 @@ module sim_top
     wire [63:0] gio_wdata, gio_rdata;
     wire  [7:0] gio_be;
 
-    sgi_indy #(.MEM_MB(64)) u_core
+    // RTC_TICK_DIV: 5000 clocks per centisecond instead of the hardware
+    // 500000, so the machine's clock runs a hundred times faster than the
+    // simulated wall clock. The PROM waits for the seconds register to change
+    // during boot; at the real ratio that single wait is fifty million cycles
+    // and dominates the run. Nothing the harness checks depends on the rate -
+    // it is the same accommodation as feeding the SCC a fast `sclk`.
+    // PIT_TICK_DIV: 5 clocks per timer count instead of 50, so the machine's
+    // microsecond is a tenth of the real one and every DELAY() costs a tenth
+    // of the cycles. calibrate_delay measures its 512-iteration loop against
+    // this same timer, so the calibration stays self-consistent - it just
+    // concludes the machine is ten times faster, which for a core running with
+    // both caches off and a bus round trip per instruction is arguably nearer
+    // the truth than 50 MHz is. The margin matters: the routine restarts
+    // forever if the loop measures more than 10000 counts, and at this setting
+    // it measures about 2000.
+    sgi_indy #(.MEM_MB(64), .RTC_TICK_DIV(5000), .PIT_TICK_DIV(5)) u_core
     (
         .clk           (clk),
         .ce            (1'b1),
@@ -89,7 +108,7 @@ module sim_top
 
         .rxda          (1'b1),          // idle mark - nothing plugged in
         .txda          (txda),
-        .rxdb          (1'b1),
+        .rxdb          (rxdb),
         .txdb          (txdb),
         .scc_int_n     (),
         .tx_valid      (tx_valid),

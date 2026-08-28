@@ -29,12 +29,14 @@
 #include "Vsim_top.h"
 #include "verilated.h"
 #include "sim_devices.h"
+#include "sim_uart.h"
 
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <string>
 #include <map>
+#include <deque>
 #include <vector>
 #include <algorithm>
 
@@ -52,18 +54,38 @@ static const uint64_t SCLK_DIV = 4;
 struct RegName { uint32_t lo, hi; const char *name; };
 
 static const RegName kRegNames[] = {
-    { 0x08000000, 0x0BFFFFFF, "RAM"            },
+    { 0x08000000, 0x0FFFFFFF, "RAM"            },
     { 0x00000000, 0x0007FFFF, "RAM-alias"      },
+    { 0x1F0F0000, 0x1F0FFFFF, "NEWPORT-REX3"   },
     { 0x1F400000, 0x1F5FFFFF, "GIO0"           },
-    { 0x1FA00000, 0x1FA1FFFF, "MC"             },
-    { 0x1FB80000, 0x1FB8FFFF, "HPC3"           },
+    { 0x1FA00000, 0x1FA000FF, "MC"             },
+    { 0x1FA00100, 0x1FA00FFF, "MC-lock"        },
+    { 0x1FA01000, 0x1FA01FFF, "MC-RPSS_CTR"    },
+    { 0x1FA02000, 0x1FA02FFF, "MC-GIO-DMA"     },
+    { 0x1FA10000, 0x1FA1FFFF, "MC-semaphore"   },
+    { 0x1FB80000, 0x1FB8FFFF, "HPC3-PBUS-DMA"  },
+    { 0x1FB90000, 0x1FB93FFF, "HPC3-SCSI-DMA"  },
+    { 0x1FB94000, 0x1FB97FFF, "HPC3-ENET-DMA"  },
+    { 0x1FB98000, 0x1FB9FFFF, "HPC3-ENET-BDP"  },
+    { 0x1FBB0000, 0x1FBB00FF, "HPC3-MISC"      },
+    { 0x1FBC0000, 0x1FBCFFFF, "WD33C93-SCSI"   },
+    { 0x1FBD4000, 0x1FBD4FFF, "SEEQ-ENET"      },
+    { 0x1FBD8000, 0x1FBD83FF, "HAL2"           },
+    { 0x1FBD8400, 0x1FBD87FF, "HPC3-PBUS-PIO1" },
+    { 0x1FBD9000, 0x1FBD97FF, "HPC3-PBUS-PIO"  },
+    { 0x1FBD9800, 0x1FBD982F, "IOC"            },
     { 0x1FBD9830, 0x1FBD9833, "SCC1_CMD"       },
     { 0x1FBD9834, 0x1FBD9837, "SCC1_DATA"      },
     { 0x1FBD9838, 0x1FBD983B, "SCC2_CMD"       },
     { 0x1FBD983C, 0x1FBD983F, "SCC2_DATA"      },
-    { 0x1FBD9800, 0x1FBD98FF, "IOC"            },
-    { 0x1FBE0000, 0x1FBE3FFF, "DS1386-NVRAM"   },
-    { 0x1F0F0000, 0x1F0FFFFF, "NEWPORT-REX3"   },
+    { 0x1FBD9840, 0x1FBD987F, "IOC"            },
+    { 0x1FBD9880, 0x1FBD98FF, "INT2"           },
+    { 0x1FBD9900, 0x1FBD9FFF, "HPC3-EXT-IO"    },
+    { 0x1FBDC000, 0x1FBDCFFF, "HPC3-CFG-DMA"   },
+    { 0x1FBDD000, 0x1FBDDFFF, "HPC3-CFG-PIO"   },
+    { 0x1FBE0000, 0x1FBE00FF, "DS1386-RTC"     },
+    { 0x1FBE0100, 0x1FBE7FFF, "DS1386-NVRAM"   },
+    { 0x1FBE8000, 0x1FBFFFFF, "HPC3"           },
     { 0x1FC00000, 0x1FC7FFFF, "PROM"           },
 };
 
@@ -97,84 +119,30 @@ struct Options {
     // mean the core itself is wedged are fatal by default.
     uint32_t fatal_errors = (1u << 1) | (1u << 4);   // stall, fifo
     bool     uart         = false;   // decode the txdb line as well
+    // Strings to send at the console, in order. `first` is an optional trigger
+    // that must have appeared in the console output before `second` is sent.
+    std::vector<std::pair<std::string, std::string>> type;
+    uint64_t idle_cycles  = 400000;  // console quiet time that counts as a prompt
+    std::string stop_on;             // end the run when this appears on the console
 };
 
-//
-// A UART receiver on the SCC's channel-B transmit pin.
-//
-// The byte tap in sgi_scc.sv says what the CPU handed the transmitter; this
-// says what actually came out of it. A model that queued the writes but never
-// shifted anything would satisfy the first and fail this, which is the whole
-// point of running both.
-//
-// The bit time is measured rather than configured: it is the width of the
-// first start bit, which is why tests/scc/scctest.c sends 'U' first. 'U'
-// alternates, so the low run at the start of that frame is exactly one bit;
-// after a character with bit 0 clear it would be two and every later frame
-// would sample in the wrong place.
-struct UartRx {
-    uint64_t bit_time = 0;
-    uint64_t fall_at  = 0;
-    bool     in_frame = false;
-    int      bit_idx  = 0;
-    uint32_t shift    = 0;
-    uint8_t  prev     = 1;
-    uint64_t stop_at  = 0;
-    bool     stop_due = false;
-    unsigned framing_errors = 0;
+// Turn the backslash escapes a shell argument can carry into bytes, so
+// `--type '.go\r'` sends a carriage return rather than two characters.
+static std::string unescape(const std::string &in)
+{
     std::string out;
-
-    void sample(uint64_t cycle, uint8_t line)
-    {
-        if (bit_time == 0) {
-            // Auto-baud: time the first low run, which is the first start bit.
-            if (prev == 1 && line == 0) fall_at = cycle;
-            if (prev == 0 && line == 1 && fall_at) {
-                bit_time = cycle - fall_at;
-                // Keep decoding this same frame rather than resynchronising:
-                // fall_at already marks its start bit, and the first data-bit
-                // sample is still half a bit away. Waiting for the next start
-                // bit instead would find one inside this character's own data
-                // and every frame after it would be a bit out.
-                in_frame = true;
-                bit_idx  = 0;
-                shift    = 0;
-            }
-            prev = line;
-            return;
+    for (size_t i = 0; i < in.size(); i++) {
+        if (in[i] != '\\' || i + 1 == in.size()) { out.push_back(in[i]); continue; }
+        switch (in[++i]) {
+            case 'r': out.push_back('\r'); break;
+            case 'n': out.push_back('\n'); break;
+            case 't': out.push_back('\t'); break;
+            case '0': out.push_back('\0'); break;
+            default:  out.push_back(in[i]); break;
         }
-        // A frame ends with one stop bit at mark. Checking it catches a
-        // mis-measured bit time, which otherwise shows up only as plausible
-        // wrong characters.
-        if (stop_due && cycle >= stop_at) {
-            stop_due = false;
-            if (line == 0) framing_errors++;
-        }
-
-        if (!in_frame) {
-            if (prev == 1 && line == 0) {    // start bit
-                in_frame = true;
-                bit_idx  = 0;
-                shift    = 0;
-                fall_at  = cycle;
-            }
-        } else {
-            // Sample each data bit in the middle of its cell.
-            uint64_t want = fall_at + bit_time + bit_time / 2 + bit_time * bit_idx;
-            if (cycle >= want && bit_idx < 8) {
-                shift |= (line & 1u) << bit_idx;   // LSB first
-                bit_idx++;
-                if (bit_idx == 8) {
-                    out.push_back(static_cast<char>(shift & 0xFF));
-                    in_frame = false;
-                    stop_at  = fall_at + bit_time * 9 + bit_time / 2;
-                    stop_due = true;
-                }
-            }
-        }
-        prev = line;
     }
-};
+    return out;
+}
 
 //
 // cpu.vhd's error_* outputs are N64 debugging aids, not faults, and treating
@@ -213,6 +181,15 @@ static void usage()
         "  --trace-count N   how many transactions to print (default 2000)\n"
         "  --hot             on exit, list the most-accessed addresses\n"
         "  --uart            also decode the SCC's txdb line and compare\n"
+        "  --type STR        type STR at the console once it goes quiet; repeatable.\n"
+        "                    Understands \\r \\n \\t. Needs the machine to have\n"
+        "                    transmitted first, to measure the bit rate\n"
+        "  --type-on TRIG STR  the same, but only once TRIG has appeared in the\n"
+        "                    console output. Far more reliable than the quiet rule\n"
+        "                    during POST, where the gaps between lines are long\n"
+        "  --idle N          console quiet time that counts as a prompt (default 400000)\n"
+        "  --stop-on STR     end the run once STR has appeared on the console, so a\n"
+        "                    scripted session does not sit out its stuck timer\n"
         "  --fatal-errors M  cpu_error bits that abort the run (default 0x12)\n"
         "  --console FILE    also write the console output to FILE\n");
 }
@@ -236,6 +213,13 @@ int main(int argc, char **argv)
         else if (a == "--trace")       opt.trace = true;
         else if (a == "--hot")         opt.hot = true;
         else if (a == "--uart")        opt.uart = true;
+        else if (a == "--type")        opt.type.push_back({"", unescape(next("--type"))});
+        else if (a == "--type-on") {
+            std::string trig = unescape(next("--type-on"));
+            opt.type.push_back({trig, unescape(next("--type-on"))});
+        }
+        else if (a == "--idle")        opt.idle_cycles = strtoull(next("--idle"), nullptr, 0);
+        else if (a == "--stop-on")     opt.stop_on = unescape(next("--stop-on"));
         else if (a == "--ram-mb")      opt.ram_mb = strtoul(next("--ram-mb"), nullptr, 0);
         else if (a == "--max-cycles")  opt.max_cycles = strtoull(next("--max-cycles"), nullptr, 0);
         else if (a == "--stuck")       opt.stuck_cycles = strtoull(next("--stuck"), nullptr, 0);
@@ -274,16 +258,27 @@ int main(int argc, char **argv)
            boot_pc, opt.ram_mb, opt.testdev ? "yes" : "no");
     fflush(stdout);
 
+    // Opened up front and flushed per line, so a long run can be watched with
+    // `tail -f` instead of only being readable once it has finished.
+    FILE *console_f = nullptr;
+    if (!opt.dump_console.empty()) {
+        console_f = fopen(opt.dump_console.c_str(), "wb");
+        if (!console_f) fprintf(stderr, "cannot write %s\n", opt.dump_console.c_str());
+    }
+
     Vsim_top *top = new Vsim_top;
     top->reset       = 1;
     top->sclk        = 0;
     top->boot_pc     = boot_pc;
     top->gio_present = opt.testdev ? 1 : 0;
+    top->rxdb        = 1;                 // idle mark; nothing types at the console here
     top->clk         = 0;
 
     // ---- run ----
     std::string console;
     std::map<uint32_t, uint64_t> hits;
+    struct Unclaimed { uint64_t count = 0, first = 0, last = 0; unsigned we = 0, re = 0; };
+    std::map<uint32_t, Unclaimed> unclaimed;
     uint64_t cycle = 0, traced = 0, txns = 0;
 
     // No-forward-progress detector.
@@ -304,7 +299,11 @@ int main(int argc, char **argv)
     uint32_t stuck_addr = 0;
     uint64_t stuck_hits = 0;
 
-    UartRx uart;
+    UartRx   uart;
+    UartTx   utx;
+    size_t   type_at = 0;          // next --type string to send
+    size_t   type_seen_from = 0;   // a trigger only counts after the last send
+    uint64_t last_console = 0;     // cycle of the last byte the machine printed
     int rc = -1;
     const char *stop_reason = "max-cycles";
     // With the real SCC in the core, a bare-metal image that never programs
@@ -328,14 +327,42 @@ int main(int argc, char **argv)
         // on the ratio.
         if ((cycle & (SCLK_DIV - 1)) == 0) top->sclk = !top->sclk;
 
-        if (opt.uart) uart.sample(cycle, top->txdb);
+        // Always decode the wire, not just under --uart: the measured bit time
+        // is what --type sends at, and it costs a comparison per cycle.
+        uart.sample(cycle, top->txdb);
+        utx.step(cycle, uart.bit_time);
+        top->rxdb = utx.line;
+
+        // Send the next --type string once the machine has stopped talking.
+        // Waiting for quiet rather than for a particular prompt string keeps
+        // this useful for "[Press any key to continue.]" and for the Command
+        // Monitor alike, and avoids matching a prompt inside a diagnostic.
+        if (type_at < opt.type.size() && uart.bit_time && !utx.busy() &&
+            last_console && cycle - last_console > opt.idle_cycles) {
+            const std::string &trig = opt.type[type_at].first;
+            bool armed = trig.empty() ||
+                         console.find(trig, type_seen_from) != std::string::npos;
+            if (armed) {
+                const std::string &text = opt.type[type_at].second;
+                for (unsigned char c : text) utx.queue.push_back(c);
+                fprintf(stderr, "[%10llu] typing %zu bytes at the console%s%s\n",
+                        static_cast<unsigned long long>(cycle), text.size(),
+                        trig.empty() ? "" : " after ", trig.c_str());
+                fflush(stderr);
+                type_at++;
+                type_seen_from = console.size();
+                last_console = cycle;      // do not fire again until it answers
+            }
+        }
 
         if (top->tx_valid) {
             last_progress = cycle;
+            last_console  = cycle;
             char c = static_cast<char>(top->tx_data);
             console.push_back(c);
             fputc(c, stdout);
-            if (c == '\n') fflush(stdout);
+            if (console_f) fputc(c, console_f);
+            if (c == '\n') { fflush(stdout); if (console_f) fflush(console_f); }
         }
 
         if (top->bus_ack) {
@@ -362,9 +389,18 @@ int main(int argc, char **argv)
             if (a == stuck_addr) stuck_hits++; else { stuck_addr = a; stuck_hits = 1; }
         }
 
-        if (top->bus_unclaimed)
-            fprintf(stderr, "[%10llu] unclaimed bus cycle at %08x\n",
-                    static_cast<unsigned long long>(cycle), top->bus_addr);
+        // Unclaimed cycles are collected, not printed: an undecoded register
+        // in a poll loop produces one line per iteration and buries everything
+        // else. The summary on exit is what actually answers "what does the
+        // PROM want next", which is the whole reason this signal exists.
+        if (top->bus_unclaimed) {
+            Unclaimed &u = unclaimed[top->bus_addr];
+            if (!u.count) u.first = cycle;
+            u.last = cycle;
+            u.count++;
+            u.we |= top->bus_we ? 1u : 0u;
+            u.re |= top->bus_we ? 0u : 1u;
+        }
 
         // Count rising edges only; error_exception latches high for the rest
         // of the run once anything has trapped.
@@ -391,10 +427,12 @@ int main(int argc, char **argv)
             while (td_seen < td.size()) {
                 char c = td[td_seen++];
                 last_progress = cycle;
+                last_console  = cycle;
                 if (c == '\r') continue;
                 console.push_back(c);
                 fputc(c, stdout);
-                if (c == '\n') fflush(stdout);
+                if (console_f) fputc(c, console_f);
+                if (c == '\n') { fflush(stdout); if (console_f) fflush(console_f); }
             }
         }
 
@@ -415,6 +453,15 @@ int main(int argc, char **argv)
                     stuck_addr, reg_name(stuck_addr),
                     static_cast<unsigned long long>(stuck_hits));
             stop_reason = "stuck";
+            break;
+        }
+
+        // A scripted PROM session knows when it is finished; without this it
+        // would sit out the whole no-progress timer after its last command.
+        if (!opt.stop_on.empty() && !utx.busy() &&
+            console.find(opt.stop_on) != std::string::npos) {
+            stop_reason = "stop-on";
+            rc = 0;
             break;
         }
 
@@ -481,6 +528,29 @@ int main(int argc, char **argv)
         }
     }
 
+    if (!unclaimed.empty()) {
+        // Sorted by address, not by count: the point is to read this as a map
+        // of the holes in the decode, and adjacent registers of one missing
+        // device should sit together.
+        uint64_t total = 0;
+        for (const auto &e : unclaimed) total += e.second.count;
+        printf("unclaimed bus cycles: %llu, at %zu distinct addresses\n",
+               static_cast<unsigned long long>(total), unclaimed.size());
+        size_t shown = 0;
+        for (const auto &e : unclaimed) {
+            if (shown++ >= 32) {
+                printf("  ... and %zu more addresses\n", unclaimed.size() - 32);
+                break;
+            }
+            printf("  %08x %-16s %-3s x%-8llu  first %llu last %llu\n",
+                   e.first, reg_name(e.first),
+                   e.second.we && e.second.re ? "R/W" : e.second.we ? "W" : "R",
+                   static_cast<unsigned long long>(e.second.count),
+                   static_cast<unsigned long long>(e.second.first),
+                   static_cast<unsigned long long>(e.second.last));
+        }
+    }
+
     if (opt.hot) {
         std::vector<std::pair<uint32_t, uint64_t>> v(hits.begin(), hits.end());
         std::sort(v.begin(), v.end(),
@@ -491,10 +561,7 @@ int main(int argc, char **argv)
                    static_cast<unsigned long long>(v[i].second));
     }
 
-    if (!opt.dump_console.empty()) {
-        FILE *f = fopen(opt.dump_console.c_str(), "wb");
-        if (f) { fwrite(console.data(), 1, console.size(), f); fclose(f); }
-    }
+    if (console_f) fclose(console_f);
 
     delete top;
     return rc < 0 ? 1 : rc;
