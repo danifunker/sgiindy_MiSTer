@@ -258,34 +258,57 @@ Working:
 - A disk image attaches with `--disk ID=PATH`, and the block device moves
   512-byte blocks through the shared sector buffer.
 
-### Open: six phantom disconnects on the bus scan
+### Solved: six phantom disconnects on the bus scan — it is the missing interrupt line
 
-POST prints, for IDs 2 through 7:
+POST printed, for IDs 2 through 7:
 
 ```
 sc0,2,0: cmd=0x12 illegal disconnection interrupt: phase 0.  Resetting SCSI bus
 ```
 
-**The oracle says this is ours.** IRIS, running the same PROM with the same
-blank image, prints none of these — it goes straight to `dks0d1s0: volume
-header not valid`, which is the right answer for a blank disk. So the PROM is
-not being unreasonable; the chip model is answering an empty ID wrongly.
+IRIS, on the same PROM and the same blank image, printed none. So the fault was
+ours, and the PROM's own code says exactly what it wants. `FUN_bfc1e134` is the
+SCSI interrupt handler; the message is at `0xBFC1E358`, and the only two ways
+past it are:
 
-What is known:
+```
+bfc1e248  beq   $v1, 0x85, bfc1e304    ; status == DISCONNECT?
+bfc1e30c  bne   $a3, 0x43, bfc1e34c    ; COMMAND_PHASE == 0x43 -> fine
+bfc1e34c  bne   $a0, 4,    bfc1e358    ; COMMAND != 0x04 -> print
+bfc1e354  beqz  $a3,       bfc1e6e8    ; COMMAND == 4 and phase == 0 -> silent
+```
 
-- The driver reads `SCSI_STATUS = 0x42` (SELECTION_TIMEOUT) and
-  `COMMAND_PHASE = 0x00`, which is what the datasheet says a timeout looks
-  like, and yet reports a disconnection.
-- ID 1 never appears in the list, with or without a disk attached, so it is
-  not simply "every empty ID".
-- Two hypotheses have been tested and disproved: ATN left asserted after a
-  timeout, and selection latching the *level* of a shared BSY rather than its
-  rising edge. Both were real defects and are fixed; neither was this.
-- IRIS's own comment at `wd33c93a.rs:1756` says IRIX's driver consumes **two**
-  interrupts on a selection timeout — `0x42`, then `0x41` (UNEXPECTED_DISCONNECT)
-  — "consumed by wd33c93_poll's wd33c93_loop call". This model raises one.
-  That is the most promising lead and has not been tried.
+`$a0` and `$a3` are the **COMMAND** and **COMMAND_PHASE** registers, read out of
+the chip at the top of the handler. So a disconnect is only accepted quietly
+when the chip still says "the last command I was given was DISCONNECT".
 
-The way to settle it is a register-level differential against IRIS for a single
-empty-ID selection, rather than more reasoning about what the driver might
-want.
+Instrumenting the status register settled it:
+
+```
+WD SSR 42 -> 85  state=0 cmdphase=43 cmd=04    the DISCONNECT command lands
+WD SSR read = 85 cmdphase=00 cmd=08            the handler reads it much later
+```
+
+Between the two, the driver had already written `COMMAND_PHASE = 0`,
+`DESTINATION_ID`, and `COMMAND = 0x08` for the **next** ID. By the time the
+handler looked, the chip no longer said `0x04`.
+
+**Nothing is wrong with the disconnect itself.** What is wrong is that
+`sgi_indy.sv` ties INT2's sources to zero, so `sgi_scsi.sv`'s `irq` output goes
+nowhere and the CPU takes no interrupt. The driver polls instead, and polls
+*after* it has reprogrammed the chip. On real hardware the ISR runs on the
+interrupt line, before the next command is set up, and reads a chip that still
+says `0x04`.
+
+Two smaller defects were found and fixed along the way, neither of them this:
+ATN left asserted after a selection timeout, and selection latching the *level*
+of a shared BSY rather than its rising edge.
+
+Also corrected: the DISCONNECT command sets `COMMAND_PHASE` to `0x00`
+(`command_phase::DISCONNECTED`), not `0x43`. `0x43` was a guess from the
+handler's first comparison; IRIS uses `0x00` (`wd33c93a.rs:1778`) and the
+handler accepts it through the second.
+
+**Next:** wire `scsi_irq` into INT2 `LOCAL0` bit 1 and INT2 into the CPU. That
+is the "interrupt-era" work `sgi_indy.sv` defers, and this is the first thing
+that actually needs it.

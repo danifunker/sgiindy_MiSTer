@@ -129,6 +129,14 @@ module wd33c93 #(
     localparam logic [7:0] CP_DISCONNECTED = 8'h00;
     localparam logic [7:0] CP_SELECTED     = 8'h10;
     localparam logic [7:0] CP_CMD_START    = 8'h30;   // +n as CDB bytes go out
+    // A clean disconnect sets BOTH of these. The PROM's SCSI interrupt handler
+    // at 0xBFC1E304 reads COMMAND_PHASE, and on status 0x85 prints "illegal
+    // disconnection interrupt: phase %x" unless the phase is exactly 0x43:
+    //     bfc1e248  beq  $v1, 0x85, ...      ; status == DISCONNECT
+    //     bfc1e30c  bne  $a3, 0x43, ...      ; phase != 0x43 -> complain
+    // Reporting 0x85 with the phase left at zero is what made a scan of the
+    // empty IDs print six of those lines a boot.
+    localparam logic [7:0] CP_DISCONNECT_OK = 8'h43;
     localparam logic [7:0] CP_XFER_COUNT   = 8'h46;   // data done, TC = 0
     localparam logic [7:0] CP_RECV_STATUS  = 8'h47;
     localparam logic [7:0] CP_STATUS_RECVD = 8'h50;   // status byte in TARGET_LUN
@@ -301,6 +309,12 @@ module wd33c93 #(
                                             scsi_sel <= 1'b0;
                                             scsi_ack <= 1'b0;
                                             scsi_atn <= 1'b0;
+                                            // Phase 0, not 0x43: IRIS uses
+                                            // command_phase::DISCONNECTED here
+                                            // (wd33c93a.rs:1778) and the PROM's
+                                            // handler accepts it, given the
+                                            // COMMAND register still reads 0x04.
+                                            reg_file[R_CMD_PHASE]   <= CP_DISCONNECTED;
                                             reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
                                             int_pending <= 1'b1;
                                         end
@@ -342,7 +356,15 @@ module wd33c93 #(
                         // Reading the status register is how a driver
                         // acknowledges the interrupt, so it is the one read
                         // with a side effect.
-                        if (ar == R_SCSI_STATUS) int_pending <= 1'b0;
+                        if (ar == R_SCSI_STATUS) begin
+                            int_pending <= 1'b0;
+                            // The status read is also how LCI is acknowledged:
+                            // the driver reads it, then re-issues the command
+                            // that was ignored. Left set, it makes the PROM's
+                            // handler take its last-command-ignored path on
+                            // every interrupt from then on.
+                            lci <= 1'b0;
+                        end
                         if (ar == R_DATA)        dbr         <= 1'b0;
                         if (ar != R_SCSI_STATUS && ar != R_DATA && ar != R_AUX_STATUS)
                             ar <= ar + 5'd1;
@@ -404,8 +426,11 @@ module wd33c93 #(
                 // DBR is what tells it which way round it is.
                 ST_XFER: begin
                     if (!scsi_bsy) begin
-                        // The target let go of the bus mid-transfer.
+                        // The target let go of the bus mid-transfer. Still a
+                        // clean disconnect as far as the driver is concerned,
+                        // so the phase has to say so - see CP_DISCONNECT_OK.
                         cip <= 1'b0;
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
                         reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
                         int_pending <= 1'b1;
                         state <= ST_IDLE;
