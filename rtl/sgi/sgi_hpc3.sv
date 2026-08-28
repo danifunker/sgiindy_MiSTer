@@ -259,14 +259,22 @@ module sgi_hpc3 (
     // ---- write data ------------------------------------------------------
     // be[7-i] guards the byte at addr+i: bytes 0..3 are the w=0 register and
     // bytes 4..7 the w=1 one. Partial writes merge against the current value.
+    // The function's result goes into a variable before it is indexed, because
+    // Quartus 17.0 will not bit-select a function call - `f(x)[7:0]` is a
+    // syntax error there, reported as "near text '['; expecting ';'". Verilator
+    // accepts it, which is how it got written this way.
+    logic [31:0] rd_cur;
     always_comb begin
         wr_en[0] = sel && we && (|be[7:4]);
         wr_en[1] = sel && we && (|be[3:0]);
-        for (int w = 0; w < 2; w++)
+        rd_cur   = 32'h0;
+        for (int w = 0; w < 2; w++) begin
+            rd_cur = hpc3_rd(w[0]);
             for (int b = 0; b < 4; b++)
                 wval[w][24 - 8*b +: 8] =
                     be[7 - 4*w - b] ? wdata[56 - 32*w - 8*b +: 8]
-                                    : hpc3_rd(w[0])[24 - 8*b +: 8];
+                                    : rd_cur[24 - 8*b +: 8];
+        end
     end
 
     integer i;

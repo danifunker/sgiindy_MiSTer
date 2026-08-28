@@ -15,14 +15,20 @@ set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Standard Edition"
 set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 
-# NO VHDL_INPUT_VERSION HERE, and that is deliberate. The vendored CPU's
-# SyncFifo and dpram sources use plain, non-protected shared variables, which
-# VHDL-2008 downgrades from a warning to an ERROR - tools/gen_r4300_verilog.sh
-# has to pass GHDL -frelaxed for exactly this reason. Quartus defaults to
-# VHDL-1993, which accepts them, so the right move is to leave it alone.
+# THE CPU REQUIRES VHDL-2008 and will not compile without this. Its constants
+# are written as sized bit-string literals - `6x"00"` in cpu_FPU.vhd, `X"1FF"`
+# in cpu_instrcache.vhd - which is 2008 syntax with no VHDL-1993 equivalent.
+# Leaving it at the default gets 60-odd "VHDL syntax error ... near text
+# X"00"" and not one CPU entity elaborated.
 #
-# There is likewise no VERILOG_INPUT_VERSION: Quartus takes SystemVerilog from
-# the .sv extension, and sys/sys.tcl does not set it either.
+# An earlier version of this file left it out on purpose, reasoning from
+# tools/gen_r4300_verilog.sh's note that GHDL needs -frelaxed because 2008
+# makes non-protected shared variables an error. That was backwards: -frelaxed
+# is what lets those sources be compiled AS 2008, not an argument for 1993.
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
+
+# No VERILOG_INPUT_VERSION: Quartus takes SystemVerilog from the .sv extension,
+# and sys/sys.tcl does not set it either.
 
 set_global_assignment -name SDC_FILE sgiindy_syn.sdc
 

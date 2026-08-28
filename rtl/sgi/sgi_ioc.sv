@@ -233,12 +233,17 @@ module sgi_ioc #(
             for (int w = 0; w < 2; w++) begin
                 if (wr_en[w]) begin
                     logic [5:0] idx;
+                    logic [7:0] wr_byte_v;
                     idx = {addr[7:3], w[0]};
                     // TMR_CLR is a write-only strobe, not a register: a 1 bit
                     // clears the matching MAP_STAT latch. Only the two counter
                     // bits are clearable; the rest of MAP_STAT is a level.
+                    // Via a variable: Quartus 17.0 will not bit-select a
+                    // function call, so `ioc_wr_byte(w[0])[1:0]` is a syntax
+                    // error there even though Verilator takes it.
+                    wr_byte_v = ioc_wr_byte(w[0]);
                     if (idx == I_TMR_CLR)
-                        tmr_stat <= tmr_stat & ~ioc_wr_byte(w[0])[1:0];
+                        tmr_stat <= tmr_stat & ~wr_byte_v[1:0];
                     // The three status registers are read-only, the timer has
                     // its own state; everything else, including all the masks,
                     // is plain storage.

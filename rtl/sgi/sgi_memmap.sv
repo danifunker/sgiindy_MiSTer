@@ -116,7 +116,13 @@ module sgi_memmap #(
     logic [31:0] amask [4];
     logic        bhit  [4];
 
-    for (genvar b = 0; b < 4; b++) begin : g_bank
+    // EXPLICIT generate/genvar, not `for (genvar b = ...)`. The inline form is
+    // SystemVerilog that Verilator takes and Quartus 17.0 does not - it stops
+    // parsing at the `for` and reports "expecting endmodule", then cascades
+    // into a pile of redeclaration errors that look nothing like the cause.
+    genvar b;
+    generate
+    for (b = 0; b < 4; b++) begin : g_bank
         // (MSIZE + 1) * 4 MB, halved when the SIMM carries two subbanks.
         wire [31:0] conf = ({27'b0, half[b][12:8]} + 32'd1) << 22;
         assign vld[b]   = half[b][13] && (bank_mb[b] != 32'd0);
@@ -128,6 +134,7 @@ module sgi_memmap #(
         assign amask[b] = (bank_mb[b] * 32'd1048576) - 32'd1;
         assign bhit[b]  = vld[b] && (addr >= base[b]) && ((addr - base[b]) < limit[b]);
     end
+    endgenerate
 
     always_comb begin
         hit    = 1'b0;
