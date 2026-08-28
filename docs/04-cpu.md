@@ -48,7 +48,9 @@ wired at `DE1_TOP.v:453` with everything nonessential tied off:
 
 - `INSTRCACHEON` = `DATACACHEON` = 0 — **caches disabled**, so all traffic is
   single word/doubleword through `mem_*`, and the DDR3/RDRAM cache-fill path is
-  never exercised.
+  never exercised. (This describes the DE1 sandbox. In *this* core both caches
+  are on and that fill path is answered from the SGI bus — see
+  `docs/10-r4300-integration.md`.)
 - `clk1x` = `clk93` = `clk2x` = one clock, to avoid CDC risk during bring-up.
 - `irqRequest` = `irqCartRequest` = 0 — **no interrupts at all**.
 - `cpuPaused` tied low; run/stop is via `ce_1x`/`ce_93` gated on a DIP switch.

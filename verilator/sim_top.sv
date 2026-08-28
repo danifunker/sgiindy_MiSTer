@@ -23,10 +23,19 @@ module sim_top
     input  wire        sclk,
     input  wire [31:0] boot_pc,
     input  wire        gio_present,
+    // Primary caches, so a failure can be bisected onto one of them from the
+    // command line rather than by rebuilding. Both on for a normal run.
+    input  wire        icache_en,
+    input  wire        dcache_en,
 
     // Serial receive for the console channel. Idle mark is 1; the GUI harness
     // shifts typed characters out on it so the Command Monitor can be driven.
     input  wire        rxdb,
+
+    // Host input devices, in MiSTer's decoded PS/2 form. The harness toggles
+    // the top bit of each to signal an event, exactly as hps_io does.
+    input  wire [10:0] ps2_key,
+    input  wire [24:0] ps2_mouse,
 
     // Console tap: one pulse per byte handed to the SCC transmitter.
     output wire        tx_valid,
@@ -83,6 +92,11 @@ module sim_top
         .reset         (reset),
         .sclk          (sclk),
         .boot_pc       (boot_pc),
+        .icache_en     (icache_en),
+        .dcache_en     (dcache_en),
+
+        .ps2_key       (ps2_key),
+        .ps2_mouse     (ps2_mouse),
 
         .ram_req       (ram_req),
         .ram_we        (ram_we),

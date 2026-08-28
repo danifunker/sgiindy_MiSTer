@@ -5,7 +5,7 @@ Three pieces, only one of which is written here:
 | | What | Where from |
 |---|---|---|
 | **Target** | `scsi.v` — a target-only SCSI device: the bus phase machine, REQ/ACK, and the disk command set (TEST UNIT READY, INQUIRY, READ CAPACITY, MODE SENSE/SELECT, REQUEST SENSE, READ/WRITE 6 and 10, FORMAT). Reads and writes blocks through MiSTer's `sd_lba`/`sd_buff_*` interface. | Vendored from the MacLC MiSTer core |
-| **Initiator** | `wd33c93.sv` — the WD33C93B the Indy actually has | Written here |
+| **Initiator** | `wd33c93.sv` — the WD33C93B the Indy actually has, and `sgi_scsi.sv`, which decodes its two ports off the bus and arbitrates between the targets | Written here |
 | **DMA** | the HPC3 SCSI DMA engine | `sgi_hpc3.sv` |
 
 ## Why a Mac core's SCSI target works on an SGI
@@ -23,6 +23,10 @@ command set and CD audio, which pulls in `cd_audio.sv` through a
 
 `scsi_vendor.vh` sets the 8-byte INQUIRY vendor string. It is deliberately a
 separate file so a build can change it without touching tracked source.
+
+`cd_audio.sv` is deliberately **not** vendored. It is only reachable through
+`generate if (CDROM != 0)`, and it pulls in a volume lookup table this core has
+no use for.
 
 ## Phase encoding
 

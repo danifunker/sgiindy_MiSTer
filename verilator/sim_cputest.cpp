@@ -30,6 +30,7 @@
 #include "verilated.h"
 #include "sim_devices.h"
 #include "sim_uart.h"
+#include "sim_ps2.h"
 
 #include <cstdio>
 #include <cstring>
@@ -119,6 +120,14 @@ struct Options {
     // mean the core itself is wedged are fatal by default.
     uint32_t fatal_errors = (1u << 1) | (1u << 4);   // stall, fifo
     bool     uart         = false;   // decode the txdb line as well
+    // Keystrokes to send at the 8042, as (trigger, text). Same shape as
+    // --type, but they arrive at the keyboard port rather than the serial
+    // console, which is the only way to exercise the PC keyboard path.
+    std::vector<std::pair<std::string, std::string>> keys;
+    // Primary caches. Both on; the flags exist to bisect a failure onto one
+    // of them without rebuilding, which is how the fill path was brought up.
+    bool     icache       = true;
+    bool     dcache       = true;
     // Strings to send at the console, in order. `first` is an optional trigger
     // that must have appeared in the console output before `second` is sent.
     std::vector<std::pair<std::string, std::string>> type;
@@ -181,6 +190,10 @@ static void usage()
         "  --trace-count N   how many transactions to print (default 2000)\n"
         "  --hot             on exit, list the most-accessed addresses\n"
         "  --uart            also decode the SCC's txdb line and compare\n"
+        "  --key TEXT        type TEXT at the PC keyboard port (not the console)\n"
+        "  --key-on TRIG TEXT  the same, once TRIG has appeared on the console\n"
+        "  --no-icache       run with the primary instruction cache off\n"
+        "  --no-dcache       run with the primary data cache off\n"
         "  --type STR        type STR at the console once it goes quiet; repeatable.\n"
         "                    Understands \\r \\n \\t. Needs the machine to have\n"
         "                    transmitted first, to measure the bit rate\n"
@@ -213,6 +226,13 @@ int main(int argc, char **argv)
         else if (a == "--trace")       opt.trace = true;
         else if (a == "--hot")         opt.hot = true;
         else if (a == "--uart")        opt.uart = true;
+        else if (a == "--key")         opt.keys.push_back({"", unescape(next("--key"))});
+        else if (a == "--key-on") {
+            std::string ktrig = unescape(next("--key-on"));
+            opt.keys.push_back({ktrig, unescape(next("--key-on"))});
+        }
+        else if (a == "--no-icache")   opt.icache = false;
+        else if (a == "--no-dcache")   opt.dcache = false;
         else if (a == "--type")        opt.type.push_back({"", unescape(next("--type"))});
         else if (a == "--type-on") {
             std::string trig = unescape(next("--type-on"));
@@ -254,8 +274,9 @@ int main(int argc, char **argv)
         if (opt.boot_pc == 0xBFC00000) boot_pc = r.entry;
     }
 
-    printf("boot PC %08x, RAM %u MB, testdev %s\n",
-           boot_pc, opt.ram_mb, opt.testdev ? "yes" : "no");
+    printf("boot PC %08x, RAM %u MB, testdev %s, I$ %s, D$ %s\n",
+           boot_pc, opt.ram_mb, opt.testdev ? "yes" : "no",
+           opt.icache ? "on" : "off", opt.dcache ? "on" : "off");
     fflush(stdout);
 
     // Opened up front and flushed per line, so a long run can be watched with
@@ -271,7 +292,11 @@ int main(int argc, char **argv)
     top->sclk        = 0;
     top->boot_pc     = boot_pc;
     top->gio_present = opt.testdev ? 1 : 0;
+    top->icache_en   = opt.icache ? 1 : 0;
+    top->dcache_en   = opt.dcache ? 1 : 0;
     top->rxdb        = 1;                 // idle mark; nothing types at the console here
+    top->ps2_key     = 0;
+    top->ps2_mouse   = 0;
     top->clk         = 0;
 
     // ---- run ----
@@ -301,6 +326,8 @@ int main(int argc, char **argv)
 
     UartRx   uart;
     UartTx   utx;
+    Ps2Injector ps2;
+    size_t   key_at = 0;
     size_t   type_at = 0;          // next --type string to send
     size_t   type_seen_from = 0;   // a trigger only counts after the last send
     uint64_t last_console = 0;     // cycle of the last byte the machine printed
@@ -332,6 +359,23 @@ int main(int argc, char **argv)
         uart.sample(cycle, top->txdb);
         utx.step(cycle, uart.bit_time);
         top->rxdb = utx.line;
+        ps2.step(top, cycle);
+
+        // Queue the next --key/--key-on batch once its trigger has been seen
+        // and the previous batch has drained.
+        if (key_at < opt.keys.size() && ps2.idle()) {
+            const std::string &ktrig = opt.keys[key_at].first;
+            if (ktrig.empty() || console.find(ktrig) != std::string::npos) {
+                for (char c : opt.keys[key_at].second) {
+                    uint8_t code; bool shift;
+                    if (!ps2_code_for_ascii(c, code, shift)) continue;
+                    if (shift) ps2.push_key(0x12, false, true);   // left shift down
+                    ps2.tap(code);
+                    if (shift) ps2.push_key(0x12, false, false);
+                }
+                key_at++;
+            }
+        }
 
         // Send the next --type string once the machine has stopped talking.
         // Waiting for quiet rather than for a particular prompt string keeps

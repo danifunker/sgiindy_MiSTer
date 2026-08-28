@@ -4,10 +4,11 @@ An R4300i made to present as the R4400 an Indy actually shipped with. What was
 built, what had to change, and what is measured. This is the document to read
 before touching `rtl/cpu/`.
 
-Status: **M1 complete.** The `cpu-tests` suite runs to completion under
-Verilator against full R4400 expectations and reports **2155 checks passed, 9
-failed across 240 tests**, against **2101 / 61** for IRIS's own R4400. Three
-tests fail; fifteen that IRIS fails now pass. See [Results](#results).
+Status: **M1 complete, and both primary caches are on.** The `cpu-tests` suite
+runs to completion under Verilator against full R4400 expectations and reports
+**2161 checks passed, 3 failed across 240 tests**, against **2101 / 61** for
+IRIS's own R4400. One test fails; fifteen that IRIS fails now pass. See
+[Results](#results) and [Caches](#caches).
 
 ## Getting the VHDL into Verilator
 
@@ -93,7 +94,7 @@ cannot select on it. `r4300_bus` therefore carries a `bus_aoff` sideband — the
 access's byte offset — which is what the SCC's four stride-4 ports select on.
 
 The adapter's comment header flagged the unaligned-load family (LWL/LWR/LDL/
-LDR with the caches off) as a likely gap, because `cpu.vhd` aligns the address
+LDR on the uncached path) as a likely gap, because `cpu.vhd` aligns the address
 it hands the *cache* for those but not the address it puts on `mem_*`. The
 suite settled it: all eighteen `mem/` tests pass, including the whole unaligned
 family at every offset and every alignment-fault case. The concern was real and
@@ -182,10 +183,82 @@ deliberate and it is safe in the direction that matters:
   direction is a step *coarser* than a line, which skips lines — and reporting
   16 bytes against 32-byte hardware cannot do that.
 
-Both errors are on the safe side, which is what makes this defensible while the
-caches are switched off entirely. It stops being defensible the moment they are
-turned on: at that point either the geometry becomes real or the report goes
-back to the truth. `cpu_cop0.vhd` says so at the constant.
+Both errors are on the safe side. That argument was made with the caches off and
+carried an explicit warning that it stopped being defensible the moment they
+were turned on. They are on now, so it has been re-checked — and it holds, for
+the reason above rather than by luck:
+
+- The **instruction** cache is 16 KB with 32-byte lines, indexed on address
+  bits 13:5. Reporting 16-byte lines makes a range flush issue two operations
+  per line. `cache/icache_coherency` patches an instruction and re-runs it
+  through exactly that path, and passes.
+- The **data** cache is 8 KB with 16-byte lines, indexed on bits 12:4.
+  Reporting 16 KB makes an index sweep run indices 512..1023, which alias onto
+  0..511; every real line is flushed, some of them twice.
+  `cache/index_tag_rt` and `cache/hit_inv_discards` both pass.
+
+Making the report truthful is not free, either: `cache/geometry` asserts the
+R4400's 16 KB/16-byte for both caches, so honest geometry would fail a test
+that is right about the part this core claims to be. The lie is the R4400's
+geometry; the truth is the R4300's. `cpu_cop0.vhd` carries this note at the
+constant.
+
+### No secondary cache — the PC in R4400PC
+
+`Config.SC` (bit 17) is `1`, from `readValue(23 downto 16) <= "00000110"` in
+`cpu_cop0.vhd`. On an R4000-family part `SC = 1` means **no secondary cache**,
+which is what makes this an R4400**PC** rather than an SC.
+
+That is a deliberate decision, not an oversight, and it is worth stating because
+nothing else in the RTL says so:
+
+- **Nothing needs building.** An L2 model is a large amount of work — tags, a
+  fill path, a writeback path, and a second set of `cache` operations — for no
+  benefit that any of the milestones through M6 can observe.
+- **The suite already adapts.** `cache_detect()` sets `have_l2` from this bit
+  (`harness/testlib.c:115`), and every `CACHE_SD` secondary-cache operation in
+  the harness is gated on it (`testlib.c:121,129,140`), as is the secondary
+  test in `cache.c:278`. Reporting no L2 removes those tests rather than
+  failing them.
+- **The dangerous direction is the other one.** `SC = 0` would advertise a
+  secondary cache that does not exist, and both IRIX and the suite would then
+  issue `CACHE_SD` operations against nothing.
+
+The residual question is whether IRIX on IP24 ever infers a secondary cache
+from `PRId` rather than honouring `Config.SC` — the Indy's R4400 options were
+secondary-cache parts. `Config.SC` is the architectural way to answer this and
+a correct kernel honours it, so the risk is low, but it is the one assumption
+here that has not been tested against IRIX.
+
+### Physical address width: 36 bits architecturally, 32 in this core
+
+An R4000/R4400 has a **36-bit** physical address: `EntryLo`'s PFN field is 24
+bits wide at `[29:6]`, which with a 4 KB page gives 24 + 12 = 36. The R4300i
+is a 32-bit-physical part, and the vendored core is built that way in a place
+that is easy to miss, because the CP0 register is the right width and only the
+TLB behind it is not:
+
+- `cpu_cop0.vhd:434` reads and `:775` writes `EntryLo0.PFN` as the full 24 bits,
+  so a write/read round-trip **through the register** keeps every bit;
+- but `:1232` stores only `phyAdr(19 downto 0)` into the TLB entry, and `:1026`
+  zero-extends it back on `tlbr`. So a round-trip **through the TLB** silently
+  drops PFN bits 23:20;
+- and `cpu.vhd:43` declares `mem_address` as 32 bits, so even a full-width TLB
+  could not put a >32-bit address on the bus.
+
+Nothing on an Indy needs it. The IP24 physical map ends below `0x30000000`,
+and no amount of memory this machine can hold reaches 4 GB. **But the
+`cpu-tests` suite does not catch it either**: `tests/tlb/tlb.c` builds every
+`EntryLo` from `scratch_phys()`, a real RAM address around `0x08xxxxxx`, so
+the top four PFN bits are never set and the truncation is invisible. All ten
+TLB tests pass over a defect they cannot see.
+
+That combination — architecturally wrong, unexercised by the suite, and
+harmless on this machine — is the shape of a bug that surfaces years later as
+something inexplicable. Recorded here rather than fixed: widening it means
+carrying four more bits through the entry RAM, the mini-TLBs and the bus, for
+a case no Indy generates. A test that maps a PFN above 2^32 and reads it back
+would at least make the limit assert itself, and is the cheap half of the fix.
 
 ### Going back
 
@@ -193,8 +266,10 @@ back to the truth. `cpu_cop0.vhd` says so at the constant.
 size, `Config`), `cpu.vhd` (COP2 and the MIPS IV COP1 codes) and one nibble in
 `cpu_FPU.vhd`'s `FIR`. Setting them false restores the R4300 the core is built
 from, and `TLB_ENTRIES` follows automatically so the part stays self-consistent.
-Both settings are tested: 2155/9 as an R4400, 2114/9 as an R4300, the same
-three tests failing either way. That is why the suite's `CPU_R4300` cell is
+Both settings were tested when the presentation was written: 2155/9 as an
+R4400 and 2114/9 as an R4300, the same three tests failing either way. The
+R4400 figure is now 2161/3; the R4300 build has not been re-measured since the
+caches came on. That is why the suite's `CPU_R4300` cell is
 still worth having even though the default build never uses it.
 
 ## The suite's third CPU
@@ -242,14 +317,14 @@ tests/run-cputest.sh
 | | checks passed | failed | tests failing |
 |---|---:|---:|---:|
 | IRIS, R4400 expectations | 2101 | 61 | 25 |
-| **this core, as R4400** | **2155** | **9** | **3** |
-| this core, as R4300 | 2114 | 9 | 3 |
+| **this core, as R4400, caches on** | **2161** | **3** | **1** |
+| this core, as R4400, caches off | 2155 | 9 | 3 |
+| this core, as R4300, caches off | 2114 | 9 | 3 |
 
-Still failing — the same three in both modes:
+Still failing — one test:
 
 | Test | Why | What to do |
 |---|---|---|
-| `cache/index_tag_rt`, `cache/hit_inv_discards` | Both caches are off. `cpu_instrcache`/`cpu_datacache` fill from the N64's RDRAM/DDR3 port, which has nothing behind it here | Revisit when the fill path is wired to SGI memory (M8). Leaving them failing keeps that visible |
 | `fpu/vec_cvt_from_l` | `cvt.s.l` / `cvt.d.l` truncate the source to its low 56 bits, so any \|value\| ≥ 2⁵⁶ converts wrongly | Diagnosed at `cpu_FPU.vhd`'s CIS/CID stage 0 and commented there. Fixing it means widening the normalise-and-round datapath from 57 bits and re-deriving the sticky bit, since the suite checks Inexact as well as the value |
 
 Fifteen tests pass here that IRIS fails — mostly FPU trap and flag semantics,
@@ -258,13 +333,130 @@ from the manual. The core should be aiming to pass those, and it does.
 
 ## Caches
 
-Off. `INSTRCACHEON` and `DATACACHEON` are tied low in `sgi_indy.sv` because the
-cache fill path talks to the N64's RDRAM/DDR3 controller directly rather than
-through `mem_*`, and that port is tied off in the wrapper. Everything runs
-uncached, single word or doubleword at a time, which costs about nine clocks
-per access and does not matter during bring-up.
+**On.** 16 KB direct-mapped instruction cache with 32-byte lines, 8 KB
+direct-mapped data cache with 16-byte lines, both virtually indexed and
+physically tagged, and both filled over the ordinary SGI bus.
 
-Turning them on is an M8-era job and needs three things: the fill path pointed
-at SGI memory, the mixed-width `dpram_dif` sub-word ordering re-derived against
-a cache test (`rtl/cpu/prim/dpram.vhd` documents the assumption), and the two
-cache tests above.
+### How a fill happens
+
+The request side was already there. `cpu.vhd` puts a fill into the same write
+FIFO as any other access and tags it with `mem_size`: `"010"` is a data-cache
+line, `"100"` an instruction-cache line, and the FIFO has already aligned the
+address to the line. What was missing was the answer, because the caches do
+not read `mem_dataRead` — they take beats on `ddr3_DOUT`/`ddr3_DOUT_READY`,
+which is upstream's connection to the N64's RDRAM controller.
+
+`rtl/cpu/r4300_bus.sv` now supplies that from ordinary bus reads: one clock of
+`fill_grant`, then two or four consecutive doubleword reads issued back to
+back, then `mem_done`. Each beat goes through the same address decode as
+everything else, so a line that ran off the end of a MEMCFG bank or out of the
+PROM gets whatever those devices answer, beat by beat, and needs no rule of its
+own.
+
+Three ordering facts are load-bearing, and two of them cost a debugging session
+each:
+
+- **`fill_grant` must not overlap a data beat.** Grant takes priority over the
+  cache's beat counter, so a beat that arrives with it is dropped.
+- **`mem_done` must come at least one clock after the last beat.** The data
+  cache answers the access out of the line in the very cycle it sees
+  `ram_done`, reading port B of a RAM whose port A is writing that last beat on
+  the same edge — and for a store it merges the write in on port B on that same
+  edge. Read-during-write across ports is undefined, so overlapping them makes
+  the answer depend on process order. The symptom was a load of the second
+  doubleword of a line coming back stale, which presented as the test suite
+  jumping through a garbage pointer and taking 82,000 exceptions.
+- **The tag must be the address the cache will compare against.** See
+  `UPSTREAM.md`: moving the kseg0/kseg1 strip onto `mem1_address` had silently
+  made the instruction cache's tag physical while its compare stayed virtual.
+  Every fetch missed. It still returned correct instructions — it just read a
+  whole line to answer each one, for 3.5x the bus traffic of no cache at all.
+
+And one reset fact: **the CPU has to stay in reset until the tags are clear.**
+Each cache answers `SS_reset` by walking 512 tag entries one per clock, and
+neither looks at `reset_93`. The old four-clock settle in `r4300_wrap.vhd` let
+the first cached access land while the data cache was still clearing, where
+nothing latches it; `error_stall` fired 4096 clocks later. `SETTLE_CLOCKS` is
+1024 now.
+
+### Config.K0
+
+KSEG0 is cacheable only when `Config.K0 /= 2`. Upstream stores the field and
+lets software read it back, but nothing acts on it — an N64 never writes
+`Config`. The IP24 PROM writes it constantly: it comes out of reset with K0 = 2
+(uncached) and has a routine at `0xBFC04798` to switch it to 3 and one at
+`0xBFC047D8` to switch it back, bracketing everything that wants the caches.
+
+Only the encoding 2 means uncached, so every other value stays cacheable —
+including the reserved 0 this core resets to, which is what the cpu-tests suite
+runs with and the reason the suite is unaffected.
+
+Measured on the PROM boot to `hinv`, four builds of the same tree:
+
+| KSEG0 rule | bus transactions |
+|---|---:|
+| data cache off entirely | 3,612,073 |
+| **honouring K0** | **2,945,935** |
+| K0 ignored, KSEG0 always cacheable | 2,945,935 |
+| KSEG0 forced uncacheable | 4,429,560 |
+
+The last row is the control that says the gate is live at all — force it and
+the machine's traffic changes completely. The middle two being *identical*
+says the PROM asks for caching wherever it actually uses KSEG0, which is
+exactly what those two routines are for. So honouring K0 costs this boot
+nothing; it is there for the software that does not ask, which means IRIX's
+early boot and any diagnostic that wants a genuinely uncached view.
+
+(Do not read the last row as "the same as the data cache off". It is not, in
+either direction: mapped pages stay cached there, and the PROM's own cache
+diagnostics do a different amount of work when KSEG0 does not behave as it
+asked. Treat it as "clearly different", not as a clean delta.)
+
+### DATACACHETLBON
+
+1, against upstream's 0, so TLB-mapped data accesses go through the data cache
+too and honour the entry's coherency field. This is not optional here. With
+KSEG0 cached and mapped pages bypassing the cache, the two views of one
+physical page disagree: `tlb/translation_works` writes through KSEG0 and reads
+back through a mapping, and failed exactly that way.
+
+### What it bought
+
+The suite, run four ways:
+
+| | cycles | bus transactions | checks |
+|---|---:|---:|---|
+| both off | 17,138,359 | 1,977,165 | 2155 / 9 |
+| I-cache only | 3,815,305 | 368,415 | 2154 / 9 |
+| D-cache only | 16,125,846 | 1,813,951 | 2161 / 3 |
+| **both on** | **3,497,582** | **224,774** | **2161 / 3** |
+
+**4.9x fewer cycles and 8.8x fewer bus transactions.** The split is clean: the
+instruction cache is where the speed is, and the data cache is where the
+correctness is — it is what makes `cache/index_tag_rt` and
+`cache/hit_inv_discards` pass, because both are D-cache tests that could not
+run at all while `DATACACHEON` was low.
+
+(The I-cache-only column is one check short because `cp0/compare_sets_ip7`
+gives up after a fixed iteration count: run the loop faster and `Count` has not
+reached the deadline yet, so the test reports "timer did not fire" and skips a
+check. It still passes, and the shipping configuration does not hit it.)
+
+The mixed-width `dpram_dif` sub-word ordering that `rtl/cpu/prim/dpram.vhd`
+flagged as an assumption worth re-deriving against a cache test is now
+confirmed by those tests: narrow word `2k` is bits 31:0 of wide word `k`.
+
+### What it did not buy
+
+`hinv` still reports **16 Mhz**, and that is correct rather than disappointing.
+The figure comes from `FUN_bfc31594`, a 512-iteration two-instruction loop
+timed with CP0 `Count`, and that loop lives at `0xBFC3159C` — KSEG1, which the
+architecture defines as uncached and `fetchCache` therefore refuses to cache.
+The whole PROM runs from KSEG1, so **the instruction cache does nothing for a
+PROM boot at all**; the 34% drop in bus transactions above is entirely the data
+cache on KSEG0.
+
+The figure is not a clock rate and not an artefact of the simulation's fast
+timebases either. Doubling `RTC_TICK_DIV` and doubling `PIT_TICK_DIV` each
+leave it at 16, which rules out both the RTC and the 8254. It is a measurement
+of uncached instruction throughput and nothing else.

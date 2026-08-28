@@ -11,10 +11,18 @@
 # Add a line to EXPECT when the PROM starts printing something new. Do not
 # remove one to make the script pass.
 #
-# "Processor: 16 Mhz" is a MEASURED figure, not a claim the core makes: the
-# PROM times itself against the 8254, which simulation runs ten times fast
-# (sim_top.sv's PIT_TICK_DIV). Change that knob and this number changes with
-# it. The part that matters is "R4400, with FPU".
+# "Processor: 16 Mhz" is a MEASURED figure, not a claim the core makes, and it
+# is NOT the 8254 - an earlier version of this comment said it was. The PROM
+# times a fixed 512-iteration two-instruction loop (FUN_bfc31594) with CP0
+# Count, so what it reports is instruction throughput. Doubling PIT_TICK_DIV
+# and doubling RTC_TICK_DIV each leave it at 16, which rules out both
+# timebases; the loop lives at 0xBFC3159C, in uncached KSEG1, so the
+# instruction cache does not move it either. See docs/10-r4300-integration.md,
+# "What it did not buy". The part that matters is "R4400, with FPU".
+#
+# The run ends on "Mbytes" rather than on "Memory size:", which is the last
+# thing hinv prints: --stop-on fires on the cycle the substring completes, so
+# stopping on the label ends the run before the number it labels arrives.
 #
 #   tests/run-prom.sh [--no-build]
 
@@ -31,7 +39,6 @@ EXPECT=(
     "NVRAM checksum is incorrect"          # the RTC/NVRAM answers, and is blank
     "Running power-on diagnostics"         # POST started, so memory was found
     "SCSI controller 0 diagnostic"         # POST got past the memory tests
-    "PC keyboard/mouse controller"
     "Diagnostics failed"                   # POST finished and reported
     "System Maintenance Menu"              # the keystroke arrived: serial input
     "5) Enter Command Monitor"
@@ -48,6 +55,13 @@ FORBID=(
     "No usable memory found"               # the MEMCFG-driven memory decode
     "memory probe *FAILED*"                # ditto
     "Bank 0 memory diagnostics"            # ditto
+    # The 8042 answers its self-test, so the keyboard/mouse diagnostic passes
+    # and prints nothing at all. This used to be an EXPECT line, back when the
+    # ports read zero and the only question was whether POST got as far as
+    # complaining about them - see docs/12-chipset.md finding 10. Moved here
+    # rather than deleted: the machine now gets further, and a regression that
+    # brought the failure back would otherwise pass silently.
+    "PC keyboard/mouse controller"
 )
 
 if [[ "${1:-}" != "--no-build" ]]; then
@@ -64,7 +78,7 @@ echo "booting $(basename "$PROM") ..."
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'version\r' \
        --type-on 'PROM Monitor' 'hinv\r' \
-       --stop-on 'Memory size:' \
+       --stop-on 'Mbytes' \
        --console "$OUT" >/dev/null 2>&1
 
 fail=0

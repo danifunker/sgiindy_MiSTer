@@ -39,6 +39,7 @@
 #include "verilated.h"
 #include "sim_devices.h"
 #include "sim_uart.h"
+#include "sim_ps2.h"
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -143,6 +144,50 @@ static void usage()
         "  --run             start running immediately\n");
 }
 
+
+// SDL physical scancode -> PS/2 set-2 code, for the keys a US keyboard has in
+// the main block. SDL scancodes are already positional (USB HID order), so
+// this is a straight table rather than anything locale-dependent. `ext` marks
+// the codes a real keyboard prefixes with 0xE0.
+static bool sdl_to_ps2(int sc, uint8_t &code, bool &ext)
+{
+    struct Map { int sc; uint8_t code; bool ext; };
+    static const Map m[] = {
+        {SDL_SCANCODE_A,0x1C,0},{SDL_SCANCODE_B,0x32,0},{SDL_SCANCODE_C,0x21,0},
+        {SDL_SCANCODE_D,0x23,0},{SDL_SCANCODE_E,0x24,0},{SDL_SCANCODE_F,0x2B,0},
+        {SDL_SCANCODE_G,0x34,0},{SDL_SCANCODE_H,0x33,0},{SDL_SCANCODE_I,0x43,0},
+        {SDL_SCANCODE_J,0x3B,0},{SDL_SCANCODE_K,0x42,0},{SDL_SCANCODE_L,0x4B,0},
+        {SDL_SCANCODE_M,0x3A,0},{SDL_SCANCODE_N,0x31,0},{SDL_SCANCODE_O,0x44,0},
+        {SDL_SCANCODE_P,0x4D,0},{SDL_SCANCODE_Q,0x15,0},{SDL_SCANCODE_R,0x2D,0},
+        {SDL_SCANCODE_S,0x1B,0},{SDL_SCANCODE_T,0x2C,0},{SDL_SCANCODE_U,0x3C,0},
+        {SDL_SCANCODE_V,0x2A,0},{SDL_SCANCODE_W,0x1D,0},{SDL_SCANCODE_X,0x22,0},
+        {SDL_SCANCODE_Y,0x35,0},{SDL_SCANCODE_Z,0x1A,0},
+        {SDL_SCANCODE_1,0x16,0},{SDL_SCANCODE_2,0x1E,0},{SDL_SCANCODE_3,0x26,0},
+        {SDL_SCANCODE_4,0x25,0},{SDL_SCANCODE_5,0x2E,0},{SDL_SCANCODE_6,0x36,0},
+        {SDL_SCANCODE_7,0x3D,0},{SDL_SCANCODE_8,0x3E,0},{SDL_SCANCODE_9,0x46,0},
+        {SDL_SCANCODE_0,0x45,0},
+        {SDL_SCANCODE_RETURN,0x5A,0},{SDL_SCANCODE_ESCAPE,0x76,0},
+        {SDL_SCANCODE_BACKSPACE,0x66,0},{SDL_SCANCODE_TAB,0x0D,0},
+        {SDL_SCANCODE_SPACE,0x29,0},{SDL_SCANCODE_MINUS,0x4E,0},
+        {SDL_SCANCODE_EQUALS,0x55,0},{SDL_SCANCODE_LEFTBRACKET,0x54,0},
+        {SDL_SCANCODE_RIGHTBRACKET,0x5B,0},{SDL_SCANCODE_BACKSLASH,0x5D,0},
+        {SDL_SCANCODE_SEMICOLON,0x4C,0},{SDL_SCANCODE_APOSTROPHE,0x52,0},
+        {SDL_SCANCODE_GRAVE,0x0E,0},{SDL_SCANCODE_COMMA,0x41,0},
+        {SDL_SCANCODE_PERIOD,0x49,0},{SDL_SCANCODE_SLASH,0x4A,0},
+        {SDL_SCANCODE_CAPSLOCK,0x58,0},
+        {SDL_SCANCODE_LSHIFT,0x12,0},{SDL_SCANCODE_RSHIFT,0x59,0},
+        {SDL_SCANCODE_LCTRL,0x14,0},{SDL_SCANCODE_RCTRL,0x14,1},
+        {SDL_SCANCODE_LALT,0x11,0},{SDL_SCANCODE_RALT,0x11,1},
+        {SDL_SCANCODE_UP,0x75,1},{SDL_SCANCODE_DOWN,0x72,1},
+        {SDL_SCANCODE_LEFT,0x6B,1},{SDL_SCANCODE_RIGHT,0x74,1},
+        {SDL_SCANCODE_HOME,0x6C,1},{SDL_SCANCODE_END,0x69,1},
+        {SDL_SCANCODE_DELETE,0x71,1},{SDL_SCANCODE_INSERT,0x70,1},
+    };
+    for (const Map &e : m)
+        if (e.sc == sc) { code = e.code; ext = e.ext; return true; }
+    return false;
+}
+
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
@@ -231,7 +276,14 @@ int main(int argc, char **argv)
     top->reset = 1; top->sclk = 0; top->clk = 0;
     top->boot_pc = boot_pc;
     top->gio_present = testdev ? 1 : 0;
+    top->icache_en = 1;
+    top->dcache_en = 1;
     top->rxdb = 1;
+    top->ps2_key = 0;
+    top->ps2_mouse = 0;
+    Ps2Injector ps2;
+    bool ps2_grab = false;
+    uint8_t mouse_buttons = 0;
 
     uint64_t cycle = 0;
     bool     running = start_running;
@@ -283,6 +335,7 @@ int main(int argc, char **argv)
         urx.sample(cycle, top->txdb);
         utx.step(cycle, urx.bit_time);
         top->rxdb = utx.line;
+        ps2.step(top, cycle);
 
         if (top->tx_valid) console.push_back((char)top->tx_data);
 
@@ -329,6 +382,27 @@ int main(int argc, char **argv)
                 if (ev.key.keysym.sym == SDLK_F5)  running = !running;
                 if (ev.key.keysym.sym == SDLK_F11) step_once = true;
                 if (ev.key.keysym.sym == SDLK_F6)  step_many = true;
+                // F12 hands the keyboard and mouse to the machine, and takes
+                // them back. Without a toggle every F5 would also land in the
+                // guest, and there is no framebuffer yet to make it obvious
+                // which of the two has focus.
+                if (ev.key.keysym.sym == SDLK_F12) ps2_grab = !ps2_grab;
+            }
+            if (ps2_grab && !ImGui::GetIO().WantCaptureKeyboard &&
+                (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP)) {
+                uint8_t code; bool ext;
+                if (sdl_to_ps2(ev.key.keysym.scancode, code, ext))
+                    ps2.push_key(code, ext, ev.type == SDL_KEYDOWN);
+            }
+            if (ps2_grab && ev.type == SDL_MOUSEMOTION)
+                ps2.push_mouse(mouse_buttons, ev.motion.xrel, -ev.motion.yrel);
+            if (ps2_grab && (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP)) {
+                uint8_t bit = ev.button.button == SDL_BUTTON_LEFT   ? 0x01
+                            : ev.button.button == SDL_BUTTON_RIGHT  ? 0x02
+                            : ev.button.button == SDL_BUTTON_MIDDLE ? 0x04 : 0x00;
+                if (ev.type == SDL_MOUSEBUTTONDOWN) mouse_buttons |= bit;
+                else                                mouse_buttons &= ~bit;
+                ps2.push_mouse(mouse_buttons, 0, 0);
             }
         }
 
@@ -337,6 +411,7 @@ int main(int argc, char **argv)
             top = new Vsim_top;
             top->reset = 1; top->sclk = 0; top->clk = 0;
             top->boot_pc = boot_pc; top->gio_present = testdev ? 1 : 0; top->rxdb = 1;
+            top->icache_en = 1; top->dcache_en = 1;
             cycle = 0; console.clear(); trace.clear(); hot.clear(); holes.clear();
             urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;
             for (int b = 0; b < 6; b++) err_count[b] = 0;

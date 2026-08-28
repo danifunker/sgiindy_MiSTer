@@ -65,7 +65,7 @@ is the most useful thing in this document:
 | 7 | DS1386 RTC and NVRAM | "RTC path test *FAILED*", then a stall waiting for the seconds register to change |
 | 8 | The 8254 timer in IOC2 | `calibrate_delay` restarting forever, because its measurement came back greater than its own sanity limit |
 | 9 | Graphics answering 0 rather than being unclaimed | Not a hang, but every REX3 status poll burning its full 100000-iteration timeout |
-| 10 | IOC2's keyboard/mouse status reading 0 rather than looping back | The PROM writes the 8042 self-test command `0xAA` to `+0x44` and then *polls the same address* — because it is the command port on a write and the STATUS port on a read. A loopback answers `0xAA`, whose bit 1 means "input buffer full", and the PROM waits for the controller to drain forever |
+| 10 | IOC2's keyboard/mouse status reading 0 rather than looping back | The PROM writes the 8042 self-test command `0xAA` to `+0x44` and then *polls the same address* — because it is the command port on a write and the STATUS port on a read. A loopback answers `0xAA`, whose bit 1 means "input buffer full", and the PROM waits for the controller to drain forever. **Since superseded by a real controller — see below** |
 | 11 | The harness tracking the console's bit rate | Not a core bug, but it looked like one: the PROM announces "diagnostic baud rate set to 19200" before the menu, and a harness still typing at 9600 sends garbage that the PROM's own auto-baud then chases to 38400 |
 
 ## The modules
@@ -78,6 +78,7 @@ is the most useful thing in this document:
 | `rtl/sgi/sgi_hpc3.sv` | HPC3's DMA descriptor, control and configuration registers, and HAL2 reporting itself absent |
 | `rtl/sgi/sgi_ioc.sv` | IOC2: `SYS_ID`, panel, reset, the INT2 interrupt controller and the 8254 |
 | `rtl/sgi/pit8254.sv` | That 8254 |
+| `rtl/sgi/i8042.sv` | The PC keyboard/mouse controller at IOC2 `+0x40`/`+0x44`, and both devices behind it |
 | `rtl/sgi/sgi_ds1386.sv` | The Dallas RTC and the NVRAM the PROM keeps its environment in |
 
 Each file's header carries the reasoning; `docs/02-address-map.md` has the
@@ -142,7 +143,7 @@ real value:
 |---|---|---|---|
 | `sclk` | 3.6864 MHz | fast | The console tap is bit-rate independent |
 | `RTC_TICK_DIV` | 500000 clocks per centisecond | 5000 | The PROM waits for the seconds register to roll over during boot; at the real ratio that single wait is fifty million cycles of nothing |
-| `PIT_TICK_DIV` | 50 clocks per count (1 MHz) | 5 | `DELAY()` is calibrated against this timer, so shortening it shortens every delay proportionally. The calibration stays self-consistent — it simply concludes the machine is ten times faster, which for a core running with both caches off and a bus round trip per instruction is arguably nearer the truth than 50 MHz |
+| `PIT_TICK_DIV` | 50 clocks per count (1 MHz) | 5 | `DELAY()` is calibrated against this timer, so shortening it shortens every delay proportionally. The calibration stays self-consistent — it simply concludes the machine is ten times faster. Note that this does **not** set `hinv`'s "16 Mhz": doubling this knob leaves that figure alone, because it comes from a CP0 `Count` loop instead. See `docs/10-r4300-integration.md` |
 
 The `PIT_TICK_DIV` margin is worth knowing about: `calibrate_delay` restarts
 forever if its 512-iteration loop measures more than 10000 counts. At 1 MHz it
@@ -165,3 +166,79 @@ own bus clock.
 3. **The GIO DMA engine**, for the boot memory clear.
 4. **Interrupts** — INT2 has masks and no sources.
 5. **Newport**, which is the rest of the machine.
+
+## The keyboard and mouse controller
+
+The Indy carries a PC-style keyboard controller, not an SGI serial keyboard on
+the SCC. Two independent things say so, and they agree: the PROM's own
+diagnostic calls it *"PC keyboard/mouse controller"*, and
+`reference/prom/hardware-011.txt` shows the PROM forming `0x1fbd9843` (10
+references) and `0x1fbd9847` (9) — byte 3 of the words at IOC2 `+0x40` and
+`+0x44`, which is where IRIS puts its 8042 too (`src/ioc.rs`,
+`IOC_KBD_MOUSE_DATA`/`_CMD`). The Zilog SCC next door drives the serial
+console and nothing else.
+
+`i8042.sv` models the controller and both devices rather than the PS/2 wire
+protocol, because MiSTer's `hps_io` has already decoded the wire into
+`ps2_key` and `ps2_mouse`; re-serialising them only to decode them again would
+be work for its own sake. Command handling follows IRIS's `src/ps2.rs`, which
+drives this PROM and IRIX. Scan codes are set 2, which is what `ps2_key`
+delivers; set 1 translation is accepted as a config write and ignored.
+
+It is decoded out of the IOC window in `sgi_indy.sv` rather than handled
+inside `sgi_ioc.sv`, for the same reason the SCC is: reading its data port
+pops a byte, so the access has to be resolved down to one word instead of
+sgi_ioc's read-both-halves-and-let-the-CPU-choose.
+
+### The bug worth remembering
+
+The first version answered every command correctly and the diagnostic still
+failed. The trace said why:
+
+```
+RD 1fbd9840 be 0f   data ...04     status: SYS, no byte waiting
+WR 1fbd9840 be 10   data ...ed     write 0xED to the data port - "set LEDs"
+RD 1fbd9840 be 01   data ...05     status: SYS | OBF - a byte is waiting
+RD 1fbd9840 be 10   data ...00     read the data port -> 0x00, not 0xFA
+```
+
+The queue held the ACK and the status register said so, but the read returned
+zero. The pop fires on the access cycle while the bus samples read data on the
+*ack* cycle, one later — by which time `q_front` had advanced past the byte
+being asked for, to an empty queue. The read data has to be **registered at
+access time**, not read combinationally a cycle later.
+
+A status read survived the same mistake, because the queue state it reports
+happened not to change between the two cycles. That is what made it look like
+a device-model problem rather than a bus-timing one.
+
+### Driving it
+
+`verilator/sim_ps2.h` drives the two ports the way `hps_io` does — set the
+payload, flip the top bit, leave both alone until the next event — with a
+queue, because an event is only seen if the core is being clocked when the
+toggle changes.
+
+- headless: `--key TEXT` and `--key-on TRIG TEXT`, alongside the existing
+  `--type`/`--type-on` which go to the serial console instead
+- GUI: **F12** hands the keyboard and mouse to the machine and takes them
+  back. Without the toggle every F5 would also land in the guest, and there is
+  no framebuffer yet to show which has focus.
+
+`ps2_mouse` needed a correction on the way: it is **not** a decoded form.
+`hps_io.sv:368-370` passes the three raw PS/2 packet bytes straight through —
+`[7:0]` flags, `[15:8]` dx, `[23:16]` dy — so `i8042.sv` forwards them
+unchanged rather than reassembling a packet the mouse already sent.
+
+### What is not proven
+
+The controller protocol is: the PROM's `0xED` / LED-argument / `0xF4` sequence
+now reads back `0xFA` for each, and the diagnostic passes. **Keystroke
+delivery end to end is not**, because nothing in the machine reads the
+keyboard yet — the PROM's console is the serial port, so injected scan codes
+sit in the queue unread. That stays true until either graphics arrive or IRIX
+does; it is not a reason to distrust the controller, but it is not evidence
+for it either.
+
+`sgiindy.sv` is still the stock template and does not instantiate the core, so
+there is no `hps_io` connection on hardware.

@@ -42,7 +42,7 @@ Each milestone is defined by an observable, not by "component X is written".
 **Status: M0–M3 are done, M4 and M5 are partly done, M6 is one step away.**
 
 `tests/run-cputest.sh` runs the 240-test suite on the core in about 35 seconds
-and reports 2155 checks passed / 9 failed against full R4400 expectations,
+and reports 2161 checks passed / 3 failed against full R4400 expectations,
 versus 2101 / 61 for IRIS's own R4400. `tests/run-scc.sh` proves the Z8530
 transmits, checked against a UART decode of its own output pin.
 `tests/run-prom.sh` boots the real IP24 PROM, which now runs its power-on

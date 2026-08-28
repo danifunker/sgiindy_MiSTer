@@ -60,6 +60,20 @@ module sgi_indy #(
     // the harness points it straight at an ELF entry for bare-metal tests.
     input  logic [31:0] boot_pc,
 
+    // Primary caches. Sampled continuously, not only at reset - cpu.vhd
+    // gates on them per access - so clearing one mid-run leaves whatever it
+    // already holds valid but unread, which is exactly what is wanted for
+    // bisecting a failure onto one of them. Both are on for a normal build.
+    input  logic        icache_en,
+    input  logic        dcache_en,
+
+    // ---- host input devices ---------------------------------------------
+    // MiSTer's decoded PS/2 forms, straight from hps_io. Both are edge-coded
+    // on their top bit; i8042.sv turns them back into what a PC keyboard and
+    // mouse put on the wire.
+    input  logic [10:0] ps2_key,
+    input  logic [24:0] ps2_mouse,
+
     // ---- main memory -----------------------------------------------------
     output logic        ram_req,
     output logic        ram_we,
@@ -150,7 +164,9 @@ module sgi_indy #(
     logic [31:0] mem_address;
     logic  [7:0] mem_writeMask;
     logic [63:0] mem_dataWrite, mem_dataRead;
-    logic  [2:0] mem_size_unused;
+    logic  [2:0] mem_size;
+    logic        fill_grant, fill_data_ready;
+    logic [63:0] fill_data;
 
     r4300_wrap u_cpu (
         .clk              (clk),
@@ -158,11 +174,8 @@ module sgi_indy #(
         .reset            (reset),
         .boot_pc          (boot_pc),
 
-        // Both caches stay off until the fill path has somewhere to fill
-        // from: cpu_instrcache/cpu_datacache pull lines straight off the N64's
-        // RDRAM/DDR3 port, which is tied off in r4300_wrap.vhd.
-        .INSTRCACHEON     (1'b0),
-        .DATACACHEON      (1'b0),
+        .INSTRCACHEON     (icache_en),
+        .DATACACHEON      (dcache_en),
         .irqRequest       (1'b0),
 
         .error_instr      (cpu_error[0]),
@@ -176,11 +189,15 @@ module sgi_indy #(
         .mem_rnw          (mem_rnw),
         .mem_address      (mem_address),
         .mem_req64        (mem_req64),
-        .mem_size         (mem_size_unused),
+        .mem_size         (mem_size),
         .mem_writeMask    (mem_writeMask),
         .mem_dataWrite    (mem_dataWrite),
         .mem_dataRead     (mem_dataRead),
-        .mem_done         (mem_done)
+        .mem_done         (mem_done),
+
+        .fill_grant       (fill_grant),
+        .fill_data        (fill_data),
+        .fill_data_ready  (fill_data_ready)
     );
 
     logic        bus_req, bus_we, bus_ack;
@@ -196,10 +213,14 @@ module sgi_indy #(
         .mem_rnw       (mem_rnw),
         .mem_address   (mem_address),
         .mem_req64     (mem_req64),
+        .mem_size      (mem_size),
         .mem_writeMask (mem_writeMask),
         .mem_dataWrite (mem_dataWrite),
         .mem_dataRead  (mem_dataRead),
         .mem_done      (mem_done),
+        .fill_grant      (fill_grant),
+        .fill_data       (fill_data),
+        .fill_data_ready (fill_data_ready),
         .bus_req       (bus_req),
         .bus_we        (bus_we),
         .bus_addr      (bus_addr),
@@ -385,6 +406,42 @@ module sgi_indy #(
         .tx_chan  (tx_chan)
     );
 
+    // ---- the PC keyboard/mouse controller, at +0x40/+0x44 ---------------
+    // Carved out of the IOC window for the same reason the SCC is: reading
+    // its data port pops a byte, so it needs the access decoded down to one
+    // word rather than sgi_ioc's read-both-halves-and-let-the-CPU-choose.
+    // +0x40 is the data port and +0x44 the command/status port, so the word
+    // within the doubleword is which of the two - and on a big-endian bus
+    // the word at +0 is the high half.
+    logic       kbd_sel;
+    logic       kbd_is_cmd;
+    logic [7:0] kbd_din, kbd_dout;
+    logic       kbd_irq, mouse_irq;
+
+    assign kbd_sel    = bus_req && sel_ioc
+                        && (bus_addr[7:0] >= 8'h40) && (bus_addr[7:0] < 8'h48);
+    assign kbd_is_cmd = bus_aoff[2];
+    assign kbd_din    = kbd_is_cmd ? bus_wdata[7:0] : bus_wdata[39:32];
+
+    i8042 u_kbd (
+        .clk       (clk),
+        .reset     (reset),
+        .ce        (ce),
+        .sel       (kbd_sel),
+        .we        (bus_we),
+        .is_cmd    (kbd_is_cmd),
+        .din       (kbd_din),
+        .dout      (kbd_dout),
+        .ps2_key   (ps2_key),
+        .ps2_mouse (ps2_mouse),
+        .irq_kbd   (kbd_irq),
+        .irq_mouse (mouse_irq)
+    );
+
+    // One cycle of latency, to match every other device's registered ack.
+    logic kbd_ack;
+    always_ff @(posedge clk) kbd_ack <= reset ? 1'b0 : kbd_sel;
+
     // The rest of the IOC window: panel, SYS_ID, reset/LED, and the INT2
     // interrupt controller at +0x80.
     logic [63:0] ioc_rdata;
@@ -394,7 +451,7 @@ module sgi_indy #(
         .clk       (clk),
         .reset     (reset),
         .ce        (ce),
-        .sel       (bus_req && sel_ioc && !scc_sel),
+        .sel       (bus_req && sel_ioc && !scc_sel && !kbd_sel),
         .we        (bus_we),
         .addr      (bus_addr[7:0]),
         .aoff      (bus_aoff),
@@ -456,7 +513,7 @@ module sgi_indy #(
     end
 
     assign bus_ack   = ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
-                     | ioc_ack | rtc_ack | scc_ack | none_ack | gio_absent_ack
+                     | ioc_ack | rtc_ack | scc_ack | kbd_ack | none_ack | gio_absent_ack
                      | mem_hole_ack | gfx_ack;
 
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
@@ -467,6 +524,7 @@ module sgi_indy #(
                      : gio_ack  ? gio_rdata
                      : mc_ack   ? mc_rdata
                      : hpc3_ack ? hpc3_rdata
+                     : kbd_ack  ? {24'h0, kbd_dout, 24'h0, kbd_dout}
                      : scc_ack  ? {scc_rdata, scc_rdata}
                      : ioc_ack  ? ioc_rdata
                      : rtc_ack  ? rtc_rdata

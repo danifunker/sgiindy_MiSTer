@@ -23,9 +23,13 @@ checkout is elsewhere. See [docs/09-cpu-validation.md](../docs/09-cpu-validation
 for the oracle policy and [docs/10-r4300-integration.md](../docs/10-r4300-integration.md)
 for the R4300 support that was added to it.
 
-Current: **2155 checks passed, 9 failed** over 240 tests, against 2101 / 61 for
+Current: **2161 checks passed, 3 failed** over 240 tests, against 2101 / 61 for
 IRIS's own R4400 — the same expectations, since the core identifies as an
-R4400. Three tests fail, all diagnosed in `docs/10`.
+R4400. One test fails, `fpu/vec_cvt_from_l`, diagnosed in `docs/10`.
+
+`--no-icache` and `--no-dcache` pass straight through to the simulator, so a
+failure can be bisected onto one of the primary caches without a rebuild.
+Caches off, the same run is 2155 / 9 and takes five times as many clocks.
 
 ## `run-scc.sh` — the SCC
 

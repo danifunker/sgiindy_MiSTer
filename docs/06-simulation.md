@@ -88,6 +88,11 @@ Everything docs recommended porting from the sandbox is there:
   addresses finds the same failure and names the register, which the PC alone
   would not;
 - `--hot`, the most-accessed addresses on exit;
+- `--no-icache` / `--no-dcache`, which run with one or both primary caches off.
+  They exist because a cache bug looks like a CPU bug: the fill path was
+  brought up by bisecting each symptom onto one cache from the command line
+  rather than by rebuilding, and the four-way table in `docs/10` is what they
+  measure;
 - an **unclaimed-address summary** on exit: every bus cycle no device answered,
   grouped by address with counts and first/last cycle. This is the single most
   useful diagnostic for chipset bring-up — the next thing to build is nearly

@@ -66,7 +66,16 @@ entity r4300_wrap is
       mem_writeMask     : out std_logic_vector(7 downto 0);
       mem_dataWrite     : out std_logic_vector(63 downto 0);
       mem_dataRead      : in  std_logic_vector(63 downto 0);
-      mem_done          : in  std_logic
+      mem_done          : in  std_logic;
+
+      -- Cache line fill response. A fill is an ordinary mem_* read tagged
+      -- mem_size = "010"/"100", but its DATA comes back here rather than on
+      -- mem_dataRead: cpu_instrcache/cpu_datacache take their lines straight
+      -- off what is, upstream, the N64's RDRAM controller. r4300_bus.sv is
+      -- the other end and documents the ordering these three have to keep.
+      fill_grant        : in  std_logic := '0';
+      fill_data         : in  std_logic_vector(63 downto 0) := (others => '0');
+      fill_data_ready   : in  std_logic := '0'
    );
 end entity;
 
@@ -83,7 +92,25 @@ architecture arch of r4300_wrap is
    --   RUN      resets released
    type t_rststate is (RS_SEEDING, RS_LOADPC, RS_SETTLE, RS_RUN);
    signal rststate  : t_rststate := RS_SEEDING;
-   signal settle    : integer range 0 to 3 := 3;
+
+   -- How long SETTLE holds the CPU in reset. It used to be four clocks,
+   -- which was enough to latch the boot PC and was all that mattered while
+   -- both caches were off.
+   --
+   -- It is not enough with a cache on. SS_reset starts each cache's tag RAM
+   -- clearing, and that clear is a state machine walking 512 entries one per
+   -- clock (cpu_instrcache.vhd's CLEARCACHE, cpu_datacache.vhd's likewise) -
+   -- neither of them looks at reset_93 at all. Release the pipeline after
+   -- four clocks and the first cached access lands while the data cache is
+   -- still in CLEARCACHE, where nothing latches it: cpu.vhd waits for a
+   -- write_done that never comes and error_stall fires 4096 clocks later.
+   -- The instruction cache survives it only because it latches fill_request
+   -- separately from its state machine.
+   --
+   -- So the settle has to outlast the longer of the two clears. 1024 is that
+   -- with a factor of two in hand, and it costs a thousand clocks once.
+   constant SETTLE_CLOCKS : integer := 1024;
+   signal settle    : integer range 0 to SETTLE_CLOCKS := SETTLE_CLOCKS;
 
    signal ss_reset  : std_logic := '1';
    signal ss_wren   : std_logic := '0';
@@ -102,7 +129,7 @@ begin
       if rising_edge(clk) then
          if reset = '1' then
             rststate  <= RS_SEEDING;
-            settle    <= 3;
+            settle    <= SETTLE_CLOCKS;
             ss_reset  <= '1';
             ss_wren   <= '0';
             cpu_reset <= '1';
@@ -151,7 +178,14 @@ begin
       DATACACHEON           => DATACACHEON,
       DATACACHESLOW         => "0000",
       DATACACHEFORCEWEB     => '0',
-      DATACACHETLBON        => '0',
+      -- TLB-mapped data accesses go through the data cache too, honouring the
+      -- entry's coherency field. Upstream leaves this off, which is safe on a
+      -- machine where nothing important is mapped; here it is not optional.
+      -- KSEG0 is cached, so a mapped view of the same physical page that
+      -- bypassed the cache would see a different memory than KSEG0 does -
+      -- cpu-tests' tlb/translation_works writes through KSEG0 and reads back
+      -- through the mapping, and caught exactly that.
+      DATACACHETLBON        => '1',
       RANDOMMISS            => "0000",
       DISABLE_BOOTCOUNT     => '1',
       DISABLE_DTLBMINI      => '0',
@@ -177,13 +211,13 @@ begin
       mem_dataRead          => mem_dataRead,
       mem_done              => mem_done,
 
-      -- The cache-fill path talks to the N64's RDRAM/DDR3 controller directly
-      -- rather than through mem_*. Nothing drives it here, which is why both
-      -- caches must stay off until that path is wired to SGI memory.
-      rdram_granted2x       => '0',
+      -- The fill port, driven by r4300_bus.sv from ordinary SGI bus reads.
+      -- rdram_done is dead inside cpu.vhd - the caches finish on ram_done,
+      -- which cpu.vhd derives from mem_done - so nothing needs to drive it.
+      rdram_granted2x       => fill_grant,
       rdram_done            => '0',
-      ddr3_DOUT             => (others => '0'),
-      ddr3_DOUT_READY       => '0',
+      ddr3_DOUT             => fill_data,
+      ddr3_DOUT_READY       => fill_data_ready,
 
       ram_done              => '0',
       ram_rnw               => '0',

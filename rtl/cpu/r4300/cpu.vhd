@@ -223,6 +223,18 @@ architecture arch of cpu is
    signal mem1_request                 : std_logic := '0';
    signal mem1_cacherequest            : std_logic := '0';
    signal mem1_address                 : unsigned(31 downto 0) := (others => '0'); 
+   -- SGI: the address the instruction cache TAGS a filled line with. Upstream
+   -- this was mem1_address itself, and that worked because mem1_address held
+   -- the VIRTUAL address for an unmapped fetch - the kseg0/kseg1 strip
+   -- happened later, in the write FIFO. Moving the strip up to mem1_address,
+   -- so the bus can see a physical address above 0x1FFFFFFF, made the tag
+   -- physical while read_addrCompare stayed virtual. The cache then missed on
+   -- every fetch: it still returned correct instructions, it just fetched
+   -- four doublewords to answer each one. So the tag needs its own copy,
+   -- tracking mem1_address in every arm except the strip - it has to be
+   -- exactly what read_addrCompare will be, which is the TLB output when the
+   -- fetch is mapped and the virtual address when it is not.
+   signal mem1_addrCompare             : unsigned(31 downto 0) := (others => '0'); 
             
    -- stage 2           
    --regs      
@@ -541,6 +553,13 @@ architecture arch of cpu is
    
    signal region_TLBmapped             : std_logic;
    signal region_cached                : std_logic;
+   -- SGI: Config.K0 and the one thing this core does with it. An R4000 leaves
+   -- KSEG0's cacheability to software; only the encoding 2 means uncached, so
+   -- everything else - including the reserved 0 this core resets to, and the
+   -- 3 the IP24 PROM switches to around its cached work - is cacheable. See
+   -- cpu_cop0.vhd's CONFIG_K0 for why upstream could get away without it.
+   signal config_K0                    : unsigned(2 downto 0);
+   signal kseg0_cached                 : std_logic;
    signal region_full32                : std_logic;
    signal region_unused                : std_logic;
    
@@ -1043,7 +1062,7 @@ begin
       read_data         => instrcache_data,
       
       fill_request      => instrcache_fill,
-      fill_addrData     => mem1_address(31 downto 0),
+      fill_addrData     => mem1_addrCompare,   -- SGI: not mem1_address; see its declaration
       fill_addrTag      => fill_addrTag,
       fill_done         => instrcache_fill_done,
       
@@ -1057,9 +1076,11 @@ begin
       SS_reset          => SS_reset
    );
    
+   kseg0_cached   <= '0' when (config_K0 = 2) else '1';   -- SGI
+
    fetchCache     <= '0' when (INSTRCACHEON = '0') else
                      TLB_instrUseCache when (TLB_instrMapped = '1') else
-                     '1' when (FetchAddr1(31 downto 29) = "100") else  -- todo: only in kernelmode and only in 32bit mode
+                     kseg0_cached when (FetchAddr1(31 downto 29) = "100") else  -- SGI: was '1'. todo: only in kernelmode and only in 32bit mode
                      '0';
    
    FetchAddr <= FetchAddr2 when (FetchAddrSelect = '1') else FetchAddr1;
@@ -1094,13 +1115,15 @@ begin
             -- TLB-mapped reset PC discards this value anyway - TLB_ss_load
             -- above re-derives it through the TLB.
             if (ss_in(16)(3) = '1') then
-               mem1_address   <= "000" & unsigned(ss_in(5)(28 downto 0)); -- last was branch -> should be patched in the savestate already
-               fill_addrTag   <= unsigned(ss_in(5)(31 downto 0));
-               PC             <= unsigned(ss_in(5)); 
+               mem1_address     <= "000" & unsigned(ss_in(5)(28 downto 0)); -- last was branch -> should be patched in the savestate already
+               mem1_addrCompare <= unsigned(ss_in(5)(31 downto 0));         -- SGI
+               fill_addrTag     <= unsigned(ss_in(5)(31 downto 0));
+               PC               <= unsigned(ss_in(5)); 
             else
-               mem1_address   <= "000" & unsigned(ss_in(0)(28 downto 0)); -- x"FFFFFFFFBFC00000";    
-               fill_addrTag   <= unsigned(ss_in(0)(31 downto 0));
-               PC             <= unsigned(ss_in(0)); -- x"FFFFFFFFBFC00000";                    
+               mem1_address     <= "000" & unsigned(ss_in(0)(28 downto 0)); -- x"FFFFFFFFBFC00000";    
+               mem1_addrCompare <= unsigned(ss_in(0)(31 downto 0));         -- SGI
+               fill_addrTag     <= unsigned(ss_in(0)(31 downto 0));
+               PC               <= unsigned(ss_in(0)); -- x"FFFFFFFFBFC00000";                    
             end if;
             stall1         <= '1';
             fetchReady     <= '1';
@@ -1136,8 +1159,9 @@ begin
                      opcode0        <= (others => '0');
                      useCached_data <= '0';
                   else
-                     mem1_address    <= TLB_instrAddrOutLookup;
-                     useCached_data  <= TLB_instrUseCache;
+                     mem1_address     <= TLB_instrAddrOutLookup;
+                     mem1_addrCompare <= TLB_instrAddrOutLookup;   -- SGI
+                     useCached_data   <= TLB_instrUseCache;
                      if (TLB_instrUseCache = '1') then
                         instrcache_fill <= '1';
                      else
@@ -1154,15 +1178,18 @@ begin
                fetchReady         <= '1';
                
                if (TLB_instrMapped = '1') then
-                  mem1_address <= TLB_instrAddrOutFound;
-                  fill_addrTag <= FetchAddr(31 downto 0);
+                  mem1_address     <= TLB_instrAddrOutFound;
+                  mem1_addrCompare <= TLB_instrAddrOutFound;    -- SGI
+                  fill_addrTag     <= FetchAddr(31 downto 0);
                else
                   -- SGI: the kseg0/kseg1 strip moved here from the write FIFO
                   -- below. It is only correct for an UNMAPPED fetch - taking
                   -- the top three bits off a TLB translation loses high local
-                  -- memory, see cpu_cop0.vhd's TLB_fetchAddrOutMasked.
-                  mem1_address <= "000" & FetchAddr(28 downto 0);
-                  fill_addrTag <= FetchAddr(31 downto 0);
+                  -- memory, see cpu_cop0.vhd's TLB_fetchAddrOutMasked. The
+                  -- cache tag must NOT be stripped; see mem1_addrCompare.
+                  mem1_address     <= "000" & FetchAddr(28 downto 0);
+                  mem1_addrCompare <= FetchAddr(31 downto 0);    -- SGI
+                  fill_addrTag     <= FetchAddr(31 downto 0);
                end if;
       
                if (TLB_instrStall = '1') then
@@ -2318,7 +2345,7 @@ begin
    -- region check
    -- we optimize the 64bit region to use only the base address for timing purposes. 
    -- If base+immidiate switches the region-> bad luck
-   process (value1, calcMemAddr, privilegeMode, bit64region)
+   process (value1, calcMemAddr, privilegeMode, bit64region, kseg0_cached)   -- SGI: kseg0_cached
    begin
    
       region_TLBmapped <= '0';
@@ -2350,7 +2377,7 @@ begin
             elsif (value1 <= x"bfffffffffffffff") then region_unused <= '1';                      
             elsif (value1 <= x"c00000ff7fffffff") then region_TLBmapped <= '1';                   
             elsif (value1 <= x"ffffffff7fffffff") then region_unused <= '1';                      
-            elsif (value1 <= x"ffffffff9fffffff") then region_cached <= '1';                      
+            elsif (value1 <= x"ffffffff9fffffff") then region_cached <= kseg0_cached;  -- SGI: kseg0
             elsif (value1 <= x"ffffffffbfffffff") then null;                                           
             elsif (value1 <= x"ffffffffdfffffff") then region_TLBmapped <= '1';                   
             else region_TLBmapped <= '1'; 
@@ -2369,7 +2396,7 @@ begin
       else
          if (privilegeMode = "00") then
             if (calcMemAddr(31 downto 29) < 4 or calcMemAddr(31 downto 29) = 6 or calcMemAddr(31 downto 29) = 7) then region_TLBmapped <= '1'; end if;
-            if (calcMemAddr(31 downto 29) = 4) then region_cached <= '1'; end if;
+            if (calcMemAddr(31 downto 29) = 4) then region_cached <= kseg0_cached; end if;  -- SGI: was '1'
          elsif (privilegeMode = "01") then
             if (calcMemAddr(31 downto 29) < 4 or calcMemAddr(31 downto 29) = 6) then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) = 4 or calcMemAddr(31 downto 29) = 5 or calcMemAddr(31 downto 29) = 7) then region_unused <= '1'; end if;
@@ -3427,6 +3454,7 @@ begin
       fpuRegMode              => fpuRegMode,
       privilegeMode           => privilegeMode,
       bit64region             => bit64region,
+      CONFIG_K0               => config_K0,             -- SGI
       
       writeEnable             => executeCOP0WriteEnable,
       regIndex                => executeCOP0Register,

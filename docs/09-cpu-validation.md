@@ -165,8 +165,12 @@ Reference results, measured rather than quoted — the suite has grown since
 | | checks passed | failed | tests failing |
 |---|---:|---:|---:|
 | IRIS, R4400 expectations | 2101 | 61 | 25 |
-| **this core, as R4400** | **2155** | **9** | **3** |
-| this core, as R4300 | 2114 | 9 | 3 |
+| **this core, as R4400, caches on** | **2161** | **3** | **1** |
+| this core, as R4400, caches off | 2155 | 9 | 3 |
+| this core, as R4300, caches off | 2114 | 9 | 3 |
+
+The caches-off rows are what `--no-icache --no-dcache` still produces; the
+R4300 row has not been re-measured since the caches came on.
 
 The core presents as an R4400, so the first two rows are the same expectations
 applied to two implementations. The R4300 row is the same core with

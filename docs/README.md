@@ -6,8 +6,10 @@ DE1-based Quartus/Verilator sandbox, not a MiSTer core).
 
 The knowledge base the core is built from, plus a record of what has been
 built. Milestones M0 and M1 are done: the CPU runs the 240-test bare-metal MIPS
-suite under Verilator at 2155 checks passed / 9 failed against full R4400
-expectations, and the Z8530 transmits. `tests/` has both regressions.
+suite under Verilator at 2161 checks passed / 3 failed against full R4400
+expectations, and the Z8530 transmits. `tests/` has both regressions. **Both
+primary caches are on**, which is where that figure comes from — see
+[docs/10](10-r4300-integration.md#caches).
 
 **M6 — "it boots" — is reached.** The MC, HPC3, IOC2/INT2, the 8254, the
 Dallas RTC/NVRAM and a MEMCFG-driven memory decode are in, and the real IP24

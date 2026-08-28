@@ -28,8 +28,6 @@ receive pin:
 
 SCSI controller 0 diagnostic              *FAILED*
 	Check or replace:  CPU base board
-PC keyboard/mouse controller diagnostic    *FAILED*
-	Check or replace:  CPU base board
 
 Diagnostics failed.
 [Press any key to continue.]
@@ -61,24 +59,30 @@ that moves the boot backwards fails a test rather than surprising you later.
 `FUN_bfc31594` derives it from CP0 `Count` across a fixed 512-iteration loop,
 so what it reports is how many clocks that loop actually took. `Count` itself
 is right - `cpu_cop0.vhd` increments a 33-bit counter every cycle and reads
-back bits `[32:1]`, half the pipeline clock, as an R4400 does. The loop is
-slow because **both caches are off and every instruction is a bus round trip**:
-about 9 cycles per bus transaction times two instructions is ~20 clocks an
-iteration, against ~2 on a real R4400. That 9-10x gap against a real Indy's
-100-150 MHz is the 16. It is an honest report of instruction throughput, it
-has nothing to do with FPGA timing, and the instruction cache is what fixes
-it.
+back bits `[32:1]`, half the pipeline clock, as an R4400 does. The loop is slow
+because it is **uncached and every instruction is a bus round trip**: about 9
+cycles per bus transaction times two instructions is ~20 clocks an iteration,
+against ~2 on a real R4400. That 9-10x gap against a real Indy's 100-150 MHz
+is the 16.
+
+**Turning the caches on did not move it, and that is correct.** The loop lives
+at `0xBFC3159C`, and the whole PROM runs from `0xBFC…` - KSEG1, which the
+architecture defines as uncached and which the core therefore refuses to cache.
+An earlier version of this file predicted the instruction cache would change
+this number; it does not, and it cannot. Two other suspects are ruled out by
+measurement rather than argument: doubling `PIT_TICK_DIV` and doubling
+`RTC_TICK_DIV` each leave the figure at 16, so it is neither the 8254 nor the
+RTC. It is a measurement of uncached instruction throughput and nothing else.
 
 Against `docs/07-mister-port-plan.md`'s milestones: **M0–M3 done, M6 — the "it
-boots" milestone — reached, M4 and M5 partly done.** Every failure above is a
-device that genuinely is not implemented, and the PROM reports each and
-continues, which is what it does for a machine with no SCSI, no keyboard and no
-graphics fitted.
+boots" milestone — reached, M4 and M5 partly done.** The SCSI failure above is
+a device that genuinely is not implemented, and the PROM reports it and
+continues, which is what it does for a machine with no SCSI board fitted.
 
-The CPU still passes the 240-test suite unchanged: **2155 checks passed, 9
-failed**, against 2101/61 for IRIS's own R4400 on the same expectations. The
-three failing tests are the two cache tests and `cvt.s.l`/`cvt.d.l`, all
-diagnosed in `docs/10-r4300-integration.md`.
+The CPU passes the 240-test suite at **2161 checks passed, 3 failed**, against
+2101/61 for IRIS's own R4400 on the same expectations. **One** test fails,
+`fpu/vec_cvt_from_l`, diagnosed in `docs/10-r4300-integration.md`. The two
+cache tests that used to fail now pass, because both primary caches are on.
 
 What is *not* done, and is worth knowing before you plan anything:
 
@@ -89,7 +93,8 @@ What is *not* done, and is worth knowing before you plan anything:
   `setenv` will not survive a reset until the array is wired to MiSTer's SD
   save path.
 - **No interrupts.** INT2 has masks and no sources.
-- **No SCSI, Ethernet, keyboard or graphics.**
+- **No SCSI, Ethernet or graphics.** The keyboard/mouse controller is in and
+  passes its self-test, but nothing drives `ps2_key`/`ps2_mouse` yet.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -117,7 +122,7 @@ brew install messense/macos-cross-toolchains/mipsel-unknown-linux-gnu
 
 tests/uart/run.sh         # the harness's serial decoder, no simulator, ~1 s
 tests/run-scc.sh          # the Z8530, ~4 s
-tests/run-cputest.sh      # 240-test MIPS suite on the core, ~35 s
+tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
 tests/run-prom.sh         # boot the PROM to the Command Monitor, minutes
 
 make -C verilator cputest # headless simulator
@@ -159,6 +164,7 @@ The headless harness (`verilator/sim_cputest.cpp`) gives you:
 | `--hot` | the most-accessed addresses on exit |
 | `--uart` | decode the SCC's `txdb` line and compare it with the byte tap |
 | `--testdev` | fit the IRIS test device in GIO64 slot 0 |
+| `--no-icache`, `--no-dcache` | run with one or both primary caches off |
 | `--console FILE` | also write the console output to a file, flushed per line |
 | `--type STR` | type STR at the console once it goes quiet |
 | `--type-on TRIG STR` | the same, but only after TRIG has appeared in the output |
@@ -212,7 +218,7 @@ address in there; the answer is usually three instructions away.
 Keep MAME (`reference/mame/`) as a third opinion. `roms/` carries one real
 serial capture, `IP22_Indigo2/ip22prom.070-8127-002.capture.txt.gz` — there is
 **no IP24 capture**, so nothing this core prints has been diffed against
-hardware yet. See "One thing to ask the user for" below.
+hardware yet. See "Things to ask the user for" below.
 
 ### 3. Real hardware
 
@@ -223,56 +229,41 @@ any hardware-confirmed result under `tests/hardware/`.
 
 ## Where to pick up
 
-### 1. The instruction cache - do this first
+### 1. The caches are done - read this before planning anything
 
-It is the simulation's speed limit, the hardware performance floor, and the
-reason `hinv` reports 16 MHz. Nothing else on this list changes as much.
+Both primary caches are **on**, filled over the ordinary SGI bus, and the two
+cache tests that used to fail now pass. The suite went from 2155/9 to
+**2161/3** and from 17.1M clocks to 3.5M. `docs/10-r4300-integration.md`'s
+"Caches" section has the whole thing; the short version:
 
-The request side **already works**, which is the thing worth knowing before
-planning it. `cpu_instrcache.vhd` raises `ram_request`, and `cpu.vhd` pushes
-that into the same write FIFO as an ordinary fetch (cpu.vhd:751-758) with
-`writefifo_Din(107)` tagging it a fill and the address forced to a 32-byte
-boundary. When the entry issues, `mem_size` is set to `"100"` and
-`instrcache_active` goes high (cpu.vhd:852-855), and the transaction ends on
-`mem_done` like any other. So a fill arrives on the ordinary `mem_*` port,
-already distinguishable: **`mem_size = "100"` means "instruction cache line
-fill"**. `sgi_indy.sv` currently discards that signal as `mem_size_unused`.
+| | cycles | bus transactions | checks |
+|---|---:|---:|---|
+| both off | 17,138,359 | 1,977,165 | 2155 / 9 |
+| **both on** | **3,497,582** | **224,774** | **2161 / 3** |
 
-What is missing is the **response** side. The cache does not take its data
-from `mem_dataRead`; it wants four 64-bit beats on `ddr3_DOUT` with
-`ddr3_DOUT_READY`, gated by `ram_grant`/`ram_active`, writing until
-`cache_addr_a(1 downto 0) = "11"` (cpu_instrcache.vhd:145-161). Those are tied
-off in `r4300_wrap.vhd:183-190` with a comment saying exactly why. The job is
-to see a fill on the bus, read four consecutive doublewords, and feed them
-back on that port.
+Two things that were written here as predictions turned out to be wrong, and
+are corrected in `docs/10` rather than quietly dropped:
 
-Settle these before writing much:
+- The two failing cache tests were attributed to the instruction cache. They
+  are **data**-cache tests, and `DATACACHEON` is what fixed them.
+- The instruction cache was expected to move `hinv`'s "16 Mhz". It cannot —
+  the PROM runs entirely from KSEG1. See "Where this is" above.
 
-- How `rdram_granted2x` and `rdram_done` at `cpu.vhd`'s boundary map onto the
-  cache's `ram_grant` / `ram_active` / `ram_done`. The wrapper ties the former;
-  the cache sees the latter.
-- **Line size.** The fill path aligns to 32 bytes, but `Config` deliberately
-  reports 16-byte lines as R4400 geometry - see `docs/10-r4300-integration.md`,
-  which argues the report is in the safe direction for index-based flushes.
-  That argument was made with the cache off. Re-check it with the cache on.
-- Whether the fill should read through the same decode as a normal cycle. A
-  line straddling the end of a MEMCFG bank, or crossing out of the PROM, has
-  to do something defined.
-
-**The acceptance test already exists.** `cache/hit_inv_discards` and
-`cache/index_tag_rt` are two of the three tests `tests/run-cputest.sh` reports
-as failing, and they fail *because* the caches are off. They should pass when
-this is right, taking the suite from 2155/9 to 2157/7 or better. That is a far
-better signal than "it seems faster", and it is the reason to do this before
-anything else on the list: it is the last item with a ready-made oracle.
-
-Watch for a second-order effect: with the I-cache on, the PROM's own timing
-measurements change, so `Processor: N Mhz` in `tests/run-prom.sh` will move.
-That is the point. Update the expected string; do not weaken the assertion to
-a wildcard.
+What the caches did *not* fix, and would be the next honest performance work,
+is that a PROM boot is dominated by **timed waits**, not by throughput: caches
+on, the boot to `hinv` is 37.1M clocks against 37.3M with the data cache off.
+The 8254 and the RTC are already run fast in simulation
+(`docs/12-chipset.md`); pushing that further is bounded by `calibrate_delay`
+restarting forever if the timer is made too fast.
 
 ### 2. Everything after that
 
+0. **Interrupts, arguably first now.** The keyboard controller generates them
+   and nothing routes them, `sgi_ioc.sv` takes `l0_source`/`l1_source` as
+   inputs precisely so wiring them changes nothing else, and every remaining
+   device on this list wants them. It is also the last CPU-side thing the
+   cpu-tests suite can help with: `irqRequest` on `r4300_wrap` is connected to
+   `1'b0` today.
 1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
@@ -289,13 +280,24 @@ a wildcard.
    93.75 MHz on a DE10-Nano (`N64_MiSTer/rtl/pll.v`), which is the only real
    evidence available about what this design might close timing at.
 
-### One thing to ask the user for
+### Things to ask the user for
+
+Two things, batched.
 
 **A serial capture of a real Indy booting `070-9101-011`.** `roms/` has a
 capture for the IP22 but not the IP24, so the console output above has never
 been diffed against hardware — the milestone plan's definition of M3 asks for
-exactly that and it cannot currently be met. Batch it with whatever else you
-need run on iron.
+exactly that and it cannot currently be met.
+
+**And the `cache/` group of cpu-tests on real iron.** The caches are on now and
+the only oracle they have is the suite running under Verilator against
+expectations written from the R4000 manual. `docs/11-running-on-hardware.md`
+covers how to run the suite on the user's machines, and the eight `cache/`
+tests are the ones worth the trip: they are the only part of this core whose
+correctness argument has never been checked against the part it claims to be.
+`identity/config_k0_writable` is worth watching too - it writes `Config.K0 = 2`
+with dirty lines live, which is a coherence hazard on real hardware and passes
+here.
 
 ## Ground rules
 
@@ -365,6 +367,26 @@ Do not rediscover these:
   it is the same RTL with different identity registers.
 - **`hinv`'s clock figure is a throughput measurement, not a clock.** See
   "Where this is" above before concluding the core is too slow.
+- **A cache fill must not signal `mem_done` in the same clock as its last data
+  beat.** The data cache answers the access out of the line in the cycle it
+  sees `ram_done`, reading port B of a RAM whose port A is writing that beat on
+  the same edge - and a store merges in on port B on that same edge.
+  Read-during-write across ports is undefined, so it becomes a race on process
+  order. The symptom was not "the cache is slightly wrong": it was the test
+  suite loading a stale jump-table entry, jumping through it, and taking 82,000
+  exceptions. `rtl/cpu/r4300_bus.sv` spends a state on the gap.
+- **The CPU must stay in reset until the cache tags are clear.** Each cache
+  answers `SS_reset` by walking 512 tag entries one per clock and neither looks
+  at `reset_93`. The four-clock settle that was enough to latch the boot PC let
+  the first cached access land inside that walk, where the data cache does not
+  latch it, and `error_stall` fired 4096 clocks later. `SETTLE_CLOCKS` in
+  `r4300_wrap.vhd` is 1024.
+- **A cache can be completely broken and still return correct data.** The
+  instruction cache tagged lines with a physical address while comparing a
+  virtual one, so every fetch missed - and every fetch was still answered
+  correctly, out of a freshly filled line, at 3.5x the bus traffic of no cache
+  at all. Nothing failed; it was only visible as a transaction count. Measure
+  hit rates by counting bus cycles, not by watching tests pass.
 - **Three clocks run fast in simulation** and are parameterised so hardware
   keeps the real value: `sclk`, `RTC_TICK_DIV` and `PIT_TICK_DIV`. See
   `docs/12-chipset.md` — `calibrate_delay` restarts forever if the 8254 is made

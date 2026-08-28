@@ -17,7 +17,7 @@ flatten to drift out of sync.
 | `cpu_cop0.vhd` | CP0, exceptions, TLB registers |
 | `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | the two TLB lookup engines |
 | `cpu_FPU.vhd`, `cpu_FPU_sqrt.vhd` | the FPU |
-| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches (currently disabled) |
+| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches |
 | `divider.vhd` | integer divider |
 | `functions.vhd`, `export.vhd` | `pFunctions` / `pexport` packages |
 | `SyncFifoFallThroughMLAB.vhd` | the CPU's write FIFO |
@@ -93,5 +93,21 @@ fixed it.
 Data accesses never needed this: `executeMemAddress` already takes the TLB
 output unchanged and only strips the address on the unmapped path.
 
-The 240-test suite is unchanged by all of it — 2155 checks pass, 9 fail, the
-same three tests as before.
+### Caches — what turning them on needed
+
+`rtl/cpu/r4300_bus.sv` answers a fill out of ordinary SGI bus reads; these are
+the changes inside the vendored files that had to go with it.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu.vhd` | the instruction cache tags a line with a new `mem1_addrCompare` instead of with `mem1_address` | Fallout from the strip above, and invisible until the cache was switched on. Upstream's tag is "the TLB output when mapped, the virtual address when not", which is exactly what `read_addrCompare` compares against — and upstream got the unmapped half for free because `mem1_address` *was* the virtual address there. Once the strip moved, the tag went physical while the compare stayed virtual and **every fetch missed**. The cache still returned correct instructions; it just read four doublewords to answer each one, for 3.5x the bus traffic of no cache at all |
+| `cpu_cop0.vhd` | `Config.K0` is exported as `CONFIG_K0` | It was stored and read back but never acted on. Reassembled from the two fields upstream splits it across — `cacheAlgoKSEG0` is K0(1:0) and the low bit of `cu` is K0(2), because `cu` is really `Config(3:2)` |
+| `cpu.vhd` | KSEG0 is cacheable only when `Config.K0 /= 2`, for both fetch and data | An N64 never writes `Config`, so upstream hardcodes KSEG0 as cached. The IP24 PROM comes out of reset with K0 = 2 (uncached) and has a pair of routines at `0xBFC04798` and `0xBFC047D8` whose only job is to switch it to 3 and back. Only the encoding 2 means uncached, so every other value — including the reserved 0 this core resets to, which is what the cpu-tests suite runs with — stays cacheable |
+
+`DATACACHETLBON` is now 1 in `r4300_wrap.vhd` (upstream default 0), which is a
+port value rather than a source change but belongs with them: with KSEG0 cached
+and mapped pages not, the two views of one physical page disagree, and
+`tlb/translation_works` writes through KSEG0 and reads back through a mapping.
+
+The suite goes from 2155 checks passed / 9 failed to **2161 / 3**, and the only
+failing test left is `fpu/vec_cvt_from_l`.

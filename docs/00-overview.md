@@ -42,6 +42,8 @@ Boot progress is measured by how far the PROM gets. The evidence in the repo:
   (`INSTRCACHEON`/`DATACACHEON` = 0), all three clocks (`clk1x`/`clk93`/`clk2x`)
   are tied to one clock, interrupts are tied low, and the read byte-lane
   rotation in `r4300_bus_adapter.v` is knowingly a partial fix (see its header).
+  Of that list, this core has since fixed the byte lanes and turned both caches
+  on; the clocks and interrupts are still as described.
 
 ## What is genuinely reusable for MiSTer
 

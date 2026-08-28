@@ -55,6 +55,20 @@ entity cpu_cop0 is
       fpuRegMode              : out std_logic;
       privilegeMode           : out unsigned(1 downto 0) := (others => '0');
       bit64region             : out std_logic;
+
+      -- SGI: Config.K0, the KSEG0 coherency algorithm. Upstream stores the
+      -- field and lets software read it back, but nothing acts on it: an N64
+      -- never writes Config, so KSEG0 is cached and that is that. The IP24
+      -- PROM writes it constantly - it comes out of reset with K0 = 2
+      -- (uncached) and has two little routines, at 0xBFC04798 and 0xBFC047D8,
+      -- whose whole job is to switch it to 3 and back around anything that
+      -- wants the caches. Ignoring it means caching accesses the PROM
+      -- believes go straight to memory. cpu.vhd gates KSEG0 on this.
+      --
+      -- The field is three bits and upstream splits it oddly: bits 1:0 in
+      -- cacheAlgoKSEG0 and bit 2 in the low bit of `cu`, which is really
+      -- Config(3:2) = {CU, K0(2)}. Reassembled here rather than at the use.
+      CONFIG_K0               : out unsigned(2 downto 0);
                               
       writeEnable             : in  std_logic;
       regIndex                : in  unsigned(4 downto 0);
@@ -1479,6 +1493,8 @@ begin
    cop0_export(14)               <= COP0_14_EPC;
    cop0_export(15)(11 downto 0)  <= x"B22";
    
+   CONFIG_K0 <= COP0_16_CONFIG_cu(0) & COP0_16_CONFIG_cacheAlgoKSEG0;   -- SGI
+
    cop0_export(16)(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
    cop0_export(16)(3 downto 2)   <= COP0_16_CONFIG_cu;   
    cop0_export(16)(14 downto 4)  <= "11001000110";
