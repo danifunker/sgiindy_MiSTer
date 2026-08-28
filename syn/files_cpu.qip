@@ -1,0 +1,28 @@
+# CPU only - see syn/cpu_top.sv. Same CPU sources as files_core.qip.
+
+set_global_assignment -name SYSTEMVERILOG_FILE ../syn/cpu_top.sv
+
+# --- CPU: the MiSTer N64 project's R4300i, vendored as VHDL --------------
+# Order matters: packages and leaf entities before the units that use them.
+# The `mem` library holds the primitives cpu.vhd instantiates as
+# `entity mem.<name>`; rtl/cpu/prim/ replaces the Altera megafunctions the
+# upstream versions wrap, so this builds without altera_mf.
+set_global_assignment -name VHDL_FILE ../rtl/cpu/prim/RamMLAB.vhd -library mem
+set_global_assignment -name VHDL_FILE ../rtl/cpu/prim/dpram.vhd   -library mem
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/SyncFifoFallThroughMLAB.vhd -library mem
+
+set_global_assignment -name VHDL_FILE ../rtl/cpu/prim/dpram.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/prim/RamMLAB.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/prim/cpu_mul.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/functions.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/export.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/divider.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_instrcache.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_datacache.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_TLB_instr.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_TLB_data.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_cop0.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_FPU_sqrt.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu_FPU.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300/cpu.vhd
+set_global_assignment -name VHDL_FILE ../rtl/cpu/r4300_wrap.vhd

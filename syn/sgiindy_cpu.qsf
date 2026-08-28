@@ -1,0 +1,49 @@
+# TIMING-measurement project: the R4300i on its own. See syn/cpu_top.sv.
+# The full harness (sgiindy_syn) does not fit, so it never places and has no
+# Fmax; the CPU alone does fit, and is the one block with a published figure
+# to compare against. This is NOT the MiSTer core either.
+#
+# Deliberately minimal. Every assignment here is one the root sgiindy.qsf or
+# sys/sys.tcl already uses, because this project's whole job is to be the thing
+# that is not wrong when the compile fails.
+
+# Same device every MiSTer core targets, copied from sys/sys.tcl - this project
+# does not source that file, because sys.tcl brings the whole framework with it
+# and there is no framework here to bring.
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEBA6U23I7
+
+set_global_assignment -name TOP_LEVEL_ENTITY cpu_top
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Standard Edition"
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# THE CPU REQUIRES VHDL-2008 and will not compile without this. Its constants
+# are written as sized bit-string literals - `6x"00"` in cpu_FPU.vhd, `X"1FF"`
+# in cpu_instrcache.vhd - which is 2008 syntax with no VHDL-1993 equivalent.
+# Leaving it at the default gets 60-odd "VHDL syntax error ... near text
+# X"00"" and not one CPU entity elaborated.
+#
+# An earlier version of this file left it out on purpose, reasoning from
+# tools/gen_r4300_verilog.sh's note that GHDL needs -frelaxed because 2008
+# makes non-protected shared variables an error. That was backwards: -frelaxed
+# is what lets those sources be compiled AS 2008, not an argument for 1993.
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
+
+# No VERILOG_INPUT_VERSION: Quartus takes SystemVerilog from the .sv extension,
+# and sys/sys.tcl does not set it either.
+
+set_global_assignment -name SDC_FILE sgiindy_cpu.sdc
+
+# Five pins: the harness reduces the CPU's ports to this so the fitter has
+# something it can place. See syn/cpu_top.sv. Locations are arbitrary DE10-Nano
+# user I/O - nothing is wired to anything, so only the count matters.
+set_location_assignment PIN_V11  -to CLK_50
+set_location_assignment PIN_AH17 -to RESET_N
+set_location_assignment PIN_AH16 -to SEED
+set_location_assignment PIN_W15  -to OUT_BIT
+set_location_assignment PIN_AA24 -to LOCKED
+
+# `source`, not QIP_FILE: this is how the root sgiindy.qsf pulls in files.qip,
+# so it is the mechanism known to work in this project.
+source files_cpu.qip
