@@ -134,7 +134,9 @@ module sgi_indy #(
     output logic [63:0] bus_rdata_o,
     output logic        bus_ack_o,
     output logic        bus_unclaimed,
-    output logic  [5:0] cpu_error
+    output logic  [5:0] cpu_error,
+    output logic  [4:0] irq_lines_o,   // Cause.IP[6:2], as INT2 drives them
+    output logic [39:0] int2_state_o   // see sgi_ioc.sv
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -180,6 +182,10 @@ module sgi_indy #(
     //------------------------------------------------------------------
     // CPU
     //------------------------------------------------------------------
+    // Cause.IP[6:2], from INT2 inside the IOC. Declared here because the CPU
+    // is instantiated first and the IOC is most of the way down the file.
+    logic  [4:0] irq_lines;
+
     logic        mem_request, mem_rnw, mem_req64, mem_done;
     logic [31:0] mem_address;
     logic  [7:0] mem_writeMask;
@@ -196,7 +202,7 @@ module sgi_indy #(
 
         .INSTRCACHEON     (icache_en),
         .DATACACHEON      (dcache_en),
-        .irqRequest       (1'b0),
+        .irq_lines        (irq_lines),
 
         .error_instr      (cpu_error[0]),
         .error_stall      (cpu_error[1]),
@@ -507,12 +513,27 @@ module sgi_indy #(
         .wdata     (bus_wdata),
         .rdata     (ioc_rdata),
         .ack       (ioc_ack),
-        // Nothing raises an interrupt yet; see sgi_ioc.sv on why the status
-        // registers are inputs rather than storage.
-        .l0_source (8'h00),
+        // INT2's sources. Everything not listed is a device this core does
+        // not have yet, and reads as an interrupt that never fires:
+        //   L0  0 FIFO full, 2 SCSI1, 3 Ethernet, 4 MC DMA, 5 parallel,
+        //       6 graphics
+        //   L1  0/2 general purpose, 1 panel, 4 HPC DMA, 5 AC fail,
+        //       6 video vsync, 7 vertical retrace
+        //   MAP 6/7 the two GIO expansion slots
+        // Bit 7 of L0 and bit 3 of L1 are the mappable summaries and are
+        // generated inside the IOC, so what is passed there does not matter.
+        .l0_source ({7'h0, scsi_irq, 1'b0}),
         .l1_source (8'h00),
-        .int_n     ()
+        // The SCC and the keyboard controller are mappable sources, not local
+        // ones: they arrive through MAP_STAT and reach the CPU only if
+        // software has pointed MAP_MASK0 or MAP_MASK1 at them. `int_n` is
+        // active low, as the Z8530's INT pin is.
+        .map_source ({2'b00, ~scc_int_n, kbd_irq | mouse_irq, 4'h0}),
+        .irq_lines (irq_lines),
+        .int2_state (int2_state_o)
     );
+
+    assign irq_lines_o = irq_lines;
 
     // The Dallas RTC and the NVRAM the PROM keeps its environment in. Also
     // inside HPC3's window - it is the battery-backed-RAM chip select.

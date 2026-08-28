@@ -47,7 +47,15 @@ entity r4300_wrap is
       INSTRCACHEON      : in  std_logic := '0';
       DATACACHEON       : in  std_logic := '0';
 
-      irqRequest        : in  std_logic := '0';
+      -- The five INT2 interrupt lines, Cause.IP[6:2] low to high:
+      --   0  IP2  LOCAL0     (SCSI, Ethernet, graphics, MC DMA, MAP_INT0)
+      --   1  IP3  LOCAL1     (HPC DMA, vertical retrace, panel, MAP_INT1)
+      --   2  IP4  8254 counter 0
+      --   3  IP5  8254 counter 1
+      --   4  IP6  bus error
+      -- Level-sensitive: hold a bit while the source is asserted and drop it
+      -- when the ISR clears the device. See rtl/sgi/sgi_ioc.sv.
+      irq_lines         : in  std_logic_vector(4 downto 0) := "00000";
 
       error_instr       : out std_logic;
       error_stall       : out std_logic;
@@ -190,8 +198,7 @@ begin
       DISABLE_BOOTCOUNT     => '1',
       DISABLE_DTLBMINI      => '0',
 
-      irqRequest            => irqRequest,
-      irqCartRequest        => '0',
+      irqLines              => irq_lines,
       cpuPaused             => '0',
 
       error_instr           => error_instr,

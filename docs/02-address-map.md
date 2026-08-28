@@ -149,21 +149,34 @@ Byte-wide registers on a 32-bit bus: **stride 4, data in the low 8 bits.** The
 PROM reads them with `lbu` at `base + 3`, confirming big-endian low-byte
 placement.
 
-| Offset | Register | Sandbox |
+| Offset | Register | To the CPU |
 |---|---|---|
-| `+0x00` | `LOCAL0_STATUS` (read-only) — 24 referencing instructions | loopback reg |
-| `+0x04` | `LOCAL0_MASK` | loopback reg |
-| `+0x08` / `+0x0C` | `LOCAL1_STATUS` / `LOCAL1_MASK` | loopback regs |
-| `+0x10`…`+0x1C` | interrupt map 0/1 status and mask | loopback regs |
-| `+0x30` | timer interrupt clear | absent |
-| `+0x34` | error status | absent |
-| `+0x38`…`+0x3C` | 8254-style timer counters | absent |
+| `+0x00` | `LOCAL0_STATUS` (read-only) — 24 referencing instructions | `& LOCAL0_MASK` → `Cause.IP2` |
+| `+0x04` | `LOCAL0_MASK` | |
+| `+0x08` / `+0x0C` | `LOCAL1_STATUS` / `LOCAL1_MASK` | `&` → `Cause.IP3` |
+| `+0x10` | `MAP_STATUS` (read-only) | bit 0 → `IP4`, bit 1 → `IP5` |
+| `+0x14` / `+0x18` | `MAP_MASK0` / `MAP_MASK1` | `&` → `LOCAL0` bit 7 / `LOCAL1` bit 3 |
+| `+0x1C` | `MAP_POLARITY` | stored; selects the active edge of the two GIO expansion lines, neither fitted |
+| `+0x20` | timer interrupt clear (write-only) | a 1 bit clears that `MAP_STATUS` counter latch |
+| `+0x24` | error status | → `Cause.IP6`; a real zero here, nothing reports a bus error |
+| `+0x30`…`+0x3C` | 8254-style timer counters | counters 0 and 1 latch into `MAP_STATUS[1:0]` |
 
-`rtl/sgi/sgi_ioc.sv` does **not** take the loopback approach: the three status
-registers read 0 and ignore writes, because nothing in this core raises an
-interrupt yet. A loopback passes the same tests and then lies as soon as
-anything real is connected. The masks are plain storage, which is all the
-PROM's INT path test needs.
+`rtl/sgi/sgi_ioc.sv` implements all of it, and it does **not** take the
+sandbox's loopback approach: the three status registers are driven by their
+sources and ignore writes. A loopback passes the same tests and then lies as
+soon as anything real is connected.
+
+Every status bit is a level that follows its device, with two exceptions. The
+counter bits in `MAP_STATUS[1:0]` are set by an edge — a counter output is a
+pulse — and cleared only by writing `+0x20`. Sources fitted today: SCSI0 on
+`LOCAL0` bit 1, the SCC on `MAP_STATUS` bit 5, the keyboard/mouse controller on
+bit 4.
+
+Worth knowing before reading anything into a boot log: **the PROM leaves
+`LOCAL0_MASK` at zero.** It writes a walking pattern through both masks as an
+INT path test, settles on `LOCAL1_MASK = 0x02` (the front panel) and nothing
+else, and polls the SCSI chip's AUX STATUS register instead of taking its
+interrupt. INT2 is for IRIX; `tests/run-int.sh` is what proves it works.
 
 `+0x30`…`+0x3C` are an 8254-style timer, and it is **not optional**:
 `calibrate_delay` (`0xBFC31490`) programs counter 2 in mode 2 with 10000, runs

@@ -24,8 +24,9 @@ entity cpu_cop0 is
       error_exception         : out std_logic := '0';
       error_TLB               : out std_logic := '0';
             
-      irqRequest              : in  std_logic;
-      irqCartRequest          : in  std_logic;
+      -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
+      -- separate N64 lines. See where it is assigned, below.
+      irqLines                : in  std_logic_vector(4 downto 0);
       irqTrigger              : out std_logic;
       decode_irq              : in  std_logic;
 
@@ -687,11 +688,23 @@ begin
          elsif (ce = '1') then
          
             -- interrupt
-            COP0_13_CAUSE_interruptPending(2) <= irqRequest;
-            COP0_13_CAUSE_interruptPending(3) <= irqCartRequest;
-            if (preNMI = '1') then
-               COP0_13_CAUSE_interruptPending(4) <= preNMI;
-            end if;
+            -- SGI: all five hardware lines, level-sensitive, both ways.
+            --
+            -- Upstream drives IP2 from irqRequest, IP3 from irqCartRequest,
+            -- and *sets* IP4 from preNMI without ever clearing it - an N64 has
+            -- two interrupt sources and a reset button. An IP24 has five, all
+            -- from the INT2 block inside IOC2 and all ordinary levels:
+            -- LOCAL0 on IP2, LOCAL1 on IP3, 8254 counters 0 and 1 on IP4 and
+            -- IP5, and bus error on IP6 (IRIS's Ioc::update_interrupts, and
+            -- what the PROM's own handler dispatch expects).
+            --
+            -- Level-sensitive is the whole point and is why this is an
+            -- assignment rather than a set: the ISR clears the interrupt at
+            -- the device, the IOC's status bit drops, and Cause.IP follows on
+            -- the next clock. Nothing in CP0 acknowledges anything. IP7 (the
+            -- Count/Compare timer) and IP1:0 (the two software interrupts)
+            -- are CP0's own and are not touched here.
+            COP0_13_CAUSE_interruptPending(6 downto 2) <= unsigned(irqLines);
 
             -- count
             if (cop0Written9 = 0) then

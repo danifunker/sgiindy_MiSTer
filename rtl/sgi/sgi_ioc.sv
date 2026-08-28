@@ -13,12 +13,36 @@
 //  reads SYS_ID with a full `lw` and tests bit 5. Writes take whichever byte
 //  lane is enabled, so a `sw` of the value works as well as an `sb` at +3.
 //
-//  INTERRUPT STATUS IS REAL ZERO, NOT A LOOPBACK. L0_STAT, L1_STAT and
-//  MAP_STAT read 0 and ignore writes, because nothing in this core raises an
-//  interrupt yet. The DE1 sandbox made them read-write registers so the PROM's
-//  init writes would "work"; that passes the same tests and then lies as soon
-//  as anything real is connected, so it is not done here. When interrupt
-//  sources arrive they wire into l0_stat/l1_stat and nothing else changes.
+//  INT2, THE INTERRUPT CONTROLLER, IS AT +0x80 AND IS REAL. Three status
+//  registers, three masks, and five lines out to the CPU:
+//
+//    L0_STAT  & L0_MASK  -> Cause.IP2      the LOCAL0 level
+//    L1_STAT  & L1_MASK  -> Cause.IP3      the LOCAL1 level
+//    MAP_STAT bit 0      -> Cause.IP4      8254 counter 0
+//    MAP_STAT bit 1      -> Cause.IP5      8254 counter 1
+//    ERR_STAT            -> Cause.IP6      bus error
+//
+//  and the two mappable summaries fold back into the levels: MAP_STAT &
+//  MAP_MASK0 is L0_STAT bit 7, MAP_STAT & MAP_MASK1 is L1_STAT bit 3. That is
+//  IRIS's Ioc::update_interrupts, and it is the arrangement the PROM's own
+//  dispatch assumes.
+//
+//  EVERY STATUS BIT IS A LEVEL, NOT A LATCH, WITH TWO EXCEPTIONS. A device
+//  holds its line until its ISR clears the condition at the device; the status
+//  bit follows the wire and Cause.IP follows the status bit, so there is
+//  nothing here to acknowledge. The exceptions are MAP_STAT bits 0 and 1, the
+//  two 8254 counters, which are set by an edge and cleared only by a write to
+//  TMR_CLR at +0xA0 - a counter output is a pulse, so something has to
+//  remember it.
+//
+//  WHAT THIS IS FOR IS IRIX, NOT THE PROM. The PROM writes a walking pattern
+//  through both LOCAL masks as its INT path test, settles on L1_MASK = 0x02
+//  (the front panel) and nothing else, and polls its devices - it never takes
+//  an interrupt for SCSI at all. So a boot to the Command Monitor proves
+//  nothing about anything below, and reasoning about device timing from the
+//  console will mislead you; it already did once, and docs/12-chipset.md
+//  records the wrong conclusion next to the right one. tests/run-int.sh is
+//  what actually exercises this block.
 //============================================================================
 
 module sgi_ioc #(
@@ -47,12 +71,27 @@ module sgi_ioc #(
     output logic [63:0] rdata,
     output logic        ack,
 
-    // Interrupt inputs, for when there are any. Bit assignments are IRIS's
-    // l0_regs/l1_regs: L0 bit 1 = SCSI0, bit 3 = Ethernet, bit 4 = MC DMA;
-    // L1 bit 4 = HPC DMA, bit 7 = vertical retrace.
+    // Interrupt sources, all active high. Bit assignments are IRIS's
+    // l0_regs / l1_regs / map_regs:
+    //   L0   0 FIFO full, 1 SCSI0, 2 SCSI1, 3 Ethernet, 4 MC DMA,
+    //        5 parallel, 6 graphics, 7 MAP_INT0 (generated here)
+    //   L1   0 GP0, 1 panel, 2 GP2, 3 MAP_INT1 (generated here), 4 HPC DMA,
+    //        5 AC fail, 6 video vsync, 7 vertical retrace
+    //   MAP  4 keyboard/mouse, 5 serial, 6/7 GIO expansion slots 0 and 1.
+    //        Bits 0 and 1 are the 8254 counters and come in on pit_edge
+    //        below rather than here, because they are edges.
+    // Bit 7 of l0_source and bit 3 of l1_source are ignored: they are the two
+    // mappable summaries and are computed from MAP_STAT.
     input  logic  [7:0] l0_source,
     input  logic  [7:0] l1_source,
-    output logic        int_n         // to the CPU, active low
+    input  logic  [7:0] map_source,
+
+    output logic  [4:0] irq_lines,    // to the CPU: Cause.IP[6:2]
+
+    // Observability. INT2's whole visible state in one bus, so a harness can
+    // say why a line is or is not asserted without reaching into the
+    // hierarchy: {MAP_STAT, L1_MASK, L1_STAT, L0_MASK, L0_STAT}.
+    output logic [39:0] int2_state
 );
 
     // Register indices, as (offset >> 2).
@@ -64,15 +103,44 @@ module sgi_ioc #(
     localparam int I_L1_STAT   = 8'h88 >> 2;
     localparam int I_L1_MASK   = 8'h8C >> 2;
     localparam int I_MAP_STAT  = 8'h90 >> 2;
+    localparam int I_MAP_MASK0 = 8'h94 >> 2;
+    localparam int I_MAP_MASK1 = 8'h98 >> 2;
+    localparam int I_TMR_CLR   = 8'hA0 >> 2;    // write-only: clears MAP_STAT[1:0]
+    localparam int I_ERR_STAT  = 8'hA4 >> 2;
     localparam int I_PIT_BASE  = 8'hB0 >> 2;    // counters 0..2 then the control word
 
     logic [7:0] reg8 [0:63];
 
-    // Live interrupt state. Masks live in reg8 with everything else; the
-    // status lines are inputs and are not stored.
-    wire [7:0] l0_stat = l0_source;
-    wire [7:0] l1_stat = l1_source;
-    assign int_n = ~(|(l0_stat & reg8[I_L0_MASK]) | |(l1_stat & reg8[I_L1_MASK]));
+    // The only interrupt state this block owns: the two counter latches.
+    // Everything else is a wire from a device or a mask in reg8.
+    logic [1:0] tmr_stat;
+
+    // MAP_STAT. Bits 4..7 follow their sources; bits 0 and 1 are the latches.
+    // MAP_POL at +0x9C is stored and does nothing: it selects the active edge
+    // of the two GIO expansion lines, and neither is fitted.
+    wire [7:0] map_stat = {map_source[7:4], 2'b00, tmr_stat};
+
+    // The two mappable summaries, folded back into the levels they belong to.
+    wire map_int0 = |(map_stat & reg8[I_MAP_MASK0]);
+    wire map_int1 = |(map_stat & reg8[I_MAP_MASK1]);
+
+    wire [7:0] l0_stat = {map_int0, l0_source[6:0]};
+    wire [7:0] l1_stat = {l1_source[7:4], map_int1, l1_source[2:0]};
+
+    // Nothing in this core reports a bus error yet - the unclaimed-cycle path
+    // in sgi_indy.sv answers rather than faulting - so ERR_STAT is a real
+    // zero and IP6 never fires. It is here because reading it is part of the
+    // PROM's interrupt init and a hole would show up as an unclaimed cycle.
+    wire [7:0] err_stat = 8'h00;
+
+    assign int2_state = {map_stat, reg8[I_L1_MASK], l1_stat,
+                         reg8[I_L0_MASK], l0_stat};
+
+    assign irq_lines = {|err_stat,                          // IP6 bus error
+                        tmr_stat[1],                        // IP5 counter 1
+                        tmr_stat[0],                        // IP4 counter 0
+                        |(l1_stat & reg8[I_L1_MASK]),       // IP3 LOCAL1
+                        |(l0_stat & reg8[I_L0_MASK])};      // IP2 LOCAL0
 
     // Collapse whichever byte lane is enabled onto the register's value, the
     // same way sgi_scc.sv does: an 8-bit register on a 32-bit word does not
@@ -88,6 +156,14 @@ module sgi_ioc #(
     // has to name the half the CPU actually addressed rather than firing for
     // both halves of the doubleword. Byte enables are meaningless on a read
     // (see r4300_bus.sv), so `aoff` is what says which.
+
+    // Counter 0 and 1 outputs are one-tick pulses at the end of each period
+    // (pit8254.sv), so they are edge-detected into the MAP_STAT latches. The
+    // rise is what counts: a level would be missed as often as it was seen,
+    // because the pulse is one 8254 tick wide and the CPU is not looking.
+    logic [2:0] pit_out, pit_out_d;
+    wire  [1:0] pit_edge = pit_out[1:0] & ~pit_out_d[1:0];
+
     wire       pit_sel  = (addr[7:4] == 4'hB);
     wire [1:0] pit_idx  = {addr[3], aoff[2]};
     wire [7:0] pit_dout;
@@ -104,7 +180,7 @@ module sgi_ioc #(
         .sel   (pit_idx),
         .din   (ioc_wr_byte(aoff[2])),
         .dout  (pit_dout),
-        .out   ()
+        .out   (pit_out)
     );
 
     function automatic logic [7:0] ioc_rd(input logic w);
@@ -124,7 +200,11 @@ module sgi_ioc #(
             I_SYS_ID:   ioc_rd = SYS_ID_VALUE;
             I_L0_STAT:  ioc_rd = l0_stat;
             I_L1_STAT:  ioc_rd = l1_stat;
-            I_MAP_STAT: ioc_rd = 8'h00;
+            I_MAP_STAT: ioc_rd = map_stat;
+            I_ERR_STAT: ioc_rd = err_stat;
+            // Write-only. The PROM does not read it back, but a loopback here
+            // would report interrupts that are not pending.
+            I_TMR_CLR:  ioc_rd = 8'h00;
             default:    ioc_rd = (idx >= I_PIT_BASE) ? pit_dout : reg8[idx];
         endcase
     endfunction
@@ -136,26 +216,41 @@ module sgi_ioc #(
         ack   <= 1'b0;
         rdata <= 64'h0;
 
+        pit_out_d <= pit_out;
+
         if (reset) begin
             for (i = 0; i < 64; i = i + 1) reg8[i] <= 8'h00;
+            tmr_stat  <= 2'b00;
+            pit_out_d <= 3'b000;
             // PANEL bit 0 is the power state, and the machine is on.
             reg8[8'h50 >> 2] <= 8'h01;
             // IOC_READ bits 6:4 are the Ethernet and SCSI "power good" lines.
             reg8[8'h60 >> 2] <= 8'h70;
         end else begin
+            // A counter that expires in the same clock as the write that
+            // clears it stays pending: the interrupt happened, and losing it
+            // costs a whole timer period. Hence set after clear, below.
             for (int w = 0; w < 2; w++) begin
                 if (wr_en[w]) begin
                     logic [5:0] idx;
                     idx = {addr[7:3], w[0]};
+                    // TMR_CLR is a write-only strobe, not a register: a 1 bit
+                    // clears the matching MAP_STAT latch. Only the two counter
+                    // bits are clearable; the rest of MAP_STAT is a level.
+                    if (idx == I_TMR_CLR)
+                        tmr_stat <= tmr_stat & ~ioc_wr_byte(w[0])[1:0];
                     // The three status registers are read-only, the timer has
                     // its own state; everything else, including all the masks,
                     // is plain storage.
                     if (idx != I_L0_STAT && idx != I_L1_STAT && idx != I_MAP_STAT
                         && idx != I_KBD_DATA && idx != I_KBD_CMD
+                        && idx != I_TMR_CLR && idx != I_ERR_STAT
                         && idx < I_PIT_BASE)
                         reg8[idx] <= ioc_wr_byte(w[0]);
                 end
             end
+
+            if (|pit_edge) tmr_stat <= tmr_stat | pit_edge;
 
             if (sel) begin
                 rdata <= {24'h0, ioc_rd(1'b0), 24'h0, ioc_rd(1'b1)};

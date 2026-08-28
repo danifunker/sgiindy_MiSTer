@@ -136,6 +136,10 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> type;
     uint64_t idle_cycles  = 400000;  // console quiet time that counts as a prompt
     std::string stop_on;             // end the run when this appears on the console
+    // Log every change of the five INT2 lines into the CPU, with the status
+    // and mask registers that produced it. An interrupt that never fires and
+    // an interrupt that fires and is ignored look identical from the console.
+    bool     irq          = false;
 };
 
 // Turn the backslash escapes a shell argument can carry into bytes, so
@@ -188,6 +192,7 @@ static void usage()
         "  --ram-mb N        main memory size (default 64)\n"
         "  --max-cycles N    give up after N clocks (default 4e9)\n"
         "  --stuck N         report no forward progress after N clocks\n"
+        "  --irq             log every change of the INT2 interrupt lines\n"
         "  --trace           print a bus trace\n"
         "  --trace-from N    start the trace at cycle N\n"
         "  --trace-count N   how many transactions to print (default 2000)\n"
@@ -228,6 +233,7 @@ int main(int argc, char **argv)
         else if (a == "--boot-pc")     opt.boot_pc = strtoul(next("--boot-pc"), nullptr, 0);
         else if (a == "--testdev")     opt.testdev = true;
         else if (a == "--trace")       opt.trace = true;
+        else if (a == "--irq")         opt.irq = true;
         else if (a == "--hot")         opt.hot = true;
         else if (a == "--uart")        opt.uart = true;
         else if (a == "--disk") {
@@ -456,6 +462,32 @@ int main(int argc, char **argv)
                 traced++;
             }
             if (a == stuck_addr) stuck_hits++; else { stuck_addr = a; stuck_hits = 1; }
+        }
+
+        // INT2's five lines into the CPU, printed on every change. `stat`
+        // and `mask` are the pair that decided it, so a line that should have
+        // fired but did not is one line of output away from its reason: an
+        // asserted status bit against a zero mask is software that has not
+        // enabled the source, and a clear status bit is the device.
+        if (opt.irq) {
+            static uint32_t prev_lines = 0xffffffff;
+            static uint64_t prev_state = ~0ull;
+            uint64_t st = top->int2_state;
+            if (top->irq_lines != prev_lines || st != prev_state) {
+                printf("[%10llu] IRQ IP[6:2]=%c%c%c%c%c  L0 %02x/%02x  "
+                       "L1 %02x/%02x  MAP %02x\n",
+                       static_cast<unsigned long long>(cycle),
+                       (top->irq_lines & 16) ? '6' : '.',
+                       (top->irq_lines &  8) ? '5' : '.',
+                       (top->irq_lines &  4) ? '4' : '.',
+                       (top->irq_lines &  2) ? '3' : '.',
+                       (top->irq_lines &  1) ? '2' : '.',
+                       (unsigned)((st >>  0) & 0xff), (unsigned)((st >>  8) & 0xff),
+                       (unsigned)((st >> 16) & 0xff), (unsigned)((st >> 24) & 0xff),
+                       (unsigned)((st >> 32) & 0xff));
+                prev_lines = top->irq_lines;
+                prev_state = st;
+            }
         }
 
         // Unclaimed cycles are collected, not printed: an undecoded register

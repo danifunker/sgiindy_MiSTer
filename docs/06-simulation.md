@@ -98,6 +98,13 @@ Everything docs recommended porting from the sandbox is there:
   useful diagnostic for chipset bring-up — the next thing to build is nearly
   always the address at the top of a poll loop — and it replaced a per-cycle
   stderr line that buried everything else under 122000 copies of itself;
+- `--irq`, one line per change of INT2's five lines into the CPU, with the
+  status and mask registers that decided them. An interrupt that never fires
+  and an interrupt that fires and is ignored look identical from the console,
+  and this separates them in one line: an asserted status bit against a zero
+  mask is software that has not enabled the source, a clear status bit is the
+  device. It is what showed that the PROM masks LOCAL0 off entirely and polls
+  the SCSI chip instead, which retired a wrong diagnosis in `docs/12`;
 - the SCC console tap, plus `--uart` to decode the `txdb` line independently;
 - an **ELF loader** that probes both ends of every segment after writing,
   because unmapped physical space accepts writes silently.

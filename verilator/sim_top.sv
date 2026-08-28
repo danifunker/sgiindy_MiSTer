@@ -66,7 +66,9 @@ module sim_top
     output wire [63:0] bus_rdata,
     output wire        bus_ack,
     output wire        bus_unclaimed,
-    output wire  [5:0] cpu_error
+    output wire  [5:0] cpu_error,
+    output wire  [4:0] irq_lines,
+    output wire [39:0] int2_state
 );
 
     wire        ram_req, ram_we, ram_ack;
@@ -161,7 +163,9 @@ module sim_top
         .bus_rdata_o   (bus_rdata),
         .bus_ack_o     (bus_ack),
         .bus_unclaimed (bus_unclaimed),
-        .cpu_error     (cpu_error)
+        .cpu_error     (cpu_error),
+        .irq_lines_o   (irq_lines),
+        .int2_state_o  (int2_state)
     );
 
     sim_ram u_ram  (.clk(clk), .space(32'd0), .req(ram_req),  .we(ram_we),

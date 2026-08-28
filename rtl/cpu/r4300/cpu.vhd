@@ -27,8 +27,9 @@ entity cpu is
       DISABLE_BOOTCOUNT     : in  std_logic;
       DISABLE_DTLBMINI      : in  std_logic;
 
-      irqRequest            : in  std_logic;
-      irqCartRequest        : in  std_logic;
+      -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
+      -- separate N64 lines - see cpu_cop0.vhd where it is assigned.
+      irqLines              : in  std_logic_vector(4 downto 0);
       cpuPaused             : in  std_logic;
       
       error_instr           : out std_logic := '0';
@@ -3423,8 +3424,7 @@ begin
       error_exception         => error_exception,
       error_TLB               => error_TLB,
       
-      irqRequest              => irqRequest,
-      irqCartRequest          => irqCartRequest,
+      irqLines                => irqLines,
       irqTrigger              => irqTrigger,
       decode_irq              => decode_irq,
 

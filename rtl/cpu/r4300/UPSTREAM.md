@@ -104,6 +104,25 @@ the changes inside the vendored files that had to go with it.
 | `cpu_cop0.vhd` | `Config.K0` is exported as `CONFIG_K0` | It was stored and read back but never acted on. Reassembled from the two fields upstream splits it across — `cacheAlgoKSEG0` is K0(1:0) and the low bit of `cu` is K0(2), because `cu` is really `Config(3:2)` |
 | `cpu.vhd` | KSEG0 is cacheable only when `Config.K0 /= 2`, for both fetch and data | An N64 never writes `Config`, so upstream hardcodes KSEG0 as cached. The IP24 PROM comes out of reset with K0 = 2 (uncached) and has a pair of routines at `0xBFC04798` and `0xBFC047D8` whose only job is to switch it to 3 and back. Only the encoding 2 means uncached, so every other value — including the reserved 0 this core resets to, which is what the cpu-tests suite runs with — stays cacheable |
 
+### Interrupts — five lines instead of two
+
+An N64 has two interrupt sources and a reset button; an IP24 has one interrupt
+controller with five lines into the CPU. `irqRequest` and `irqCartRequest` are
+replaced by a single `irqLines`, `std_logic_vector(4 downto 0)`, carrying
+`Cause.IP[6:2]` — LOCAL0, LOCAL1, 8254 counter 0, 8254 counter 1, bus error, in
+that order (IRIS's `Ioc::update_interrupts`). `rtl/sgi/sgi_ioc.sv` drives it.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_cop0.vhd`, `cpu.vhd` | `irqRequest` + `irqCartRequest` → `irqLines(4 downto 0)` | Five sources, not two |
+| `cpu_cop0.vhd` | `Cause.IP(6 downto 2)` is assigned from it every cycle | All five are ordinary levels. Upstream *sets* IP4 from `preNMI` and never clears it, which is right for a reset button and wrong for a timer. `preNMI` is tied low here and its port is left in place so the entity still matches upstream's |
+
+`Cause.IP7` (the Count/Compare timer) and `IP1:0` (the two software interrupts)
+are untouched and remain CP0's own. `tests/run-int.sh` exercises the whole path
+from an 8254 counter to an Interrupt exception, both directly on IP4 and
+through INT2's mappable summary on IP2, and checks that masking at either end
+stops it.
+
 `DATACACHETLBON` is now 1 in `r4300_wrap.vhd` (upstream default 0), which is a
 port value rather than a source change but belongs with them: with KSEG0 cached
 and mapped pages not, the two views of one physical page disagree, and
