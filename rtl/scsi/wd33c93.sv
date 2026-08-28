@@ -150,6 +150,18 @@ module wd33c93 #(
     localparam logic [7:0] S_XFER_STATUS_IN = 8'h1B;
     localparam logic [7:0] S_XFER_MSG_IN    = 8'h1F;
     localparam logic [7:0] S_XFER_CMD_OUT   = 8'h1A;  // target wants COMMAND
+    localparam logic [7:0] S_XFER_MSG_OUT  = 8'h1E;
+    // "Service required": the target has asked for a phase and the chip is not
+    // in a command that handles it, so it hands the question to the driver.
+    // The BASE IS 0x88, NOT 0x80, and the low three bits are the phase:
+    // 0x88 DATA OUT, 0x89 DATA IN, 0x8A COMMAND, 0x8B STATUS, 0x8E MSG OUT,
+    // 0x8F MSG IN. The list is IRIS's src/wd33c93a.rs, which matches IRIX's
+    // own wd93.h names, and it matters that the base is right: 0x80..0x87 are
+    // a different group entirely - 0x85 is "disconnected" - so an off-by-eight
+    // here does not produce an unrecognised code, it produces a plausible and
+    // wrong one. `0x80 | phase` made a MESSAGE OUT request arrive as 0x86, and
+    // the PROM answered a status it did not recognise by disconnecting.
+    localparam logic [7:0] S_SERVICE_REQ    = 8'h88;
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
@@ -184,6 +196,7 @@ module wd33c93 #(
     localparam logic [2:0] PH_DATA_IN  = 3'b001;   // target -> initiator
     localparam logic [2:0] PH_COMMAND  = 3'b010;
     localparam logic [2:0] PH_STATUS   = 3'b011;
+    localparam logic [2:0] PH_MSG_OUT  = 3'b110;   // initiator -> target
     localparam logic [2:0] PH_MSG_IN   = 3'b111;
 
     // Control[7:5] selects the DMA mode; zero is polled I/O. See the header.
@@ -196,11 +209,14 @@ module wd33c93 #(
                               reg_file[R_COUNT_LSB]};
 
     // ---- sequencer ----------------------------------------------------------
-    typedef enum logic [3:0] {
+    // Five bits, not four: the sequencer passed sixteen states when the plain
+    // SELECT grew its second, phase-reporting interrupt.
+    typedef enum logic [4:0] {
         ST_IDLE,
         ST_SEL_ASSERT,      // drive SEL with the target's ID
         ST_SEL_WAIT,        // wait for the target to answer with BSY
         ST_SEL_DONE,
+        ST_SEL_PHASE,       // selected: report the phase the target asks for
         ST_XFER,            // wait for REQ in the current phase
         ST_XFER_ACK,        // data taken or presented; raise ACK
         ST_XFER_REL,        // wait for the target to drop REQ
@@ -248,11 +264,20 @@ module wd33c93 #(
     // True while a DMA data phase is running, so that leaving the phase can be
     // reported to the engine as an end of transfer exactly once.
     logic       dma_in_data;
+    // Select-and-Transfer's IDENTIFY is ONE byte, and this is what stops it
+    // being two. A target needs a clock to leave MESSAGE OUT after the last
+    // ACK falls; the sequencer is back in ST_SAT_PHASE before that, sees
+    // MESSAGE OUT and REQ still asserted, and sends the message again. The
+    // second byte then lands as the first byte of the CDB - which presents as
+    // a target that answers selection and then never recognises the command,
+    // with cmd[0] = 0x80.
+    logic       sat_identify_sent;
     wire  [2:0] cdb_group = reg_file[R_CDB1][7:5];
     wire  [3:0] cdb_len   = (cdb_group == 3'd1 || cdb_group == 3'd2) ? 4'd10
                           : (cdb_group == 3'd5)                      ? 4'd12
                           :                                            4'd6;
-    wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND);
+    wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND)
+                          || (phase == PH_MSG_OUT);
 
     assign scsi_dout = data_latch;
     assign irq       = int_pending;
@@ -311,6 +336,7 @@ module wd33c93 #(
             dma_dir_in  <= 1'b0;
             dma_wdata   <= 8'h00;
             dma_in_data <= 1'b0;
+            sat_identify_sent <= 1'b0;
             rst_timer   <= 9'd0;
         end else if (ce) begin
             bsy_q   <= scsi_bsy;
@@ -418,6 +444,7 @@ module wd33c93 #(
                                             sel_timer <= 16'h0;
                                             cdb_idx   <= 4'd0;
                                             dma_in_data <= 1'b0;
+                                            sat_identify_sent <= 1'b0;
                                             reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
                                             state     <= ST_SAT_SEL;
                                         end
@@ -535,7 +562,38 @@ module wd33c93 #(
                     cip <= 1'b0;
                     reg_file[R_SCSI_STATUS] <= S_SELECT_OK;
                     int_pending <= 1'b1;
-                    state <= ST_IDLE;
+                    state <= ST_SEL_PHASE;
+                end
+
+                // A PLAIN SELECT IS TWO INTERRUPTS, NOT ONE. The first says
+                // the target answered; the second says which phase it has
+                // asked for, and a driver that has just selected with ATN is
+                // waiting for exactly that before it sends anything. This
+                // model used to stop at the first one and sit in ST_IDLE, so
+                // the IP24 PROM's synchronous-transfer negotiation waited out
+                // its 5000-tick timeout on every boot and reset the bus.
+                //
+                // The driver's own code is the specification here:
+                // 0xBFC1CB24 reads the status register and tests
+                // `andi $t0, $v0, 7; bne $t0, 6` - the low three bits are the
+                // phase and 6 is MESSAGE OUT.
+                //
+                // The wait for the status read matters: the SCSI status
+                // register holds one result at a time, and overwriting the
+                // select-complete status before the driver has read it
+                // destroys the answer it is about to ask for. Same rule the
+                // LCI path is built on - see the command register above.
+                ST_SEL_PHASE: begin
+`ifdef MSG_DEBUG
+                    $display("[INI] SEL_PHASE bsy=%b req=%b phase=%b int=%b atn=%b", scsi_bsy, scsi_req, phase, int_pending, scsi_atn);
+`endif
+                    if (!scsi_bsy) begin
+                        state <= ST_IDLE;
+                    end else if (!int_pending && scsi_req) begin
+                        reg_file[R_SCSI_STATUS] <= S_SERVICE_REQ | {5'b0, phase};   // 0x88 | phase
+                        int_pending <= 1'b1;
+                        state <= ST_IDLE;
+                    end
                 end
 
                 // One byte per REQ. The driver either wrote the byte into the
@@ -543,6 +601,9 @@ module wd33c93 #(
                 // phases) or reads it out afterwards (from-target phases);
                 // DBR is what tells it which way round it is.
                 ST_XFER: begin
+`ifdef MSG_DEBUG
+                    $display("[INI] XFER bsy=%b req=%b phase=%b cnt=%0d atn=%b", scsi_bsy, scsi_req, phase, xfer_count, scsi_atn);
+`endif
                     if (!scsi_bsy) begin
                         // The target let go of the bus mid-transfer. Still a
                         // clean disconnect as far as the driver is concerned,
@@ -554,6 +615,13 @@ module wd33c93 #(
                         state <= ST_IDLE;
                     end else if (scsi_req) begin
                         if (!to_target) data_latch <= scsi_din;
+                        // A message ends by the initiator negating ATN before
+                        // it acknowledges the last byte - that is how the
+                        // target knows how long the message was without
+                        // parsing it. ACK goes up in the next state, so
+                        // dropping ATN here is in time.
+                        if ((phase == PH_MSG_OUT) && (xfer_count <= 24'd1))
+                            scsi_atn <= 1'b0;
                         state <= ST_XFER_ACK;
                     end
                 end
@@ -593,10 +661,17 @@ module wd33c93 #(
                         PH_DATA_IN:  reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;
                         PH_COMMAND:  reg_file[R_SCSI_STATUS] <= S_XFER_CMD_OUT;
                         PH_STATUS:   reg_file[R_SCSI_STATUS] <= S_XFER_STATUS_IN;
+                        PH_MSG_OUT:  reg_file[R_SCSI_STATUS] <= S_XFER_MSG_OUT;
                         PH_MSG_IN:   reg_file[R_SCSI_STATUS] <= S_XFER_MSG_IN;
                         default:     reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;
                     endcase
                     int_pending <= 1'b1;
+                    // ST_IDLE, not the phase-reporting state. A real chip does
+                    // report the next phase the target asks for after a
+                    // completed TRANSFER INFO, and that was tried here; it
+                    // changed nothing this machine does and it puts an extra
+                    // interrupt into every PIO transfer, so it is left out
+                    // until something needs it.
                     state <= ST_IDLE;
                 end
 
@@ -640,6 +715,11 @@ module wd33c93 #(
                 // rather than driving a fixed order is what makes this work
                 // for commands with no data phase as well as ones with.
                 ST_SAT_PHASE: begin
+// One line per bus phase the sequencer is offered. Build with
+// +define+MSG_DEBUG; silent and free without it.
+`ifdef MSG_DEBUG
+                    $display("[INI] SAT_PHASE bsy=%b req=%b phase=%b atn=%b cdb_idx=%0d ident=%b", scsi_bsy, scsi_req, phase, scsi_atn, cdb_idx, sat_identify_sent);
+`endif
                     if (!scsi_bsy) begin
                         // Bus free: the target is done. If a DMA data phase
                         // was running it ends here too - see below.
@@ -663,6 +743,23 @@ module wd33c93 #(
                         // handled on the next pass.
                     end else if (scsi_req) begin
                         case (phase)
+                            // SELECT-WITH-ATN-AND-TRANSFER SENDS ITS OWN
+                            // IDENTIFY. That is the whole difference between
+                            // command 0x08 and 0x09, and the IP24 PROM issues
+                            // 0x08. The chip builds the message from
+                            // TARGET_LUN rather than taking it from the
+                            // driver, and one byte is the whole message, so
+                            // ATN comes down with it.
+                            PH_MSG_OUT: begin
+                                if (!sat_identify_sent) begin
+                                    data_latch <= 8'h80 | {5'b0, reg_file[R_TARGET_LUN][2:0]};
+                                    scsi_atn   <= 1'b0;
+                                    sat_identify_sent <= 1'b1;
+                                    state      <= ST_SAT_ACK;
+                                end
+                                // Otherwise wait here, without acknowledging
+                                // anything, until the target moves on.
+                            end
                             PH_COMMAND: begin
                                 data_latch <= reg_file[R_CDB1 + cdb_idx];
                                 state      <= ST_SAT_ACK;

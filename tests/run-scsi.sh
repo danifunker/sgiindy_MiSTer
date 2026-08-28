@@ -21,18 +21,18 @@
 # reading a block full of nothing. A test that wanted a valid header would be
 # testing the fixture, not the machine.
 #
-# WHAT IS STILL BROKEN, and is deliberately not asserted either way:
+# The boot is now free of SCSI errors entirely. It used to print
 #
 #     sc0,1,0: SYNC negotiation error, resetting SCSI bus
 #
-# The PROM tries to negotiate synchronous transfer with a SELECT-with-ATN and
-# an SDTR message, and the target model has no MESSAGE OUT phase to receive it
-# in - scsi.v's PHASE_MESSAGE_OUT is MESSAGE IN in SCSI's naming and only ever
-# sends COMMAND COMPLETE. The boot survives it and the disk still reads.
+# because the PROM negotiates synchronous transfer and the target had no
+# MESSAGE OUT phase to receive the SDTR in. Both ends of that are built now -
+# see docs/13-scsi-dma-plan.md - and the string is on the forbidden list below.
 #
-# `hinv` also lists no disk, and it is NOT established that the two are
-# connected: this PROM's hinv lists no SCSI controller either, and -v adds
-# nothing. See docs/13-scsi-dma-plan.md.
+# WHAT IS STILL MISSING: `hinv` lists no disk. That is NOT what this script
+# tests, and two theories about why have already been wrong - the negotiation
+# was not it, and neither is "this PROM's hinv does not report SCSI". The disk
+# is missing from the ARCS device tree; docs/13 has where to pick that up.
 #
 #   tests/run-scsi.sh [--no-build]
 
@@ -62,6 +62,13 @@ FORBID=(
     # POST must not start failing just because a disk is present.
     "Diagnostics failed"
     "illegal disconnection interrupt"
+    # The PROM's synchronous-transfer negotiation. It fails when the target
+    # cannot receive a MESSAGE OUT, or when it receives one and never answers.
+    "SYNC negotiation error"
+    # Any bus reset at all. Every one of these was a real failure being
+    # recovered from, and there should now be none in a clean boot.
+    "resetting SCSI bus"
+    "Resetting SCSI bus"
 )
 
 if [[ "${1:-}" != "--no-build" ]]; then

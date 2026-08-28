@@ -157,6 +157,13 @@ localparam PHASE_DATA_IN     = 3'd3;
 localparam PHASE_STATUS_OUT  = 3'd4;
 localparam PHASE_MESSAGE_OUT = 3'd5;
 localparam PHASE_TB          = 3'd6;  // BlueSCSI Toolbox HPS round-trip
+// SGI: a real MESSAGE OUT - initiator to target, {msg,cd,io} = 110. Note that
+// PHASE_MESSAGE_OUT above is MESSAGE *IN* in SCSI's naming: every phase name
+// in this file reads from the target's side, so "out" there means out of the
+// target. This one keeps the bus's naming because it is the one the bus
+// specification calls MESSAGE OUT, and calling it anything else here would
+// make {msg,cd,io} below unreadable.
+localparam PHASE_MSG_OUT     = 3'd7;
 reg [2:0]  phase;
 
 // ------------ sector buffer IO controller read/write -----------------------
@@ -417,8 +424,10 @@ reg [7:0]  status;
 `define MSG_CMD_COMPLETE 8'h00
 	
 // drive scsi signals according to phase
-assign msg = (phase == PHASE_MESSAGE_OUT);
-assign cd = (phase == PHASE_CMD_IN) || (phase == PHASE_STATUS_OUT) || (phase == PHASE_MESSAGE_OUT);
+assign msg = (phase == PHASE_MESSAGE_OUT) || (phase == PHASE_MSG_OUT);
+assign cd = (phase == PHASE_CMD_IN) || (phase == PHASE_STATUS_OUT) || (phase == PHASE_MESSAGE_OUT) || (phase == PHASE_MSG_OUT);
+// io stays low for PHASE_MSG_OUT: it is the one phase here in which the
+// initiator drives the data bus and this target reads it.
 assign io = (phase == PHASE_DATA_OUT) || (phase == PHASE_STATUS_OUT) || (phase == PHASE_MESSAGE_OUT);
 
 // READ stall: for a block READ, the sector the Mac wants (rd_cur_blk) has not
@@ -1950,6 +1959,7 @@ always @(posedge clk) begin
 	buffer1_wr <= 0;
 	if(stb_ack) begin
 		if(phase == PHASE_CMD_IN)  cmd[cmd_cnt] <= din;
+		if(phase == PHASE_MSG_OUT) msg_byte <= din;
 		if(phase == PHASE_DATA_IN) begin
 			buffer0_wr <= ~data_cnt[0];
 			buffer1_wr <=  data_cnt[0];
@@ -1958,6 +1968,34 @@ always @(posedge clk) begin
 end
 
 // ... advance counter on falling edge
+// SGI: the last MESSAGE OUT byte, for the $display below. Nothing acts on it.
+reg [7:0] msg_byte;
+
+// SGI: did the initiator send more than an IDENTIFY?
+//
+// IDENTIFY has bit 7 set and is the only message this target understands. The
+// IP24 PROM's negotiation sends IDENTIFY followed by a synchronous-transfer
+// request, and that second message is what this flag detects.
+//
+// It decides how the exchange ends. An IDENTIFY-only MESSAGE OUT is the
+// prologue to a command, so the bus goes on to COMMAND. Anything more was a
+// negotiation this target does not take part in, and there is no command
+// behind it - the PROM issues its real commands separately, with
+// Select-and-Transfer - so the target completes and frees the bus instead of
+// waiting for a CDB that never comes.
+//
+// A REAL DISK WOULD ANSWER MESSAGE REJECT AND GO TO COMMAND, and that was
+// built and then taken out again: the reject reaches the driver, and then
+// nothing sends a command, the target sits in COMMAND phase, and the PROM
+// times out and prints "SYNC negotiation error" - the exact failure the
+// message phases were built to remove. What is missing is on the initiator
+// side, not here. See docs/13-scsi-dma-plan.md.
+reg msg_extra;
+always @(posedge clk) begin
+	if(rst || (phase == PHASE_IDLE)) msg_extra <= 1'b0;
+	else if(stb_ack && (phase == PHASE_MSG_OUT) && !din[7]) msg_extra <= 1'b1;
+end
+
 always @(posedge clk) begin
 	if(phase == PHASE_IDLE) cmd_cnt <= 4'd0;
 	else if(stb_adv && (phase == PHASE_CMD_IN) && (cmd_cnt != 15)) cmd_cnt <= cmd_cnt + 4'd1;
@@ -2710,8 +2748,39 @@ always @(posedge clk) begin
 			// A CD-ROM drive is present on the bus even with no disc inserted
 			// (the AppleCD driver polls TEST UNIT READY to detect insertion),
 			// so the CDROM target selects on cd_enable instead of mounted.
-			if(sel && din[ID] && ((CDROM != 0) ? cd_enable : mounted) && !bus_busy)
-				phase <= PHASE_CMD_IN;
+			// SGI: ATN at selection means the initiator has a message to
+			// send before the command. Taking COMMAND anyway is what this
+			// model used to do, and it leaves an initiator that asked for
+			// MESSAGE OUT waiting for a phase that never arrives - which is
+			// how the IP24 PROM's synchronous-transfer negotiation timed out
+			// and reset the bus on every boot.
+			if(sel && din[ID] && ((CDROM != 0) ? cd_enable : mounted) && !bus_busy) begin
+// SGI: one line per message-phase event. Build with +define+MSG_DEBUG; silent
+// and free without it. This is what found the double IDENTIFY.
+`ifdef MSG_DEBUG
+				$display("[TGT%0d] selected, atn=%b -> phase %0d", ID, atn, atn ? 3'd7 : 3'd1);
+`endif
+				phase <= atn ? PHASE_MSG_OUT : PHASE_CMD_IN;
+			end
+		end
+
+		// SGI: take message bytes until the initiator drops ATN. That is the
+		// bus's own rule for how a message ends - the initiator negates ATN
+		// before acknowledging the last byte - so a message of any length
+		// works without this having to parse it.
+		//
+		// NOTHING IS DONE WITH THE MESSAGE. A target that does not implement
+		// the message it was sent is required to answer MESSAGE REJECT, and
+		// this one does not: it accepts the bytes and moves to COMMAND. For
+		// the one message this machine sends - the PROM's SDTR - the effect is
+		// the same either way, because a target that never replies with its
+		// own SDTR leaves the initiator in asynchronous mode, which is what
+		// this target is. A driver that needed the reject would notice.
+		else if(phase == PHASE_MSG_OUT) begin
+`ifdef MSG_DEBUG
+			$display("[TGT%0d] MSG_OUT atn=%b req=%b ack=%b stb_adv=%b din=%02x extra=%b", ID, atn, req, ack, stb_adv, din, msg_extra);
+`endif
+			if(stb_adv && !atn) phase <= msg_extra ? PHASE_MESSAGE_OUT : PHASE_CMD_IN;
 		end
 
 		else if(phase == PHASE_CMD_IN) begin

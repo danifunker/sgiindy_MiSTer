@@ -90,22 +90,26 @@ names the disk `dks0d1s0` and reads its volume header through a descriptor
 chain in main memory. `tests/run-scsi.sh` holds that, and `tests/run-dma.sh`
 holds thirty-one properties of the channel that a boot cannot reach.
 
+**The SCSI message phases are built too**, and with them the boot is free of
+SCSI errors entirely. `scsi.v` has a real MESSAGE OUT phase, Select-and-Transfer
+sends its own IDENTIFY, a plain SELECT raises the second, phase-reporting
+interrupt a driver waits for, and the target answers MESSAGE REJECT to anything
+it does not implement. The PROM's synchronous-transfer negotiation completes -
+rejected, falling back to asynchronous - where it used to time out and reset the
+bus on every boot.
+
 What it does **not** do is get the disk into `hinv`, which is what the plan for
-this work called done. One thing about that is established and one is not.
+this work called done, and **two theories about why have already been wrong**.
+It is not the negotiation: that is fixed and `hinv` is exactly as empty as
+before. And it is not "this PROM's `hinv` does not report SCSI": `hinv` is
+`FUN_bfc40ac0`, it walks the ARCS device tree through `FUN_bfc416e0`, and the
+node printer `FUN_bfc4119c` carries `"SCSI Disk"` and `"%*s: scsi(%u)disk(%u)"`.
 
-Established: **the PROM's synchronous-transfer negotiation fails.** It issues
-SELECT-with-ATN and waits for an interrupt saying the target has asked for
-MESSAGE OUT; `scsi.v` ignores `atn` and has no such phase, so the wait times
-out and the driver resets the bus and prints `SYNC negotiation error`. That is
-a real gap and `docs/13-scsi-dma-plan.md` has it down to the instructions.
-
-**Not** established: that the negotiation is why `hinv` is empty. `hinv` here
-lists no SCSI at all - not the controller either - and `hinv -v` adds nothing,
-which is equally consistent with this PROM's `hinv` simply not reporting SCSI.
-The negotiation is worth fixing either way; what must not happen is a session
-spent on the target model *expecting* a disk to appear in `hinv` at the end of
-it. See "Things to ask the user for", which asks for the one thing that
-settles it.
+So the disk is missing from the device tree. `docs/13-scsi-dma-plan.md` has the
+addresses to pick that up from, including the `scsidisk` probe at
+`FUN_bfc1b934` and the INQUIRY filter it applies. **Do not start a third theory
+without a traced run**: one trace of the SCSI registers while `hinv` executes
+says whether the probe is even reached.
 
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
@@ -137,10 +141,12 @@ What is *not* done, and is worth knowing before you plan anything:
   uses; the DATA OUT path through the DMA engine exists and its descriptor side
   is tested, but no byte has ever gone out through it. Nothing in a boot writes
   to a disk and the bare-metal image has no device to write to.
-- **The SCSI bus has no message phases.** No MESSAGE OUT at all, and MESSAGE IN
-  only ever carries COMMAND COMPLETE, so the PROM's sync negotiation fails and
-  the driver resets the bus over it. Whether that is also what keeps the disk
-  out of `hinv` is a guess, not a finding - see above.
+- **The SCSI message phases are minimal.** MESSAGE OUT receives and rejects
+  anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
+  COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
+  reselects, and the target's INQUIRY still reports ANSI version 0.
+- **The disk is not in the ARCS device tree**, so `hinv` does not list it even
+  though the PROM can read the disk. Cause not established - see above.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -346,32 +352,29 @@ wrong theory.
 
 ### 3. Everything after that
 
-1. **SCSI message phases.** The DMA engine is built and the PROM reads blocks
-   through it; the next visible failure on a boot with a disk is one bus phase
-   this core has never had. Note the caveat above and in "Things to ask the
-   user for": fixing this is worth doing on its own terms, but do **not** count
-   on it putting the disk into `hinv`. The PROM negotiates synchronous
-   transfer:
+1. **Find out why the disk is not in the ARCS device tree.** The DMA engine
+   and the message phases are both built, the PROM reads blocks off the disk,
+   and the boot is free of SCSI errors - and `hinv` still lists nothing. Start
+   with a traced run of the SCSI registers while `hinv` executes: if the
+   `scsidisk` probe at `FUN_bfc1b934` is not touching the bus, it is not being
+   reached, and that is a different search from it being reached and bailing.
+   `docs/13-scsi-dma-plan.md` has the addresses.
+
+   **Two theories have already been tried and neither was it**, which is why
+   the traced run comes first this time:
+
+   - *The failed sync negotiation.* Built the whole MESSAGE OUT path for it -
+     it was a real gap and the boot is better for it - and `hinv` came out
+     exactly as empty as before.
+   - *This PROM's `hinv` not reporting SCSI.* Dead from the disassembly:
+     `hinv` is `FUN_bfc40ac0`, it walks the device tree through
+     `FUN_bfc416e0`, and `FUN_bfc4119c` carries `"SCSI Disk"`.
+
+   The boot with a disk now prints one line about it and no errors:
 
    ```
    dks0d1s0: volume header not valid          <- correct, the image is zeroes
-   sc0,1,0: SYNC negotiation error, resetting SCSI bus
    ```
-
-   Two pieces, and the diagnosis is already done - do not redo it, it is in
-   `docs/13-scsi-dma-plan.md` with the disassembly:
-
-   - `wd33c93.sv` raises no interrupt after a plain SELECT completes. It needs
-     to watch for the target's first REQ and interrupt with `0x80 | phase`.
-     `0xBFC1CB24` reads the status register and does `andi $t0, $v0, 7; bne
-     $t0, 6` - it is looking for `0x8E`, "service required, MESSAGE OUT".
-   - `scsi.v` ignores `atn` and has no MESSAGE OUT phase. Its
-     `PHASE_MESSAGE_OUT` is MESSAGE IN in SCSI's naming (`{msg,cd,io} = 111`,
-     target to initiator) and only ever sends COMMAND COMPLETE. A real MESSAGE
-     OUT is `110` and receives; `PHASE_CMD_IN` is the model to copy.
-
-   The likely outcome once the message can be received is a MESSAGE REJECT and
-   an async fallback, which is all the PROM needs.
 
 2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save

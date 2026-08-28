@@ -235,74 +235,125 @@ effect, and says why.
    one part of the engine with no evidence behind it.
 
 **Definition of done, restated honestly.** The plan said "`hinv` lists the
-disk". It does not, and — see the next section — that turns out to have been a
-badly chosen target, because it is not known that this PROM's `hinv` reports
-SCSI at all. What is held instead is something the machine demonstrably does:
+disk". It does not, and the next section is the record of two wrong theories
+about why. What is held instead is something the machine demonstrably does:
 `tests/run-scsi.sh` requires the PROM to identify the disk and read its volume
 header, and `tests/run-dma.sh` requires 31 properties of the channel. The boot without a disk is unchanged (`tests/run-prom.sh` still
 passes), as are `run-int.sh`, `run-scc.sh` and the 240-test CPU suite.
 
-## What is next, and what is not known about it
+## The message phases, and what they did and did not fix
 
-**Synchronous transfer negotiation, and it is a target-model problem, not a DMA
-one.** The boot now prints:
+Built after the engine, in the same session, because the boot's next visible
+failure was one bus phase this core had never had:
 
 ```
-dks0d1s0: volume header not valid          <- correct: blank8m.img is zeroes
 sc0,1,0: SYNC negotiation error, resetting SCSI bus
 ```
 
-**First, the thing that is NOT established, because it would be easy to read
-the rest of this section as if it were.** `hinv` lists no disk — and it lists
-no SCSI *controller* either, and `hinv -v` adds nothing. Two readings fit that
-equally well and they lead to different work:
+**That line is gone.** Four things were missing and all four are real parts:
 
-* the inventory is built during the bus scan and the failed negotiation keeps
-  the disk out of it; or
-* this PROM's `hinv` does not report SCSI at all, in which case the negotiation
-  and the empty `hinv` are unrelated and the plan's definition of done was
-  aimed at a string that was never going to appear.
+1. **`scsi.v` ignored `atn` and had no MESSAGE OUT phase.** It has one now -
+   `PHASE_MSG_OUT`, `{msg,cd,io} = 110` - entered from selection when ATN is
+   asserted and left when the initiator negates ATN, which is the bus's own
+   rule for how a message ends without the target parsing it. Note that this
+   file's `PHASE_MESSAGE_OUT` is MESSAGE *IN* in SCSI's naming; every phase
+   name in it reads from the target's side.
+2. **Select-and-Transfer sends its own IDENTIFY.** That is the entire
+   difference between command 0x08 and 0x09, and the PROM issues 0x08. The
+   chip builds the message from `TARGET_LUN`; the driver never sees it.
+3. **A plain SELECT is two interrupts, not one.** The first says the target
+   answered (`0x11`); the second says which phase it is asking for, and a
+   driver that has just selected with ATN is waiting for exactly that. This
+   model stopped at the first and sat in `ST_IDLE`, so the negotiation waited
+   out its 5000-tick timeout on every boot.
+4. **A message that is more than an IDENTIFY has to end the exchange.** The
+   PROM sent IDENTIFY + SDTR, this target went straight to COMMAND, and the
+   driver sat out another timeout waiting for an answer. The target now
+   completes and frees the bus instead, and the PROM treats the negotiation as
+   concluded and goes on to issue its commands with Select-and-Transfer.
 
-Nothing here distinguishes them. One paste of a real IP24's `hinv` with a disk
-attached does, and `docs/08-resume-prompt.md` asks for exactly that. The
-strings the PROM carries are `"SCSI Disk"`, `"%*s: scsi(%u)disk(%u)\n"` and
-`"%*s: Controller %u, ID %u, removable media\n"`, all reached from
-`FUN_bfc4119c`; `hinv`'s walker is at `0xBFC41728`. Reading that walker far
-enough to see what list it iterates would also settle it, without hardware.
+   **This is the one place the target is knowingly not a real disk, and it was
+   the right answer only after the standards-correct one was built and
+   measured.** A real disk answers an unsupported message with MESSAGE REJECT
+   and continues to COMMAND. That was implemented, and it made the machine
+   worse: the reject reaches the driver, nothing then sends a CDB, the target
+   waits in COMMAND phase, and the PROM prints the same
+   `SYNC negotiation error` the message phases were built to remove. Reporting
+   the follow-on phase to the driver after the message - which is also real
+   chip behaviour, `ST_DONE` handing off to the phase-reporting state - did not
+   change it either. Whatever the driver is waiting for at that point is still
+   unidentified, and it is on the initiator side, not the target's.
 
-Fix the negotiation because it is a real gap that resets the bus on every boot,
-not because it is known to be the thing standing between here and `hinv`.
+### Three bugs, and the third only showed up in review
 
-The negotiation diagnosis itself *is* complete, and is in the PROM's own
-disassembly, so the next session should not have to redo it:
+**IDENTIFY was sent twice.** A target needs a clock to leave MESSAGE OUT after
+the last ACK falls; the sequencer was back in `ST_SAT_PHASE` before that, saw
+MESSAGE OUT and REQ still asserted, and sent the message again. The second byte
+landed as the first byte of the CDB. It presented as a target that answered
+selection and then never recognised a command, with `cmd[0] = 0x80` - and 0x80
+is IDENTIFY, which is the clue. `sat_identify_sent` is the fix.
 
-* `0xBFC1CA6C` calls `FUN_bfc1f320(dev, 5000)` — wait for an interrupt, with a
-  timeout. It returns 0 on one path, 7 on another, and anything else falls
-  through to `LAB_bfc1ccc0`, which issues DISCONNECT and prints the error.
-* `0xBFC1CB24` reads the SCSI status register and does `andi $t0, $v0, 7;
-  bne $t0, 6` — it is looking for **status `0x8E`, "service required, MESSAGE
-  OUT phase"**, so it can send the SDTR message with `FUN_bfc1cf8c`.
+**The service-required status base is 0x88, not 0x80.** The first version
+computed `0x80 | phase`, so a MESSAGE OUT request went out as `0x86`. That is
+not an unrecognised code - it is close enough to `0x85`, "disconnected", that
+the driver answered it by disconnecting, and the failure looked exactly like
+the one before the change. IRIS's `src/wd33c93a.rs` carries the list and it is
+`0x88 | phase`: `0x88` DATA OUT, `0x89` DATA IN, `0x8A` COMMAND, `0x8B` STATUS,
+`0x8E` MSG OUT, `0x8F` MSG IN, while `0x80..0x87` are a different group
+entirely. **An off-by-eight in a status code does not produce a nonsense value,
+it produces a plausible and wrong one**, which is the kind of bug that survives
+a trace being read.
 
-So the driver issues SELECT-with-ATN, gets the `0x11` select-complete
-interrupt, and then waits for a *second* interrupt that says which phase the
-target has asked for. Two things are missing:
+**The reject was never actually on the wire.** `msg_reject` was cleared by the
+same `stb_adv` that the phase machine used to read it, one cycle earlier, so
+the target announced MESSAGE IN and then sent COMMAND COMPLETE - and the PROM
+accepted that and the boot came out clean. It was found by reading the diff,
+not by a test, because every test passed. Fixing the race is what revealed that
+a genuine reject makes the machine worse, which is the whole of point 4 above:
+**a passing test said nothing about whether the thing under it was real.**
 
-1. **`wd33c93.sv` raises no phase interrupt after a plain SELECT.** It reaches
-   `ST_IDLE` and stops. It needs to watch for the target's first REQ and
-   interrupt with `0x80 | phase`.
-2. **`scsi.v` has no MESSAGE OUT phase and ignores `atn` entirely.** Its
-   `PHASE_MESSAGE_OUT` is MESSAGE IN in SCSI's naming — `{msg,cd,io} = 111`,
-   target to initiator — and only ever sends COMMAND COMPLETE. A real MESSAGE
-   OUT is `{msg,cd,io} = 110` and receives, and `PHASE_CMD_IN` is the model to
-   copy.
+### And `hinv` still lists no disk
 
-The bus reset that follows the failure now works, and that is new. `scsi_rst`
-used to be hardwired to zero, so **nothing in this core could ever free a
-wedged target**: after the failed negotiation the target held BSY, the ASR read
-`0x20` for the rest of the boot, and every command after it failed. HPC3's
-`ch_reset` falling edge now resets the controller and pulses RST on the bus,
-which is what the driver's "resetting SCSI bus" message has always claimed to
-do. Without it the boot did not get past this point at all.
+This is worth being blunt about, because the plan called it the definition of
+done and two successive theories about it have now been wrong.
+
+The previous version of this document said the failed negotiation was the
+likely cause. **It was not.** The negotiation now completes - cleanly, with a
+reject and an asynchronous fallback - the boot prints no SCSI error at all, the
+disk reads, and `hinv` is exactly as empty as before.
+
+The other theory, that this PROM's `hinv` does not report SCSI at all, is
+**also** dead, and that one can be settled from the disassembly rather than by
+argument. `hinv` is `FUN_bfc40ac0`, which at `0xBFC40BE8` calls the recursive
+ARCS device-tree walker `FUN_bfc416e0` (child at `0xBFC2C204`, sibling at
+`0xBFC2C1F8`), which prints each node through `FUN_bfc4119c` - and that
+function carries `"SCSI Disk"` and `"%*s: scsi(%u)disk(%u)\n"`. It would print
+a disk if the tree had one.
+
+So the disk is missing from the ARCS device tree, and neither the DMA engine
+nor the message phases is why. Where to pick it up:
+
+* `FUN_bfc1b934` is the `scsidisk` probe - the string `"scsidisk"` at
+  `0xBFC4F2A8` points at it, and it is reached as a function pointer from
+  `0xBFC1B918`, not by a direct call.
+* It registers a node with `FUN_bfc2c284` (the tree's add-child) at
+  `0xBFC1BAE8`, `0xBFC1BBB8`, `0xBFC1BC30` and four other sites in
+  `0xBFC1B854..0xBFC1BD3C`.
+* It filters on the INQUIRY response: `0xBFC1B9E0` skips the device when
+  `byte0 & 0x10` is set, and `0xBFC1BB0C` picks fixed (type `0x1a`) or
+  removable (type `0x1b`) from byte 1's RMB bit. This target answers byte 0 =
+  0x00 and byte 1 = 0x00, so it passes that filter.
+* The open question is therefore **whether that probe runs at all**, and if it
+  does, what it does between `0xBFC1B9C8` (`FUN_bfc1c0a8`, which returns the
+  INQUIRY buffer or zero) and the registration. Watching for a bus access to
+  the SCSI registers while `hinv` is running would say immediately whether the
+  probe is even reached, and that is one traced run.
+
+One thing this target does that a real disk does not: its INQUIRY reports
+**ANSI version 0** (byte 2) and response data format 0 (byte 3), i.e. a
+pre-standard SCSI-1 device. Nothing has been shown to care, but it is the most
+obvious difference between this and the drives an IP24 shipped with, and it is
+a one-line change in `rtl/scsi/scsi.v` if it turns out to matter.
 
 ## What to be suspicious of
 

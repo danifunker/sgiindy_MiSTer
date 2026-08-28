@@ -153,11 +153,16 @@ real block out of a real image file, a byte at a time.
 megabytes of zeroes. A test that wanted a valid header would be testing the
 fixture.
 
-`sc0,1,0: SYNC negotiation error` is expected too, and is deliberately not
-asserted either way: the PROM tries to negotiate synchronous transfer and the
-target model has no MESSAGE OUT phase to receive the message in. `hinv` lists
-no disk either, but the two are not known to be connected — this PROM's `hinv`
-lists no SCSI controller at all. See `docs/13-scsi-dma-plan.md`.
+The boot is now free of SCSI errors entirely, and the forbidden list says so:
+`SYNC negotiation error` and `resetting SCSI bus` must not come back. Both were
+real until the SCSI message phases were built — the PROM negotiates synchronous
+transfer and the target had nowhere to receive the message.
+
+**`hinv` still lists no disk**, and this script deliberately does not assert
+anything about that. Two theories about why have already been wrong: the failed
+negotiation was not it, and neither is "this PROM's `hinv` does not report
+SCSI". The disk is missing from the ARCS device tree.
+See `docs/13-scsi-dma-plan.md`.
 
 ## `uart/run.sh` — the harness itself
 
