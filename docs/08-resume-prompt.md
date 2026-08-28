@@ -26,8 +26,8 @@ receive pin:
 ```
                          Running power-on diagnostics...
 
-SCSI controller 0 diagnostic              *FAILED*
-	Check or replace:  CPU base board
+sc0,2,0: cmd=0x12 illegal disconnection interrupt: phase 0.  Resetting SCSI bus
+   ...five more, one per empty SCSI ID...
 
 Diagnostics failed.
 [Press any key to continue.]
@@ -55,6 +55,19 @@ PROM Monitor SGI Version 5.3 Rev B10 R4X00/R5000 IP24 Feb 12, 1996 (BE)
 `tests/run-prom.sh` reproduces all of that and checks each line, so a change
 that moves the boot backwards fails a test rather than surprising you later.
 
+**It is failing right now, and the reason is worth understanding before you
+touch it.** The SCSI scan (below) prints six error lines and resets the bus
+between each, which does two things: it stretches a PROM boot from about four
+minutes to over twenty-five, and it defeats the harness's typing trigger.
+`--type-on` waits for the console to go *quiet* for `--idle` cycles before
+sending a keystroke (`sim_cputest.cpp:410`) rather than matching a prompt, so
+a console that keeps chattering never looks idle and the `5` that enters the
+Command Monitor is never sent. The run reaches `5) Enter Command Monitor` and
+stops there.
+
+Do not "fix" this by raising `--idle` or trimming the EXPECT list. The console
+noise is the bug; fix that and the test comes back on its own.
+
 **"16 Mhz" is a real measurement of this core, and it is not a clock rate.**
 `FUN_bfc31594` derives it from CP0 `Count` across a fixed 512-iteration loop,
 so what it reports is how many clocks that loop actually took. `Count` itself
@@ -75,9 +88,15 @@ measurement rather than argument: doubling `PIT_TICK_DIV` and doubling
 RTC. It is a measurement of uncached instruction throughput and nothing else.
 
 Against `docs/07-mister-port-plan.md`'s milestones: **M0–M3 done, M6 — the "it
-boots" milestone — reached, M4 and M5 partly done.** The SCSI failure above is
-a device that genuinely is not implemented, and the PROM reports it and
-continues, which is what it does for a machine with no SCSI board fitted.
+boots" milestone — reached, M4 and M5 partly done.**
+
+**The SCSI lines above are not a missing device — they are the one bug you
+should fix first, and it is already diagnosed.** A WD33C93B and seven disk
+targets are fitted (`rtl/scsi/`, `docs/12-chipset.md`). The controller passes
+the PROM's data-path test and its own diagnostic, both of which used to be the
+first two `*FAILED*` lines of POST. Selection and Select-and-Transfer work, and
+a disk attaches with `--disk ID=PATH`. What is missing is the interrupt line;
+see "Where to pick up" below.
 
 The CPU passes the 240-test suite at **2161 checks passed, 3 failed**, against
 2101/61 for IRIS's own R4400 on the same expectations. **One** test fails,
@@ -92,9 +111,19 @@ What is *not* done, and is worth knowing before you plan anything:
 - **The NVRAM is volatile.** The PROM rebuilds its environment on every boot.
   `setenv` will not survive a reset until the array is wired to MiSTer's SD
   save path.
-- **No interrupts.** INT2 has masks and no sources.
-- **No SCSI, Ethernet or graphics.** The keyboard/mouse controller is in and
-  passes its self-test, but nothing drives `ps2_key`/`ps2_mouse` yet.
+- **No interrupts.** INT2 has masks and no sources, and `irqRequest` on
+  `r4300_wrap` is tied to `1'b0`. This is now the top item, not a background
+  one - it is what the SCSI scan noise above is a symptom of.
+- **No Ethernet or graphics.** SCSI is fitted; Newport and the SEEQ 8003 are
+  the two devices still answering as unclaimed cycles.
+- **SCSI moves no data yet.** The data phase is PIO through the chip's data
+  register; the HPC3 SCSI DMA engine is not written, so nothing has read a
+  block off a disk image in anger.
+- **A PROM boot now takes far longer than it did.** Each phantom disconnect
+  makes the driver reset the SCSI bus and retry, and `tests/run-prom.sh` went
+  from about four minutes to over twenty-five. Fixing the interrupt line should
+  fix this too, since the resets are what the phantom disconnects cause. Until
+  then, prefer `--stop-on` targets early in POST when iterating.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -256,24 +285,64 @@ The 8254 and the RTC are already run fast in simulation
 (`docs/12-chipset.md`); pushing that further is bounded by `calibrate_delay`
 restarting forever if the timer is made too fast.
 
-### 2. Everything after that
+### 2. Interrupts, and the bug that proves they are needed
 
-0. **Interrupts, arguably first now.** The keyboard controller generates them
-   and nothing routes them, `sgi_ioc.sv` takes `l0_source`/`l1_source` as
-   inputs precisely so wiring them changes nothing else, and every remaining
-   device on this list wants them. It is also the last CPU-side thing the
-   cpu-tests suite can help with: `irqRequest` on `r4300_wrap` is connected to
-   `1'b0` today.
-1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
+**Do this first.** It is no longer a general "everything wants interrupts"
+argument; there is a specific failure that nothing else explains, and it is
+fully diagnosed in `docs/12-chipset.md`.
+
+POST prints one `illegal disconnection interrupt: phase 0` per empty SCSI ID.
+IRIS, on the same PROM and image, prints none. The PROM's own handler
+(`FUN_bfc1e134`) says exactly what it wants:
+
+```
+bfc1e248  beq   $v1, 0x85, bfc1e304    ; status == DISCONNECT?
+bfc1e30c  bne   $a3, 0x43, bfc1e34c    ; COMMAND_PHASE == 0x43 -> fine
+bfc1e34c  bne   $a0, 4,    bfc1e358    ; COMMAND != 0x04 -> print
+bfc1e354  beqz  $a3,       bfc1e6e8    ; COMMAND == 4 and phase == 0 -> silent
+```
+
+`$a0` and `$a3` are the chip's COMMAND and COMMAND_PHASE registers. A
+disconnect is accepted quietly only while the chip still reports that the last
+command it was given was DISCONNECT. Instrumenting the status register showed:
+
+```
+WD SSR 42 -> 85  state=0 cmdphase=43 cmd=04    the DISCONNECT lands
+WD SSR read = 85 cmdphase=00 cmd=08            the handler reads it much later
+```
+
+Between those, the driver had already reprogrammed the chip for the next ID.
+There is no interrupt line, so the ISR runs late and reads a chip that has
+moved on. On hardware it runs on the line, before the next command.
+
+The work:
+
+- `sgi_scsi.sv` already has an `irq` output and `sgi_ioc.sv` already takes
+  `l0_source`/`l1_source` and computes `int_n`. They are tied off at the
+  instantiation in `sgi_indy.sv`. SCSI is INT2 `LOCAL0` bit 1.
+- The CPU half is the larger one: `irqRequest` on `r4300_wrap`, and CP0
+  `Status.IM`/`Cause.IP` behaviour that the cpu-tests `excep` group can check.
+- The 8254 and the keyboard controller both generate interrupts already and
+  route nowhere, so they come along for free.
+
+Expect the SCSI scan to go quiet and `tests/run-prom.sh` to get its four
+minutes back.
+
+### 3. Everything after that
+
+1. **The HPC3 SCSI DMA engine.** The data phase is PIO today. This is what
+   `boot` and IRIX need, and it is the bulk of the remaining SCSI work.
+   `sgi_hpc3.sv` has the descriptor, byte-count, CBP and NBDP registers and
+   nothing behind them. MAME's own `indy_indigo2.cpp` header carries the note
+   "Fix SCSI DMA to handle chains properly", so chaining is fiddly even there.
+2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
    that does not.
-2. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
+3. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
    and a start reports instant completion; no data moves.
-3. **Interrupts.** INT2 has masks and no sources. `sgi_ioc.sv` takes
-   `l0_source`/`l1_source` as inputs precisely so wiring them changes nothing
-   else.
-4. **SCSI and Ethernet**, if you want to boot something.
+4. **Ethernet**, the last device still answering as an unclaimed cycle
+   (`0x1FBD4000`, SEEQ 8003).
 5. **Newport**, which is the rest of the machine, and `sgiindy.sv`'s real top
    level - still the stock MiSTer template, so nothing has been through Quartus
    and no resource numbers exist. The MiSTer N64 core runs this same CPU at
