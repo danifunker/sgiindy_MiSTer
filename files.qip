@@ -11,12 +11,20 @@ set_global_assignment -name SYSTEMVERILOG_FILE sgiindy.sv
 
 # --- SGI chipset ---------------------------------------------------------
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_indy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_mc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_memmap.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/eeprom_93c56.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_hpc3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_ioc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/pit8254.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_ds1386.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_scc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/z8530_scc.sv
-# set_global_assignment -name VERILOG_FILE       rtl/sgi/sgi_mc.v
-# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_int2.sv
-# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_ds1386.sv
-# set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_hpc3.sv
+
+# Nothing here has been through Quartus yet - sgiindy.sv is still the stock
+# MiSTer template, so the core has no top level to synthesise. The list is
+# kept current anyway so that when it does, the manifest is not the thing
+# that is wrong.
 
 # --- CPU: the MiSTer N64 project's R4300i, vendored as VHDL ---------------
 # Order matters: packages and leaf entities before the units that use them.

@@ -98,6 +98,13 @@ CPUTEST_V = \
 	sim_top.sv \
 	sim_ram.v \
 	$(RTL)/sgi/sgi_indy.sv \
+	$(RTL)/sgi/sgi_mc.sv \
+	$(RTL)/sgi/sgi_hpc3.sv \
+	$(RTL)/sgi/sgi_ioc.sv \
+	$(RTL)/sgi/pit8254.sv \
+	$(RTL)/sgi/sgi_memmap.sv \
+	$(RTL)/sgi/sgi_ds1386.sv \
+	$(RTL)/sgi/eeprom_93c56.sv \
 	$(RTL)/sgi/sgi_scc.sv \
 	$(RTL)/sgi/z8530_scc.sv \
 	$(RTL)/cpu/r4300_bus.sv \

@@ -17,9 +17,16 @@
 //
 //    0x00000000-0x0007FFFF  512 KB alias of the bottom of main memory
 //    0x00080000-0x07FFFFFF  unmapped - reads 0, swallows writes
-//    0x08000000-...         main memory (MEM_MB)
+//    0x08000000-0x17FFFFFF  low local memory   } wherever MEMCFG0/1 place the
+//    0x20000000-0x2FFFFFFF  high local memory  } banks inside these windows
+//    0x1F000000-0x1F0FFFFF  Newport graphics - not fitted, reads 0
 //    0x1F400000-0x1F5FFFFF  GIO64 expansion slot 0
-//    0x1FBD9800-0x1FBD98FF  IOC2, with the SCC at +0x30..+0x3F
+//    0x1FA00000-0x1FA1FFFF  MC, the memory and GIO64 arbiter controller
+//    0x1FB80000-0x1FBFFFFF  HPC3, as far as sgi_hpc3.sv claims it
+//    0x1FBE0000-0x1FBE7FFF  DS1386 RTC and NVRAM (HPC3's bbram window)
+//    0x1FBD9800-0x1FBD98FF  IOC2 and INT2, with the SCC at +0x30..+0x3F
+//                           (inside HPC3's window: PBUS PIO channel 6,
+//                           decoded ahead of it)
 //    0x1FC00000-0x1FC7FFFF  boot PROM
 //
 //  Anything else answers as an unclaimed bus cycle and raises `bus_unclaimed`
@@ -29,7 +36,17 @@
 //============================================================================
 
 module sgi_indy #(
-    parameter int MEM_MB = 64
+    parameter int MEM_MB = 64,
+    // System clocks per RTC centisecond. 500000 is real time at the 50 MHz
+    // R4000 bus clock the MC's RPSS divider implies. Simulation overrides it
+    // for the same reason it runs the SCC's serial clock fast: the PROM waits
+    // for the seconds register to roll over during boot, and at the true ratio
+    // that one wait is fifty million clocks of nothing happening.
+    parameter int RTC_TICK_DIV = 500_000,
+    // System clocks per count of IOC2's 8254 timer. 50 is the 1 MHz the PROM's
+    // calibrate_delay assumes, so one count is one microsecond. Simulation
+    // shortens it, which shortens every DELAY() proportionally - see sim_top.sv.
+    parameter int PIT_TICK_DIV = 50
 )(
     input  logic        clk,
     input  logic        ce,
@@ -92,11 +109,35 @@ module sgi_indy #(
     output logic  [5:0] cpu_error
 );
 
-    localparam logic [31:0] RAM_BASE   = 32'h0800_0000;
+    localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
     localparam logic [31:0] RAM_SIZE   = MEM_MB * 32'h0010_0000;
+    localparam logic [31:0] LOMEM_END  = 32'h1800_0000;   // 256 MB of it
+    localparam logic [31:0] HIMEM_BASE = 32'h2000_0000;
+    localparam logic [31:0] HIMEM_END  = 32'h3000_0000;
     localparam logic [31:0] ALIAS_SIZE = 32'h0008_0000;   // 512 KB
+
+    // Power-on MEMCFG0: bank 0 valid, single subbank, MEM_MB of SIMMs based at
+    // 0x08000000 (base field 0x20 = address bits [29:22]). The real MC comes
+    // out of reset with every bank invalid and the PROM's POST fills them in -
+    // and it still does here, because init_memconfig zeroes both registers
+    // before it starts probing. This value exists for the other way the core
+    // is used: a bare-metal image loaded straight into RAM with no PROM, which
+    // has to find memory already mapped or its first instruction fetch lands
+    // in a hole. IRIS solves the same problem with MemoryController::
+    // post_map_banks(), just later.
+    localparam logic [15:0] MEMCFG0_BANK0 =
+        16'h2000 | (16'((MEM_MB / 4) - 1) << 8) | 16'h0020;
+    localparam logic [31:0] MEMCFG0_POR = {MEMCFG0_BANK0, 16'h0000};
+    localparam logic [31:0] GFX_BASE   = 32'h1F00_0000;
+    localparam logic [31:0] GFX_SIZE   = 32'h0010_0000;   // VC2/XMAP/DAC + REX3
     localparam logic [31:0] GIO0_BASE  = 32'h1F40_0000;
     localparam logic [31:0] GIO0_SIZE  = 32'h0020_0000;
+    localparam logic [31:0] MC_BASE    = 32'h1FA0_0000;
+    localparam logic [31:0] MC_SIZE    = 32'h0002_0000;   // 128 KB
+    localparam logic [31:0] HPC3_BASE  = 32'h1FB8_0000;
+    localparam logic [31:0] HPC3_SIZE  = 32'h0008_0000;   // 512 KB
+    localparam logic [31:0] RTC_BASE   = 32'h1FBE_0000;
+    localparam logic [31:0] RTC_SIZE   = 32'h0000_8000;   // 8 KB at stride 4
     localparam logic [31:0] IOC_BASE   = 32'h1FBD_9800;
     localparam logic [31:0] IOC_SIZE   = 32'h0000_0100;
     localparam logic [31:0] PROM_BASE  = 32'h1FC0_0000;
@@ -172,22 +213,62 @@ module sgi_indy #(
     //------------------------------------------------------------------
     // Address decode
     //------------------------------------------------------------------
-    logic sel_ram, sel_alias, sel_gio, sel_ioc, sel_prom, sel_none;
+    logic sel_ram, sel_alias, sel_gio, sel_gfx, sel_mc, sel_hpc3, sel_ioc, sel_rtc,
+          sel_prom, sel_none;
+    logic hpc3_claimed;
+
+    // The bottom 512 KB is an alias of the bottom of low local memory, so it
+    // is decoded by adding the base rather than by a rule of its own: whatever
+    // MEMCFG has placed at 0x08000000 is what shows through it, and when POST
+    // has moved bank 0 out to high memory the alias is a hole, exactly as on
+    // hardware.
+    logic [31:0] mem_addr;
+    logic        mem_hit;
+    logic [31:0] mem_off;
+    logic [31:0] mc_memcfg0, mc_memcfg1;   // driven by the MC, below
 
     assign sel_alias = (bus_addr < ALIAS_SIZE);
-    assign sel_ram   = (bus_addr >= RAM_BASE)  && (bus_addr < RAM_BASE + RAM_SIZE);
+    assign mem_addr  = sel_alias ? (bus_addr + RAM_BASE) : bus_addr;
+    assign sel_ram   = sel_alias
+                     || ((bus_addr >= RAM_BASE)   && (bus_addr < LOMEM_END))
+                     || ((bus_addr >= HIMEM_BASE) && (bus_addr < HIMEM_END));
+
+    sgi_memmap #(.BANK0_MB(MEM_MB)) u_memmap (
+        .memcfg0 (mc_memcfg0),
+        .memcfg1 (mc_memcfg1),
+        .addr    (mem_addr),
+        .hit     (mem_hit),
+        .offset  (mem_off)
+    );
     assign sel_gio   = (bus_addr >= GIO0_BASE) && (bus_addr < GIO0_BASE + GIO0_SIZE);
+    assign sel_mc    = (bus_addr >= MC_BASE)   && (bus_addr < MC_BASE + MC_SIZE);
     assign sel_ioc   = (bus_addr >= IOC_BASE)  && (bus_addr < IOC_BASE + IOC_SIZE);
     assign sel_prom  = (bus_addr >= PROM_BASE) && (bus_addr < PROM_BASE + PROM_SIZE);
-    assign sel_none  = !(sel_alias | sel_ram | sel_gio | sel_ioc | sel_prom);
+    // IOC2 sits inside HPC3's window - it is PBUS PIO channel 6 - so it has to
+    // be taken out of HPC3's range rather than sitting beside it. `claimed`
+    // then subtracts the parts of HPC3 that are not modelled yet, so they keep
+    // showing up as unclaimed cycles instead of quietly reading back zero.
+    // Newport is not modelled at all, and the window reads back zero rather
+    // than being left unclaimed. That is not cosmetic: the PROM polls REX3's
+    // STATUS at 0x1F0F1338 for the engine to go idle, up to 100000 times, and
+    // an unclaimed cycle answers 0xFFFFFFFF - busy, forever. Zero makes every
+    // one of those waits fall straight through to the "graphics failed" path,
+    // which is the right answer for a machine with no graphics board and turns
+    // several hundred thousand wasted bus cycles into none. A real Indy always
+    // has graphics; modelling it is M6 work (docs/02-address-map.md).
+    assign sel_gfx   = (bus_addr >= GFX_BASE)  && (bus_addr < GFX_BASE + GFX_SIZE);
+    assign sel_rtc   = (bus_addr >= RTC_BASE)  && (bus_addr < RTC_BASE + RTC_SIZE);
+    assign sel_hpc3  = (bus_addr >= HPC3_BASE) && (bus_addr < HPC3_BASE + HPC3_SIZE)
+                       && !sel_ioc && !sel_rtc && hpc3_claimed;
+    assign sel_none  = !(sel_ram | sel_gio | sel_gfx | sel_mc | sel_hpc3
+                       | sel_ioc | sel_rtc | sel_prom);
 
-    // The bottom 512 KB is the same RAM as the bottom of the real bank, which
-    // is where the exception vectors live: KSEG0 0x80000000 and 0x88000000
-    // reach the same bytes. Folding it here rather than in the memory model
-    // keeps the alias visible in a bus trace.
-    assign ram_req   = bus_req && (sel_ram || sel_alias);
+    // A memory cycle only reaches the RAM model when MEMCFG has a valid bank
+    // covering it. Everything else in the two memory windows is answered here
+    // as zero - see sgi_memmap.sv on why that matters to POST.
+    assign ram_req   = bus_req && sel_ram && mem_hit;
     assign ram_we    = bus_we;
-    assign ram_addr  = sel_alias ? bus_addr : (bus_addr - RAM_BASE);
+    assign ram_addr  = mem_off;
     assign ram_wdata = bus_wdata;
     assign ram_be    = bus_be;
 
@@ -199,6 +280,68 @@ module sgi_indy #(
     assign gio_addr  = bus_addr - GIO0_BASE;
     assign gio_wdata = bus_wdata;
     assign gio_be    = bus_be;
+
+    //------------------------------------------------------------------
+    // MC - memory controller
+    //------------------------------------------------------------------
+    // Its registers are 64-bit and only the low half exists, so the module
+    // takes the whole doubleword and picks the half itself; see sgi_mc.sv on
+    // why the low half is the only one a big-endian CPU may use.
+    logic [63:0] mc_rdata;
+    logic        mc_ack;
+    logic        ee_cs, ee_sk, ee_di, ee_do;
+
+    sgi_mc #(.MEMCFG0_RESET(MEMCFG0_POR)) u_mc (
+        .clk     (clk),
+        .reset   (reset),
+        .ce      (ce),
+        .sel     (bus_req && sel_mc),
+        .we      (bus_we),
+        .addr    (bus_addr[16:0]),
+        .be      (bus_be),
+        .wdata   (bus_wdata),
+        .rdata   (mc_rdata),
+        .ack     (mc_ack),
+        .ee_cs   (ee_cs),
+        .ee_sk   (ee_sk),
+        .ee_di   (ee_di),
+        .ee_do   (ee_do),
+        .memcfg0 (mc_memcfg0),
+        .memcfg1 (mc_memcfg1)
+    );
+
+    // The R4000 configuration EEPROM. On hardware this is a real chip on the
+    // CPU daughtercard; here it is volatile, which costs nothing yet because
+    // the PROM rewrites the one word it cares about on every boot.
+    eeprom_93c56 u_eeprom (
+        .clk    (clk),
+        .reset  (reset),
+        .cs     (ee_cs),
+        .sk     (ee_sk),
+        .di     (ee_di),
+        .do_out (ee_do)
+    );
+
+    //------------------------------------------------------------------
+    // HPC3
+    //------------------------------------------------------------------
+    logic [63:0] hpc3_rdata;
+    logic        hpc3_ack;
+
+    sgi_hpc3 u_hpc3 (
+        .clk     (clk),
+        .reset   (reset),
+        .sel     (bus_req && (bus_addr >= HPC3_BASE)
+                           && (bus_addr < HPC3_BASE + HPC3_SIZE)
+                           && !sel_ioc && !sel_rtc),
+        .we      (bus_we),
+        .addr    (bus_addr[18:0]),
+        .be      (bus_be),
+        .wdata   (bus_wdata),
+        .rdata   (hpc3_rdata),
+        .ack     (hpc3_ack),
+        .claimed (hpc3_claimed)
+    );
 
     //------------------------------------------------------------------
     // IOC2 / SCC
@@ -242,28 +385,68 @@ module sgi_indy #(
         .tx_chan  (tx_chan)
     );
 
+    // The rest of the IOC window: panel, SYS_ID, reset/LED, and the INT2
+    // interrupt controller at +0x80.
+    logic [63:0] ioc_rdata;
+    logic        ioc_ack;
+
+    sgi_ioc #(.PIT_TICK_DIV(PIT_TICK_DIV)) u_ioc (
+        .clk       (clk),
+        .reset     (reset),
+        .ce        (ce),
+        .sel       (bus_req && sel_ioc && !scc_sel),
+        .we        (bus_we),
+        .addr      (bus_addr[7:0]),
+        .aoff      (bus_aoff),
+        .be        (bus_be),
+        .wdata     (bus_wdata),
+        .rdata     (ioc_rdata),
+        .ack       (ioc_ack),
+        // Nothing raises an interrupt yet; see sgi_ioc.sv on why the status
+        // registers are inputs rather than storage.
+        .l0_source (8'h00),
+        .l1_source (8'h00),
+        .int_n     ()
+    );
+
+    // The Dallas RTC and the NVRAM the PROM keeps its environment in. Also
+    // inside HPC3's window - it is the battery-backed-RAM chip select.
+    logic [63:0] rtc_rdata;
+    logic        rtc_ack;
+
+    sgi_ds1386 #(.TICK_DIV(RTC_TICK_DIV)) u_rtc (
+        .clk   (clk),
+        .reset (reset),
+        .ce    (ce),
+        .sel   (bus_req && sel_rtc),
+        .we    (bus_we),
+        .addr  (bus_addr[14:0]),
+        .be    (bus_be),
+        .wdata (bus_wdata),
+        .rdata (rtc_rdata),
+        .ack   (rtc_ack)
+    );
+
     //------------------------------------------------------------------
     // Response mux
     //------------------------------------------------------------------
     // Devices that answer combinationally get their ack generated here, one
     // cycle after the request, which keeps the CPU's mem_done edge clean.
-    logic        ioc_ack, none_ack;
-    logic [63:0] ioc_rdata_r;
+    logic        none_ack;
     logic        gio_absent_ack;
+    logic        mem_hole_ack;
+    logic        gfx_ack;
 
     always_ff @(posedge clk) begin
-        ioc_ack        <= 1'b0;
         none_ack       <= 1'b0;
         gio_absent_ack <= 1'b0;
+        mem_hole_ack   <= 1'b0;
+        gfx_ack        <= 1'b0;
         bus_unclaimed  <= 1'b0;
 
         if (!reset && bus_req) begin
-            // The SCC takes four clocks to run its strobe handshake and acks
-            // for itself; the rest of the IOC window is a register read.
-            if (sel_ioc && !scc_sel) begin
-                ioc_ack     <= 1'b1;
-                ioc_rdata_r <= 64'h0;
-            end
+            if (sel_ram && !mem_hit) mem_hole_ack <= 1'b1;
+            if (sel_gfx)             gfx_ack      <= 1'b1;
             if (sel_gio && !gio_present) gio_absent_ack <= 1'b1;
             if (sel_none) begin
                 none_ack      <= 1'b1;
@@ -272,15 +455,21 @@ module sgi_indy #(
         end
     end
 
-    assign bus_ack   = ram_ack | prom_ack | gio_ack | ioc_ack | scc_ack
-                     | none_ack | gio_absent_ack;
+    assign bus_ack   = ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
+                     | ioc_ack | rtc_ack | scc_ack | none_ack | gio_absent_ack
+                     | mem_hole_ack | gfx_ack;
+
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
     // read shift in r4300_bus lands on it whichever word was addressed.
-    assign bus_rdata = ram_ack  ? ram_rdata
+    assign bus_rdata = (mem_hole_ack | gfx_ack) ? 64'h0
+                     : ram_ack  ? ram_rdata
                      : prom_ack ? prom_rdata
                      : gio_ack  ? gio_rdata
+                     : mc_ack   ? mc_rdata
+                     : hpc3_ack ? hpc3_rdata
                      : scc_ack  ? {scc_rdata, scc_rdata}
-                     : ioc_ack  ? ioc_rdata_r
+                     : ioc_ack  ? ioc_rdata
+                     : rtc_ack  ? rtc_rdata
                      :            64'hFFFF_FFFF_FFFF_FFFF;
 
     // ---- observability ----
