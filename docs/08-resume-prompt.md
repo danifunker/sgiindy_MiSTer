@@ -430,6 +430,74 @@ like an interrupt-timing problem. And **the `--irq` flag exists now**; one line
 of its output (`L0 02/00` — source asserted, mask zero) is what retired the
 wrong theory.
 
+### THE FIRST REAL FAILURE: the IRIX 5.3 installer panics after the copy
+
+**This is the most valuable bug this project has, and it should be the next
+thing worked on.** The machine got further than it ever has: the PROM's
+"Install System Software" ran, offered `a) Local SCSI CD-ROM drive 6`, read
+the installer off the CD, and copied it to the disk:
+
+```
+Copying installation program to disk.
+......... 10% ......... 20% ......... 30% ......... 40% .........
+......... 60% ......... 70% ......... 80% ......... 90% .........
+
+Copy complete
+
+Exception: <vector=UTLB Miss>
+Status register: 0x2<IPL=8,MODE=KERNEL,EXL>
+Cause register: 0x8008<CE=0,IP8,EXC=RMISS>
+Exception PC: 0x880075b4, Exception RA: 0x880076f4
+exception, bad address: 0x0
+HPC3 bus error status register: 0x0
+  Saved user regs (&gpda 0xa8740e48, &_regs 0xa8741048):
+    t8 a8740000 t9 0 at 0 v0 0 v1 0 k1 0
+    gp a8740000 fp 0 sp 0 ra 0
+PANIC: Unexpected exception
+```
+
+**Read what the exception actually says before theorising.** `EXC=RMISS` is a
+TLB refill on a load and the bad address is `0x0`, so software loaded from
+virtual address zero. Zero is unmapped in KUSEG, so **the CPU is behaving
+correctly** - a TLB refill there is the architecturally right answer, and the
+exception frame is well formed. This is a null pointer in the guest, not a
+CPU fault. `HPC3 bus error status register: 0x0` says the chipset did not
+report a bus error either.
+
+**The leading hypothesis, and the reason it is strong: the crash is immediately
+after `Copy complete`.** The copy is the first substantial *write* this core
+has ever done, and the write path is barely tested - `tests/run-scsiwr.sh` is
+exactly one WRITE(6) of one block. Multi-block writes, WRITE(10), and
+descriptor chains with more than one data descriptor are all untried. If the
+copy put corrupted data on the disk, the installer then read or executed it and
+found a zero where a pointer should have been.
+
+The second candidate is the other direction: **no block has ever been read off
+the CD-ROM in a test**. `tests/run-cdrom.sh` says so out loud - it proves the
+drive is listed, not that the 2048-byte logical block path works. The copy
+reads from the CD and writes to the disk, so both newly-exercised directions
+are in the path, at a scale nothing has covered.
+
+Do not start from the CPU. It passes 2161/3 including the TLB tests, and the
+exception it produced is correct for the address that was loaded.
+
+**Where to start, in order:**
+
+1. **Widen `tests/run-scsiwr.sh` to a multi-block write** - several blocks in
+   one WRITE(6), then WRITE(10), then a descriptor chain with more than one
+   data descriptor - and read every block back. This is the cheapest test of
+   the most suspicious path.
+2. **Read a block off the CD-ROM and compare it.** `tests/run-cdrom.sh` builds
+   a patterned ISO precisely so that a test which reads it can fail; nothing
+   reads it yet.
+3. **Compare the two paths against each other.** The same image mounted as a
+   disk on ID 1 and as a CD-ROM on ID 6 must produce identical bytes. It did
+   for `sashARCS` - the byte counts matched exactly - so that comparison
+   already works once and can be extended to bulk data.
+
+The image and the exact steps are reproducible: `IRIX 5.3 XFS.iso` on ID 6 as a
+CD-ROM, a writable disk on ID 1, maintenance menu option 2.
+
 ### 3. Everything after that
 
 1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
