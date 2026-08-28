@@ -20,7 +20,19 @@
 
 module sgi_scsi #(
     parameter int NUM_TARGETS = 7,      // IDs 0..6; 7 is the host adapter
-    parameter logic [2:0] HOST_ID = 3'd0
+    parameter logic [2:0] HOST_ID = 3'd0,
+    // WHICH IDS ARE CD-ROM DRIVES, one bit per target, LSB = ID 0.
+    //
+    // This has to be settled at elaboration and cannot be a mount-time choice:
+    // `CDROM` changes what the target answers to INQUIRY (device type 0x05,
+    // removable, "SONY CD-ROM"), the size of a logical block (2048, served as
+    // four consecutive 512-byte host blocks), what READ CAPACITY reports, and
+    // which MODE SENSE pages exist. A drive is a different device from a disk,
+    // not a disk with a different file in it.
+    //
+    // ID 6 by default, which is where SGI put the internal CD-ROM and what
+    // every `dksc(0,6,8)` boot line in the world assumes.
+    parameter logic [6:0] CDROM_IDS = 7'b100_0000
 )(
     input  logic        clk,
     input  logic        reset,
@@ -131,14 +143,21 @@ module sgi_scsi #(
     );
 
     // ---- the targets -------------------------------------------------------
-    // Plain disks: no Toolbox, no CD-ROM, so cd_audio.sv is never elaborated.
+    // Disks everywhere except the IDs named by CDROM_IDS, which get CD-ROM
+    // drives. No Toolbox on either.
+    //
+    // A CD-ROM elaborates rtl/scsi/cd_audio.sv, which is a STUB - the real
+    // engine is not vendored and there is no audio path in this machine for it
+    // to feed. See that file and docs/FEATURES_EVALUATE.md. The data path is
+    // unaffected: it is scsi.v's own, and it is what reads an ISO.
     genvar t;
     generate
         for (t = 0; t < NUM_TARGETS; t++) begin : g_target
             wire [15:0] unused_snd_l, unused_snd_r;
             wire        t_rd, t_wr;
 
-            scsi #(.ID(t[2:0]), .CDROM(0), .TOOLBOX_ENABLE(0)) u_target (
+            scsi #(.ID(t[2:0]), .CDROM(CDROM_IDS[t] ? 1 : 0),
+                   .TOOLBOX_ENABLE(0)) u_target (
                 .clk            (clk),
                 .rst            (b_rst),
                 .sys_rst        (reset),
@@ -147,7 +166,17 @@ module sgi_scsi #(
                 // selection put two targets on the bus at once.
                 .bus_busy       (|(t_bsy & ~(1 << t))),
                 .atn            (b_atn),
-                .cd_enable      (1'b0),
+                // A CD-ROM DRIVE IS PRESENT WHETHER OR NOT A DISC IS IN IT,
+                // and scsi.v takes that from here rather than from `mounted`:
+                //
+                //   if(sel && din[ID] && ((CDROM != 0) ? cd_enable : mounted)
+                //
+                // so a CD-ROM target with this tied low never answers a
+                // selection at all - the image mounts, the PROM scans the bus,
+                // and not one command is ever addressed to it. A disk keys off
+                // `mounted` and is unaffected, which is why this was invisible
+                // for as long as every target was a disk.
+                .cd_enable      (CDROM_IDS[t] ? 1'b1 : 1'b0),
                 .bsy            (t_bsy[t]),
                 .msg            (t_msg[t]),
                 .cd             (t_cd[t]),

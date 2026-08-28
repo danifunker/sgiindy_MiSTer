@@ -143,6 +143,39 @@ addresses that settled it.
 `tests/run-scsi.sh` now stops on the disk line and asserts it, so this cannot
 quietly come undone. It passes in about 55 seconds.
 
+**A CD-ROM drive and an audio processor are in `hinv` too.**
+
+```
+>> hinv
+                   System: IP22
+                Processor: 16 Mhz R4400, with FPU
+     Primary I-cache size: 16 Kbytes
+     Primary D-cache size: 16 Kbytes
+              Memory size: 64 Mbytes
+                SCSI Disk: scsi(0)disk(1)
+               SCSI CDROM: scsi(0)cdrom(6)
+                    Audio: Iris Audio Processor: version A2 revision 4.1.0
+```
+
+**Neither of them does anything.** The audio line comes out of `HAL2_REV`
+returning `0x4010` and nothing else — there is no audio path, and the honest
+description is that this core reports an audio processor rather than has one.
+The CD-ROM is a data-only target: `rtl/scsi/cd_audio.sv` is a stub, so READ TOC
+answers zeroes and the audio commands are no-ops. `docs/FEATURES_EVALUATE.md`
+has both decisions.
+
+`sgi_scsi.sv`'s `CDROM_IDS` parameter picks which IDs elaborate as drives —
+ID 6 by default. It has to be an elaboration-time choice: `CDROM` changes
+INQUIRY, the logical block size, READ CAPACITY and the MODE SENSE pages, so a
+drive is a different device from a disk rather than a disk with a different
+file in it. Mount an ISO on it with `--disk 6=PATH`; `tests/run-cdrom.sh` is
+that boot.
+
+**Nothing has ever read a block off the CD.** The 2048-byte logical block path
+— four consecutive 512-byte host blocks, scaled ×4 at latch time in `scsi.v` —
+is completely untested, and `docs/13` is the argument for not leaving it that
+way.
+
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
 `Cause.IP[6:2]`. The vendored CPU's two N64 interrupt lines were replaced with
@@ -211,6 +244,7 @@ tests/run-scc.sh          # the Z8530, ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end, ~6 s
 tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it, ~12 s
 tests/run-scsiwr.sh       # a block written to a disk and read back, ~30 s
+tests/run-cdrom.sh        # a CD-ROM drive on ID 6, listed by hinv
 tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
 tests/run-prom.sh         # boot the PROM to the Command Monitor, ~50 s
 tests/run-scsi.sh         # the same boot with a disk, and a block read off it
@@ -403,7 +437,11 @@ wrong theory.
    path is the difference between a machine that remembers a `setenv` and one
    that does not.
 
-2. **Widen the SCSI write path.** One WRITE(6) of one block is tested. A
+2. **Read a block off the CD-ROM.** The drive is listed and answers INQUIRY,
+   TEST UNIT READY and MODE SELECT, but no data has ever come off it, so the
+   2048-byte logical block path is untested end to end. This is the same shape
+   of gap DATA OUT was, and `tests/run-scsiwr.sh` is the pattern to copy.
+3. **Widen the SCSI write path.** One WRITE(6) of one block is tested. A
    multi-block write, WRITE(10), and a descriptor chain with more than one data
    descriptor are all still untried, and the four bugs above are the argument
    for trying them.

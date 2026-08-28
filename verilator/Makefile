@@ -106,6 +106,7 @@ CPUTEST_V = \
 	$(RTL)/scsi/sgi_scsi.sv \
 	$(RTL)/scsi/wd33c93.sv \
 	$(RTL)/scsi/scsi.v \
+	$(RTL)/scsi/cd_audio.sv \
 	$(RTL)/sgi/pit8254.sv \
 	$(RTL)/sgi/sgi_memmap.sv \
 	$(RTL)/sgi/sgi_ds1386.sv \

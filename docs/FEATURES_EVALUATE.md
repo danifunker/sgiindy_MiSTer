@@ -9,34 +9,37 @@ Move an item out of here the moment it stops being true.
 
 ---
 
-## CD audio — deferred
+## CD audio — deferred, and the CD-ROM is built without it
 
-**Decision: build the CD-ROM as a data-only target. No CD audio.**
+**Decision: the CD-ROM is a data-only target. No CD audio.** This is now built,
+not planned: `hinv` prints `SCSI CDROM: scsi(0)cdrom(6)` and
+`tests/run-cdrom.sh` holds it.
 
-`scsi.v` already carries most of a CD-ROM: `cd_inquiry_byte` reports device
-type `0x05`, removable, ANSI SCSI-2, "SONY CD-ROM"; READs address 2048-byte
-logical blocks and are scaled ×4 at latch time so the whole 512-byte ring
-machinery runs unmodified; READ CAPACITY reports `img_blocks/4 - 1`; MODE SENSE
-pages 0x0E, 0x2A and 0x31 are there.
+`scsi.v` reaches a CD-ROM's data path and its audio path through one switch —
+`generate if (CDROM != 0) begin : g_cd_audio ... end else begin : g_no_cd_audio
+... end` — so `CDROM(1)`, which is what makes the target answer INQUIRY as
+device type `0x05` and address 2048-byte logical blocks, also demands a
+`cd_audio` module. The real one lives in the MacLC core and is deliberately not
+vendored: `rtl/scsi/README.md` records that it pulls in a volume lookup table
+this core has no use for.
 
-What is not here is `rtl/cd_audio.sv`. It is instantiated by
-`generate if (CDROM != 0) begin : g_cd_audio` and was deliberately not vendored
-from the MacLC core — `rtl/scsi/README.md` records why: it pulls in a volume
-lookup table this core has no use for. So **`CDROM(1)` does not elaborate
-today**.
+**`rtl/scsi/cd_audio.sv` is a stub, and that is the whole of the decision.** It
+is the `g_no_cd_audio` branch wearing the `g_cd_audio` port list, with exactly
+the constants that branch assigns. `scsi.v` is therefore neither modified nor
+forked, which was the point — a data-only CD-ROM should not cost a fork of a
+vendored file.
 
-The way out is already written. The `else begin : g_no_cd_audio` branch beside
-it assigns every `ca_*` signal a static value — TOC, audio status, the block
-fetch channel, the lot. A data-only CD-ROM needs exactly those tie-offs and
-nothing from the audio engine.
+What it costs: READ TOC returns zeroes, the audio commands are no-ops, and
+there is no sound. Reading data blocks off an ISO is untouched, because that is
+`scsi.v`'s own path.
 
-**Why defer it:** IRIX install media is data. Nothing this machine is being
-built to run needs Red Book audio off the CD, and the audio path it would feed
-does not exist either — see HAL2 below.
+**There is nowhere for the audio to go anyway.** HAL2 answers its revision
+register and nothing else, which is enough for `hinv` to list an audio
+processor and is not an audio path — see `rtl/sgi/sgi_hpc3.sv`.
 
-**What it would cost to change the decision:** vendor `cd_audio.sv` and its
-volume table, and confirm the licensing note in `rtl/scsi/README.md` still
-covers it.
+**To change the decision:** vendor `cd_audio.sv` and its volume table over the
+stub — the port list in the stub is the contract — and confirm the licensing
+note in `rtl/scsi/README.md` still covers it.
 
 ## Secondary cache — not needed, and faking it would break POST
 
