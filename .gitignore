@@ -36,3 +36,6 @@ imgui.ini
 *.vcd
 tests/out/
 rtl/cpu/generated/
+
+# Test disk images are generated, not tracked.
+tests/disks/

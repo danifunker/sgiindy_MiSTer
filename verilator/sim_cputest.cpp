@@ -31,6 +31,7 @@
 #include "sim_devices.h"
 #include "sim_uart.h"
 #include "sim_ps2.h"
+#include "sim_scsi.h"
 
 #include <cstdio>
 #include <cstring>
@@ -124,6 +125,8 @@ struct Options {
     // --type, but they arrive at the keyboard port rather than the serial
     // console, which is the only way to exercise the PC keyboard path.
     std::vector<std::pair<std::string, std::string>> keys;
+    // Disk images, as ID=path. Repeatable; IDs 0..6.
+    std::vector<std::pair<int, std::string>> disks;
     // Primary caches. Both on; the flags exist to bisect a failure onto one
     // of them without rebuilding, which is how the fill path was brought up.
     bool     icache       = true;
@@ -190,6 +193,7 @@ static void usage()
         "  --trace-count N   how many transactions to print (default 2000)\n"
         "  --hot             on exit, list the most-accessed addresses\n"
         "  --uart            also decode the SCC's txdb line and compare\n"
+        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1)\n"
         "  --key TEXT        type TEXT at the PC keyboard port (not the console)\n"
         "  --key-on TRIG TEXT  the same, once TRIG has appeared on the console\n"
         "  --no-icache       run with the primary instruction cache off\n"
@@ -226,6 +230,14 @@ int main(int argc, char **argv)
         else if (a == "--trace")       opt.trace = true;
         else if (a == "--hot")         opt.hot = true;
         else if (a == "--uart")        opt.uart = true;
+        else if (a == "--disk") {
+            // --disk ID=PATH, or --disk PATH for ID 1 (ID 0 is the host
+            // adapter's own ID on SGI, so a disk never lives there).
+            std::string spec = next("--disk");
+            size_t eq = spec.find('=');
+            if (eq == std::string::npos) opt.disks.push_back({1, spec});
+            else opt.disks.push_back({atoi(spec.substr(0, eq).c_str()), spec.substr(eq + 1)});
+        }
         else if (a == "--key")         opt.keys.push_back({"", unescape(next("--key"))});
         else if (a == "--key-on") {
             std::string ktrig = unescape(next("--key-on"));
@@ -272,6 +284,17 @@ int main(int argc, char **argv)
         for (const std::string &s : r.segments) printf("%s\n", s.c_str());
         // Boot straight into the image, the way IRIS's --load-elf does.
         if (opt.boot_pc == 0xBFC00000) boot_pc = r.entry;
+    }
+
+    for (auto &d : opt.disks) {
+        if (d.first < 0 || d.first > 6) {
+            fprintf(stderr, "SCSI id %d out of range (0..6)\n", d.first); return 2;
+        }
+        if (!g_dev.scsi[d.first].load(d.second)) {
+            fprintf(stderr, "cannot open disk %s\n", d.second.c_str()); return 2;
+        }
+        printf("SCSI %d: %s (%zu blocks)\n", d.first, d.second.c_str(),
+               g_dev.scsi[d.first].blocks());
     }
 
     printf("boot PC %08x, RAM %u MB, testdev %s, I$ %s, D$ %s\n",
@@ -327,6 +350,7 @@ int main(int argc, char **argv)
     UartRx   uart;
     UartTx   utx;
     Ps2Injector ps2;
+    ScsiBlockDev scsi_dev;
     size_t   key_at = 0;
     size_t   type_at = 0;          // next --type string to send
     size_t   type_seen_from = 0;   // a trigger only counts after the last send
@@ -360,6 +384,7 @@ int main(int argc, char **argv)
         utx.step(cycle, uart.bit_time);
         top->rxdb = utx.line;
         ps2.step(top, cycle);
+        scsi_dev.step(top);
 
         // Queue the next --key/--key-on batch once its trigger has been seen
         // and the previous batch has drained.

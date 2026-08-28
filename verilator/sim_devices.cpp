@@ -209,3 +209,30 @@ extern "C" void sgi_dpi_write(uint32_t space, uint32_t addr, uint64_t data, uint
     default: break;                         // the PROM is read-only
     }
 }
+
+// ---- SCSI disks ----------------------------------------------------------
+
+namespace sgisim {
+
+bool ScsiDisk::load(const std::string &p)
+{
+    FILE *f = fopen(p.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0) { fclose(f); return false; }
+    // Round up to a whole block. A short tail would otherwise read back as
+    // whatever was in the vector, and a disk whose last sector is half there
+    // is not a thing the guest can be expected to cope with.
+    size_t blocks = (size_t)((n + 511) / 512);
+    image.assign(blocks * 512, 0);
+    size_t got = fread(image.data(), 1, (size_t)n, f);
+    fclose(f);
+    if (got != (size_t)n) return false;
+    path    = p;
+    mounted = true;
+    return true;
+}
+
+} // namespace sgisim

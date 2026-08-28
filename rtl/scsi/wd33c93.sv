@@ -122,6 +122,20 @@ module wd33c93 #(
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
 
+    // ---- COMMAND PHASE register values -------------------------------------
+    // The chip walks this register through a Select-and-Transfer so a driver
+    // that takes an interrupt part way can tell how far it got and resume.
+    // Values from IRIS's src/wd33c93a.rs, which matches IRIX's wd93.h.
+    localparam logic [7:0] CP_DISCONNECTED = 8'h00;
+    localparam logic [7:0] CP_SELECTED     = 8'h10;
+    localparam logic [7:0] CP_CMD_START    = 8'h30;   // +n as CDB bytes go out
+    localparam logic [7:0] CP_XFER_COUNT   = 8'h46;   // data done, TC = 0
+    localparam logic [7:0] CP_RECV_STATUS  = 8'h47;
+    localparam logic [7:0] CP_STATUS_RECVD = 8'h50;   // status byte in TARGET_LUN
+    localparam logic [7:0] CP_COMPLETE_MSG = 8'h60;
+
+    localparam logic [7:0] S_SELECT_XFER_OK = 8'h16;  // ST_SATOK
+
     // ---- phase decode ------------------------------------------------------
     // Standard {MSG, C/D, I/O}. scsi.v drives these to the SCSI meanings even
     // though its internal phase names read from the target's side.
@@ -147,7 +161,17 @@ module wd33c93 #(
         ST_XFER,            // wait for REQ in the current phase
         ST_XFER_ACK,        // data taken or presented; raise ACK
         ST_XFER_REL,        // wait for the target to drop REQ
-        ST_DONE
+        ST_DONE,
+        // Select-and-Transfer: the chip's automatic mode, and the only one
+        // this machine's driver uses. One state per bus phase, walked without
+        // the driver in the loop except to feed or drain data bytes.
+        ST_SAT_SEL,
+        ST_SAT_WAIT,
+        ST_SAT_PHASE,       // look at what the target is asking for
+        ST_SAT_REQ,         // a byte is due in the current phase
+        ST_SAT_ACK,
+        ST_SAT_REL,
+        ST_SAT_END
     } state_t;
 
     state_t state;
@@ -162,6 +186,16 @@ module wd33c93 #(
 
     // The byte in flight, and which way it is going.
     logic [7:0] data_latch;
+    // How far through the CDB a Select-and-Transfer has got. The length comes
+    // from the group code in the top three bits of the opcode: group 0 is a
+    // 6-byte CDB, groups 1 and 2 are 10, group 5 is 12. Anything else is
+    // treated as 6, which is what the chip does with an unknown group beyond
+    // also flagging it.
+    logic [3:0] cdb_idx;
+    wire  [2:0] cdb_group = reg_file[R_CDB1][7:5];
+    wire  [3:0] cdb_len   = (cdb_group == 3'd1 || cdb_group == 3'd2) ? 4'd10
+                          : (cdb_group == 3'd5)                      ? 4'd12
+                          :                                            4'd6;
     wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND);
 
     assign scsi_dout = data_latch;
@@ -241,6 +275,14 @@ module wd33c93 #(
                                         C_TRANSFER_INFO: begin
                                             cip   <= 1'b1;
                                             state <= ST_XFER;
+                                        end
+                                        C_SEL_XFER, C_SEL_ATN_XFER: begin
+                                            scsi_atn  <= (din == C_SEL_ATN_XFER);
+                                            cip       <= 1'b1;
+                                            sel_timer <= 16'h0;
+                                            cdb_idx   <= 4'd0;
+                                            reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
+                                            state     <= ST_SAT_SEL;
                                         end
                                         C_NEGATE_ACK: scsi_ack <= 1'b0;
                                         C_ASSERT_ATN: scsi_atn <= 1'b1;
@@ -388,6 +430,114 @@ module wd33c93 #(
                     endcase
                     int_pending <= 1'b1;
                     state <= ST_IDLE;
+                end
+
+                // ---- Select-and-Transfer -------------------------------
+                ST_SAT_SEL: begin
+                    scsi_sel   <= 1'b1;
+                    data_latch <= (8'h01 << HOST_ID) | (8'h01 << reg_file[R_DEST_ID][2:0]);
+                    state      <= ST_SAT_WAIT;
+                end
+
+                ST_SAT_WAIT: begin
+                    sel_timer <= sel_timer + 16'd1;
+                    if (scsi_bsy) begin
+                        scsi_sel <= 1'b0;
+                        reg_file[R_CMD_PHASE] <= CP_SELECTED;
+                        state    <= ST_SAT_PHASE;
+                    end else if (sel_timer >= SEL_TIMEOUT) begin
+                        scsi_sel <= 1'b0;
+                        cip      <= 1'b0;
+                        reg_file[R_SCSI_STATUS] <= S_SELECT_TIMEOUT;
+                        int_pending <= 1'b1;
+                        state    <= ST_IDLE;
+                    end
+                end
+
+                // The target drives the whole sequence from here: it asks for
+                // COMMAND, then whichever data direction the command implies,
+                // then STATUS, then MESSAGE IN, then drops BSY. Following it
+                // rather than driving a fixed order is what makes this work
+                // for commands with no data phase as well as ones with.
+                ST_SAT_PHASE: begin
+                    if (!scsi_bsy) begin
+                        // Bus free: the target is done.
+                        state <= ST_SAT_END;
+                    end else if (scsi_req) begin
+                        case (phase)
+                            PH_COMMAND: begin
+                                data_latch <= reg_file[R_CDB1 + cdb_idx];
+                                state      <= ST_SAT_ACK;
+                            end
+                            PH_DATA_OUT: begin
+                                // Initiator sends. The driver must have put a
+                                // byte in the data register; DBR says we want
+                                // one, and we wait here until it does.
+                                if (!dbr) state <= ST_SAT_ACK;
+                                else      dbr   <= 1'b1;
+                            end
+                            PH_DATA_IN: begin
+                                // Target sends. Take the byte and hold it in
+                                // the data register until the driver reads it.
+                                if (!dbr) begin
+                                    data_latch <= scsi_din;
+                                    dbr        <= 1'b1;
+                                    state      <= ST_SAT_ACK;
+                                end
+                            end
+                            PH_STATUS: begin
+                                // The status byte lands in TARGET_LUN, which is
+                                // where the driver looks for it after a
+                                // Select-and-Transfer completes.
+                                reg_file[R_TARGET_LUN] <= scsi_din;
+                                reg_file[R_CMD_PHASE]  <= CP_RECV_STATUS;
+                                state <= ST_SAT_ACK;
+                            end
+                            PH_MSG_IN: begin
+                                reg_file[R_CMD_PHASE] <= CP_STATUS_RECVD;
+                                state <= ST_SAT_ACK;
+                            end
+                            default: state <= ST_SAT_ACK;
+                        endcase
+                    end
+                end
+
+                ST_SAT_ACK: begin
+                    scsi_ack <= 1'b1;
+                    state    <= ST_SAT_REL;
+                end
+
+                ST_SAT_REL: begin
+                    if (!scsi_req) begin
+                        scsi_ack <= 1'b0;
+                        case (phase)
+                            PH_COMMAND: begin
+                                reg_file[R_CMD_PHASE] <= CP_CMD_START + {4'h0, cdb_idx} + 8'd1;
+                                if (cdb_idx + 4'd1 < cdb_len) cdb_idx <= cdb_idx + 4'd1;
+                            end
+                            PH_DATA_OUT, PH_DATA_IN: begin
+                                if (xfer_count != 24'd0) begin
+                                    {reg_file[R_COUNT_MSB],
+                                     reg_file[R_COUNT_2ND],
+                                     reg_file[R_COUNT_LSB]} <= xfer_count - 24'd1;
+                                    if (xfer_count == 24'd1)
+                                        reg_file[R_CMD_PHASE] <= CP_XFER_COUNT;
+                                end
+                            end
+                            PH_MSG_IN: reg_file[R_CMD_PHASE] <= CP_COMPLETE_MSG;
+                            default: ;
+                        endcase
+                        state <= ST_SAT_PHASE;
+                    end
+                end
+
+                ST_SAT_END: begin
+                    cip      <= 1'b0;
+                    scsi_atn <= 1'b0;
+                    dbr      <= 1'b0;
+                    reg_file[R_SCSI_STATUS] <= S_SELECT_XFER_OK;
+                    int_pending <= 1'b1;
+                    state    <= ST_IDLE;
                 end
 
                 default: state <= ST_IDLE;

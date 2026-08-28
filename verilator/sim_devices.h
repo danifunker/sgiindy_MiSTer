@@ -35,10 +35,38 @@ struct TestDevice {
     void     write64(uint32_t addr, uint64_t data, uint8_t be);
 };
 
+// A SCSI disk, presented the way hps_io presents one: 512-byte blocks moved
+// through a shared sector buffer, with a read or write request raised as a
+// level and answered with an ack. One per target ID.
+//
+// The buffer is 16 bits wide because that is the width hps_io uses, and the
+// byte order within a word is the HPS's, not the guest's - scsi.v unpacks it
+// (see its buf0/buf1 comment). The harness therefore has to pack it the same
+// way round, which is the "sim packs byte0 in high half" branch there.
+struct ScsiDisk {
+    bool                 mounted = false;
+    std::vector<uint8_t> image;
+    std::string          path;
+
+    // Set when a transfer is in flight, so the harness can step it over the
+    // several cycles a real HPS session takes rather than answering instantly
+    // - an instant ack hides every ordering bug in the target's buffer
+    // handling.
+    bool     busy    = false;
+    bool     writing = false;
+    uint32_t lba     = 0;
+    int      countdown = 0;
+    uint8_t  sector[512] = {0};
+
+    bool   load(const std::string &p);
+    size_t blocks() const { return image.size() / 512; }
+};
+
 struct Devices {
     Memory     ram;
     Memory     prom;
     TestDevice testdev;
+    ScsiDisk   scsi[7];
 };
 
 extern Devices g_dev;
