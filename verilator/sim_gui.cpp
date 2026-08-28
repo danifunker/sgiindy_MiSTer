@@ -11,6 +11,13 @@
 //  are the same, the platform layer is the MiSTer sim framework's SDL2 +
 //  OpenGL2 backend that this repository already vendors.
 //
+//  LAYOUT. This is the core ImGui, not the docking branch, so there is no
+//  dockspace to drop panels into - they are plain windows, tiled by hand the
+//  first time the program runs and the user's business after that. Positions
+//  and sizes are remembered in imgui.ini beside the working directory; the
+//  View menu has a Reset layout that puts them back, which is the escape
+//  hatch when a window ends up somewhere its resize grip cannot be reached.
+//
 //  Panels:
 //    Control        run / stop / step / reset, cycle rate, cpu_error flags
 //    Console        what the machine printed, and a box to type back at it
@@ -198,6 +205,24 @@ int main(int argc, char **argv)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+    {
+        ImGuiIO &io = ImGui::GetIO();
+        // Resizing by dragging a window edge rather than only the corner grip.
+        // The SDL backend sets ImGuiBackendFlags_HasMouseCursors, which is what
+        // this depends on, but it is worth being explicit about.
+        io.ConfigWindowsResizeFromEdges = true;
+        ImGuiStyle &st = ImGui::GetStyle();
+        st.WindowMenuButtonPosition = ImGuiDir_None;   // reclaim the title bar
+        st.WindowRounding  = 3.0f;
+        st.FrameRounding   = 3.0f;
+        st.ScrollbarSize   = 14.0f;
+        st.GrabMinSize     = 12.0f;
+        // A visible resize grip. The default is nearly transparent, which on
+        // a dark theme reads as "this window cannot be resized".
+        st.Colors[ImGuiCol_ResizeGrip]        = ImVec4(0.35f, 0.55f, 0.85f, 0.45f);
+        st.Colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.45f, 0.65f, 0.95f, 0.85f);
+        st.Colors[ImGuiCol_ResizeGripActive]  = ImVec4(0.55f, 0.75f, 1.00f, 1.00f);
+    }
     ImGui_ImplSDL2_InitForOpenGL(window, gl);
     ImGui_ImplOpenGL2_Init();
 
@@ -211,7 +236,7 @@ int main(int argc, char **argv)
     uint64_t cycle = 0;
     bool     running = start_running;
     int      step_batch = 200000;          // cycles per rendered frame
-    bool     step_once = false, step_many = false;
+    bool     step_once = false, step_many = false, do_reset = false;
 
     std::string console;
     std::deque<Txn> trace;
@@ -240,6 +265,14 @@ int main(int argc, char **argv)
     };
 
     MemoryEditor ram_edit, prom_edit;
+
+    // Which panels are up. The two hex editors are bulky and rarely what you
+    // want while watching a boot, so they start closed.
+    bool show_control = true, show_console = true, show_trace = true;
+    bool show_holes = true, show_hot = true, show_patches = true;
+    bool show_ram = false, show_prom = false;
+    // Re-tile on the first frame, and whenever the user asks for it.
+    bool relayout = true;
 
     auto step_cycle = [&]() {
         if (cycle == 8) top->reset = 0;
@@ -299,6 +332,17 @@ int main(int argc, char **argv)
             }
         }
 
+        if (do_reset) {
+            delete top;
+            top = new Vsim_top;
+            top->reset = 1; top->sclk = 0; top->clk = 0;
+            top->boot_pc = boot_pc; top->gio_present = testdev ? 1 : 0; top->rxdb = 1;
+            cycle = 0; console.clear(); trace.clear(); hot.clear(); holes.clear();
+            urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;
+            for (int b = 0; b < 6; b++) err_count[b] = 0;
+            g_dev.testdev.out.clear(); g_dev.testdev.exited = false;
+            do_reset = false;
+        }
         if (step_once) { step_cycle(); step_once = false; }
         if (step_many) { for (int i = 0; i < 5000; i++) step_cycle(); step_many = false; }
         if (running)   { for (int i = 0; i < step_batch; i++) step_cycle(); }
@@ -314,149 +358,241 @@ int main(int argc, char **argv)
         ImGui_ImplSDL2_NewFrame(window);
         ImGui::NewFrame();
 
-        // ---- Control -----------------------------------------------------
-        ImGui::Begin("Control");
-        ImGui::Text("%s", load_msg.empty() ? "(nothing loaded)" : load_msg.c_str());
-        ImGui::Text("boot PC %08X   RAM %u MB   testdev %s",
-                    boot_pc, ram_mb, testdev ? "yes" : "no");
-        ImGui::Separator();
-        if (ImGui::Button(running ? "Stop (F5)" : "Run (F5)")) running = !running;
-        ImGui::SameLine(); if (ImGui::Button("Step (F11)"))  step_once = true;
-        ImGui::SameLine(); if (ImGui::Button("5000 (F6)"))   step_many = true;
-        ImGui::SameLine(); if (ImGui::Button("Reset")) {
-            delete top;
-            top = new Vsim_top;
-            top->reset = 1; top->sclk = 0; top->clk = 0;
-            top->boot_pc = boot_pc; top->gio_present = testdev ? 1 : 0; top->rxdb = 1;
-            cycle = 0; console.clear(); trace.clear(); hot.clear(); holes.clear();
-            urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;
-            for (int b = 0; b < 6; b++) err_count[b] = 0;
-            g_dev.testdev.out.clear(); g_dev.testdev.exited = false;
-        }
-        ImGui::Text("cycle %llu   %.2f Mcycles/s",
-                    (unsigned long long)cycle, cycles_per_sec / 1e6);
-        ImGui::SliderInt("cycles per frame", &step_batch, 1000, 2000000);
-        ImGui::Separator();
-        // cpu_error is a set of N64 debugging aids, not faults: the test suite
-        // raises most of them on purpose. Counted, never fatal here.
-        ImGui::Text("cpu_error (informational):");
-        for (int b = 0; b < 6; b++)
-            if (err_count[b])
-                ImGui::Text("  %-24s %llu", kErrorNames[b], (unsigned long long)err_count[b]);
-        ImGui::End();
+        ImGuiIO &io = ImGui::GetIO();
 
-        // ---- Console -----------------------------------------------------
-        ImGui::Begin("Console (SCC channel B / tty1)");
-        ImGui::Text("%zu bytes printed   wire bit time %llu clocks",
-                    console.size(), (unsigned long long)urx.bit_time);
-        ImGui::BeginChild("con", ImVec2(0, -60), true, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
-        ImGui::TextUnformatted(console.c_str(), console.c_str() + console.size());
-        ImGui::PopStyleVar();
-        if (running) ImGui::SetScrollHereY(1.0f);
-        ImGui::EndChild();
-        bool can_type = urx.bit_time != 0;
-        if (!can_type)
-            ImGui::TextDisabled("type: waiting for the machine to transmit, to measure the bit rate");
-        ImGui::BeginDisabled(!can_type);
-        ImGui::PushItemWidth(-80);
-        if (ImGui::InputText("##type", type_buf, sizeof(type_buf),
-                             ImGuiInputTextFlags_EnterReturnsTrue)) {
-            for (char *p = type_buf; *p; p++) utx.queue.push_back((uint8_t)*p);
-            utx.queue.push_back('\r');
-            type_buf[0] = 0;
-            ImGui::SetKeyboardFocusHere(-1);
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::Text("%zu queued", utx.queue.size());
-        ImGui::EndDisabled();
-        ImGui::End();
-
-        // ---- Bus trace ---------------------------------------------------
-        ImGui::Begin("Bus trace");
-        ImGui::Checkbox("record", &trace_on);
-        ImGui::SameLine(); if (ImGui::Button("clear")) trace.clear();
-        ImGui::SameLine(); ImGui::Text("%zu of %zu", trace.size(), trace_cap);
-        ImGui::BeginChild("tr", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGuiListClipper clip;
-        clip.Begin((int)trace.size());
-        while (clip.Step())
-            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
-                const Txn &t = trace[i];
-                ImGui::Text("%10llu %s %08X %-14s %016llX be %02X",
-                            (unsigned long long)t.cycle, t.we ? "WR" : "RD", t.addr,
-                            reg_name(t.addr), (unsigned long long)t.data, t.be);
+        //---------------- menu bar ----------------
+        float menu_h = 0.0f;
+        if (ImGui::BeginMainMenuBar()) {
+            menu_h = ImGui::GetWindowSize().y;
+            if (ImGui::BeginMenu("Run")) {
+                if (ImGui::MenuItem(running ? "Stop" : "Run", "F5")) running = !running;
+                if (ImGui::MenuItem("Single step", "F11"))          step_once = true;
+                if (ImGui::MenuItem("5000 steps", "F6"))            step_many = true;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Reset machine"))               do_reset = true;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Quit"))                        done = true;
+                ImGui::EndMenu();
             }
-        if (running) ImGui::SetScrollHereY(1.0f);
-        ImGui::EndChild();
-        ImGui::End();
-
-        // ---- Holes -------------------------------------------------------
-        ImGui::Begin("Unclaimed addresses");
-        ImGui::TextWrapped("Bus cycles no device answered. This is the live map of "
-                           "what is still missing - the next thing to build is "
-                           "usually the address at the top of a poll loop.");
-        if (ImGui::Button("clear")) holes.clear();
-        ImGui::BeginChild("ho", ImVec2(0, 0));
-        for (const auto &e : holes)
-            ImGui::Text("%08X %-16s %-3s x%-8llu  first %llu last %llu",
-                        e.first, reg_name(e.first),
-                        e.second.r && e.second.w ? "R/W" : e.second.w ? "W" : "R",
-                        (unsigned long long)e.second.count,
-                        (unsigned long long)e.second.first,
-                        (unsigned long long)e.second.last);
-        ImGui::EndChild();
-        ImGui::End();
-
-        // ---- Hot ---------------------------------------------------------
-        ImGui::Begin("Hot addresses");
-        if (ImGui::Button("clear")) hot.clear();
-        std::vector<std::pair<uint32_t, uint64_t>> v(hot.begin(), hot.end());
-        std::sort(v.begin(), v.end(),
-                  [](const auto &a, const auto &b) { return a.second > b.second; });
-        ImGui::BeginChild("ht", ImVec2(0, 0));
-        for (size_t i = 0; i < v.size() && i < 40; i++)
-            ImGui::Text("%08X %-16s %llu", v[i].first, reg_name(v[i].first),
-                        (unsigned long long)v[i].second);
-        ImGui::EndChild();
-        ImGui::End();
-
-        // ---- PROM patches ------------------------------------------------
-        ImGui::Begin("PROM patches");
-        ImGui::TextWrapped("Word patches applied to the loaded image. 0x00000000 is "
-                           "NOP; 0x03E00008 is `jr $ra`. Answers to \"would it get "
-                           "further without this\" - never a fix.");
-        if (ImGui::Button("add")) patches.push_back({0x1FC00000, 0x00000000, false, ""});
-        for (size_t i = 0; i < patches.size(); i++) {
-            ImGui::PushID((int)i);
-            ImGui::Checkbox("##en", &patches[i].enabled);
-            ImGui::SameLine(); ImGui::PushItemWidth(90);
-            ImGui::InputScalar("addr", ImGuiDataType_U32, &patches[i].addr, nullptr, nullptr, "%08X",
-                               ImGuiInputTextFlags_CharsHexadecimal);
-            ImGui::SameLine();
-            ImGui::InputScalar("word", ImGuiDataType_U32, &patches[i].value, nullptr, nullptr, "%08X",
-                               ImGuiInputTextFlags_CharsHexadecimal);
-            ImGui::PopItemWidth();
-            ImGui::SameLine(); ImGui::PushItemWidth(200);
-            ImGui::InputText("note", patches[i].note, sizeof(patches[i].note));
-            ImGui::PopItemWidth();
-            ImGui::SameLine();
-            if (ImGui::Button("apply") && patches[i].enabled) apply_patch(patches[i]);
-            ImGui::PopID();
+            if (ImGui::BeginMenu("View")) {
+                ImGui::MenuItem("Control",             nullptr, &show_control);
+                ImGui::MenuItem("Console",             nullptr, &show_console);
+                ImGui::MenuItem("Bus trace",           nullptr, &show_trace);
+                ImGui::MenuItem("Unclaimed addresses", nullptr, &show_holes);
+                ImGui::MenuItem("Hot addresses",       nullptr, &show_hot);
+                ImGui::MenuItem("PROM patches",        nullptr, &show_patches);
+                ImGui::Separator();
+                ImGui::MenuItem("RAM hex editor",      nullptr, &show_ram);
+                ImGui::MenuItem("PROM hex editor",     nullptr, &show_prom);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Reset layout")) relayout = true;
+                ImGui::EndMenu();
+            }
+            // Machine state where it is always visible, whatever is open.
+            char st[160];
+            snprintf(st, sizeof(st), "cycle %llu   %.2f Mcycles/s   %s   %zu bytes printed",
+                     (unsigned long long)cycle, cycles_per_sec / 1e6,
+                     running ? "RUNNING" : "stopped", console.size());
+            float w = ImGui::CalcTextSize(st).x;
+            ImGui::SameLine(ImGui::GetWindowWidth() - w - 20.0f);
+            ImGui::TextUnformatted(st);
+            ImGui::EndMainMenuBar();
         }
-        ImGui::TextDisabled("A patch only reaches the CPU after the next fetch of that "
-                            "word, so reset after applying one that is already running.");
-        ImGui::End();
 
-        ram_edit.DrawWindow("RAM (physical 0x08000000)", g_dev.ram.bytes.data(),
-                            g_dev.ram.size(), 0x08000000);
-        prom_edit.DrawWindow("PROM (physical 0x1FC00000)", g_dev.prom.bytes.data(),
-                             g_dev.prom.size(), 0x1FC00000);
+        //---------------- first-use tiling ----------------
+        // Three columns under the menu bar. Applied with ImGuiCond_Always only
+        // on a relayout, so the rest of the time every window is free to be
+        // moved and resized and imgui.ini remembers where it ended up.
+        const ImGuiCond place = relayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+        const float W  = io.DisplaySize.x;
+        const float H  = io.DisplaySize.y - menu_h;
+        const float cw = W / 3.0f;
+        auto tile = [&](float x, float y, float w, float h) {
+            ImGui::SetNextWindowPos (ImVec2(x, menu_h + y), place);
+            ImGui::SetNextWindowSize(ImVec2(w, h),          place);
+        };
+
+        //---------------- Control ----------------
+        if (show_control) {
+            tile(0, 0, cw, H * 0.34f);
+            ImGui::Begin("Control", &show_control);
+            ImGui::TextWrapped("%s", load_msg.empty() ? "(nothing loaded)" : load_msg.c_str());
+            ImGui::Text("boot PC %08X   RAM %u MB   testdev %s",
+                        boot_pc, ram_mb, testdev ? "yes" : "no");
+            ImGui::Separator();
+            if (ImGui::Button(running ? "Stop (F5)" : "Run (F5)")) running = !running;
+            ImGui::SameLine(); if (ImGui::Button("Step (F11)")) step_once = true;
+            ImGui::SameLine(); if (ImGui::Button("5000 (F6)"))  step_many = true;
+            ImGui::SameLine(); if (ImGui::Button("Reset"))      do_reset = true;
+            ImGui::Text("cycle %llu   %.2f Mcycles/s",
+                        (unsigned long long)cycle, cycles_per_sec / 1e6);
+            ImGui::SetNextItemWidth(-140.0f);
+            ImGui::SliderInt("cycles per frame", &step_batch, 1000, 2000000);
+            ImGui::Separator();
+            // cpu_error is a set of N64 debugging aids, not faults: the test
+            // suite raises most of them on purpose. Counted, never fatal here.
+            ImGui::TextDisabled("cpu_error (informational)");
+            bool any_err = false;
+            for (int b = 0; b < 6; b++)
+                if (err_count[b]) {
+                    ImGui::Text("  %-24s %llu", kErrorNames[b],
+                                (unsigned long long)err_count[b]);
+                    any_err = true;
+                }
+            if (!any_err) ImGui::TextDisabled("  none");
+            ImGui::End();
+        }
+
+        //---------------- Console ----------------
+        if (show_console) {
+            tile(0, H * 0.34f, cw, H * 0.66f);
+            ImGui::Begin("Console (SCC channel B / tty1)", &show_console);
+            ImGui::TextDisabled("%zu bytes printed   wire bit time %llu clocks",
+                                console.size(), (unsigned long long)urx.bit_time);
+            const float input_h = ImGui::GetFrameHeightWithSpacing() * 2.0f;
+            ImGui::BeginChild("con", ImVec2(0, -input_h), true,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
+            ImGui::TextUnformatted(console.c_str(), console.c_str() + console.size());
+            ImGui::PopStyleVar();
+            if (running) ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
+            bool can_type = urx.bit_time != 0;
+            if (!can_type)
+                ImGui::TextDisabled("waiting for the machine to transmit, to measure the bit rate");
+            else
+                ImGui::TextDisabled("type and press Enter   (%zu queued)", utx.queue.size());
+            ImGui::BeginDisabled(!can_type);
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::InputText("##type", type_buf, sizeof(type_buf),
+                                 ImGuiInputTextFlags_EnterReturnsTrue)) {
+                for (char *p = type_buf; *p; p++) utx.queue.push_back((uint8_t)*p);
+                utx.queue.push_back('\r');
+                type_buf[0] = 0;
+                ImGui::SetKeyboardFocusHere(-1);
+            }
+            ImGui::EndDisabled();
+            ImGui::End();
+        }
+
+        //---------------- Bus trace ----------------
+        if (show_trace) {
+            tile(cw, 0, cw, H * 0.62f);
+            ImGui::Begin("Bus trace", &show_trace);
+            ImGui::Checkbox("record", &trace_on);
+            ImGui::SameLine(); if (ImGui::Button("clear")) trace.clear();
+            ImGui::SameLine(); ImGui::TextDisabled("%zu of %zu", trace.size(), trace_cap);
+            ImGui::BeginChild("tr", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+            ImGuiListClipper clip;
+            clip.Begin((int)trace.size());
+            while (clip.Step())
+                for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                    const Txn &t = trace[i];
+                    ImGui::Text("%10llu %s %08X %-14s %016llX be %02X",
+                                (unsigned long long)t.cycle, t.we ? "WR" : "RD", t.addr,
+                                reg_name(t.addr), (unsigned long long)t.data, t.be);
+                }
+            if (running) ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
+        //---------------- Hot addresses ----------------
+        if (show_hot) {
+            tile(cw, H * 0.62f, cw, H * 0.38f);
+            ImGui::Begin("Hot addresses", &show_hot);
+            if (ImGui::Button("clear")) hot.clear();
+            ImGui::SameLine();
+            ImGui::TextDisabled("what the CPU is hammering - a hang looks like this");
+            std::vector<std::pair<uint32_t, uint64_t>> v(hot.begin(), hot.end());
+            std::sort(v.begin(), v.end(),
+                      [](const auto &a, const auto &b) { return a.second > b.second; });
+            ImGui::BeginChild("ht", ImVec2(0, 0));
+            for (size_t i = 0; i < v.size() && i < 60; i++)
+                ImGui::Text("%08X %-16s %llu", v[i].first, reg_name(v[i].first),
+                            (unsigned long long)v[i].second);
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
+        //---------------- Unclaimed addresses ----------------
+        if (show_holes) {
+            tile(2 * cw, 0, W - 2 * cw, H * 0.55f);
+            ImGui::Begin("Unclaimed addresses", &show_holes);
+            ImGui::TextWrapped("Bus cycles no device answered - the live map of what is "
+                               "still missing. The next thing to build is usually the "
+                               "address at the top of a poll loop.");
+            if (ImGui::Button("clear")) holes.clear();
+            ImGui::BeginChild("ho", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+            for (const auto &e : holes)
+                ImGui::Text("%08X %-16s %-3s x%-8llu  first %llu last %llu",
+                            e.first, reg_name(e.first),
+                            e.second.r && e.second.w ? "R/W" : e.second.w ? "W" : "R",
+                            (unsigned long long)e.second.count,
+                            (unsigned long long)e.second.first,
+                            (unsigned long long)e.second.last);
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
+        //---------------- PROM patches ----------------
+        if (show_patches) {
+            tile(2 * cw, H * 0.55f, W - 2 * cw, H * 0.45f);
+            ImGui::Begin("PROM patches", &show_patches);
+            ImGui::TextWrapped("Word patches applied to the loaded image. 0x00000000 is "
+                               "NOP; 0x03E00008 is `jr $ra`. Answers to \"would it get "
+                               "further without this\" - never a fix.");
+            if (ImGui::Button("add")) patches.push_back({0x1FC00000, 0x00000000, false, ""});
+            ImGui::BeginChild("pa", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+            for (size_t i = 0; i < patches.size(); i++) {
+                ImGui::PushID((int)i);
+                ImGui::Checkbox("##en", &patches[i].enabled);
+                ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+                ImGui::InputScalar("addr", ImGuiDataType_U32, &patches[i].addr,
+                                   nullptr, nullptr, "%08X",
+                                   ImGuiInputTextFlags_CharsHexadecimal);
+                ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+                ImGui::InputScalar("word", ImGuiDataType_U32, &patches[i].value,
+                                   nullptr, nullptr, "%08X",
+                                   ImGuiInputTextFlags_CharsHexadecimal);
+                ImGui::SameLine(); ImGui::SetNextItemWidth(160);
+                ImGui::InputText("note", patches[i].note, sizeof(patches[i].note));
+                ImGui::SameLine();
+                if (ImGui::Button("apply") && patches[i].enabled) apply_patch(patches[i]);
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::TextDisabled("A patch reaches the CPU on the next fetch of that word,\n"
+                                "so reset after applying one that is already running.");
+            ImGui::End();
+        }
+
+        //---------------- hex editors ----------------
+        // DrawContents inside a window of our own rather than DrawWindow: that
+        // helper clamps the window width to its own content, which makes the
+        // window look broken - it simply refuses to widen.
+        if (show_ram) {
+            ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
+            ImGui::Begin("RAM (physical 0x08000000)", &show_ram);
+            ram_edit.DrawContents(g_dev.ram.bytes.data(), g_dev.ram.size(), 0x08000000);
+            ImGui::End();
+        }
+        if (show_prom) {
+            ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
+            ImGui::Begin("PROM (physical 0x1FC00000)", &show_prom);
+            prom_edit.DrawContents(g_dev.prom.bytes.data(), g_dev.prom.size(), 0x1FC00000);
+            ImGui::End();
+        }
+
+        relayout = false;
 
         ImGui::Render();
-        ImGuiIO &io = ImGui::GetIO();
-        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+        // The drawable is not the window on a high-DPI display, and this is
+        // what glClear covers. The GL2 backend sets its own viewport from the
+        // same scale before it draws.
+        glViewport(0, 0,
+                   (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x),
+                   (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y));
         glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());

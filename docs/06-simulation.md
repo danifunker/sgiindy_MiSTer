@@ -31,7 +31,22 @@ make -C verilator gui
 Panels: Control (run/stop `F5`, single step `F11`, 5000-step `F6`, reset,
 cycles/s, `cpu_error` counts) · **Console**, with a box to type back at the
 machine · Bus trace with decoded register names · **Unclaimed addresses** ·
-Hot addresses · **PROM patches** · RAM and PROM hex editors.
+Hot addresses · **PROM patches** · RAM and PROM hex editors, which start
+closed because they are bulky and rarely what you want while watching a boot.
+
+This is core ImGui, **not the docking branch**, so there is no dockspace: the
+panels are plain windows tiled into three columns on first use and the user's
+business after that. Every one of them resizes from any edge or corner, and
+the layout is remembered in `verilator/imgui.ini`. The `View` menu toggles
+each panel and has a **Reset layout**, which is the escape hatch when a window
+ends up somewhere its resize grip cannot be reached — delete the ini file for
+the same effect.
+
+Two things that made this look broken before and are worth not rediscovering:
+`MemoryEditor::DrawWindow` clamps its window's width to its own content, so a
+hex editor built with it simply refuses to widen — use `DrawContents` inside a
+window of your own. And ImGui's default `ResizeGrip` colour is nearly
+transparent, which on a dark theme reads as "this window cannot be resized".
 
 The console input is a real UART transmitter on `rxdb`, not a back door into
 the SCC's receive FIFO, so a keystroke only arrives if the receiver, the baud
