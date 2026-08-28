@@ -29,6 +29,10 @@ end entity;
 architecture rtl of RamMLAB is
    type mem_t is array(0 to (2**widthad)-1) of std_logic_vector(width-1 downto 0);
    signal mem : mem_t := (others => (others => '0'));
+   -- Ask for LUTRAM explicitly. This is the async-read template an MLAB
+   -- implements natively, but Quartus 17.0 defaults it to registers.
+   attribute ramstyle : string;
+   attribute ramstyle of mem : signal is "MLAB, no_rw_check";
 begin
    process (inclock)
    begin
