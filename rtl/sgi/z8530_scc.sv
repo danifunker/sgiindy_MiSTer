@@ -50,6 +50,17 @@ module z8530_scc #(
     // data-port reads (d_c=1). Use 0 if a driver does back-to-back control-
     // port RR8 reads expecting the same byte (some clones / quirky drivers).
     parameter RR8_CTRL_POP = 1,
+    // When 1, writing WR8 via the control port (reg_ptr=8, d_c=0) pushes the
+    // byte into the TX FIFO, exactly as a data-port write does. The datasheet
+    // is explicit: "A read to RR8 (the receive data FIFO) or a write to WR8
+    // (the transmit data FIFO) is either done in this fashion or by accessing
+    // the Z85X30 having D//C pin High", and 5.2.11 says "WR8 is the transmit
+    // buffer register". THE IP24 PROM DEPENDS ON THIS. Its power-on console
+    // routine (pon_putc, 0xBFC03C34) never touches the data port at all: it
+    // polls RR0 through the command port, writes 8 to point at WR8, and then
+    // writes the character to the same command port. With this path missing
+    // the SCC accepts the whole boot banner and prints nothing.
+    parameter WR8_CTRL_PUSH = 1,
     // Per-channel BRG clock source (synthesis-time):
     //   1 = sclk (historical SCC RTxC/sclk source, e.g. 3.6864 MHz) -- default
     //   0 = pclk (alternative peripheral clock; can be tied to clk in wrapper)
@@ -687,9 +698,14 @@ endfunction
 // Async FIFO interface signals
 //============================================================================
 
-// TX FIFOs: CPU writes from clk, TX FSM reads on sclk
-wire        tx_fifo_wen_a   = write_en && a_b && d_c;
-wire        tx_fifo_wen_b   = write_en && !a_b && d_c;
+// TX FIFOs: CPU writes from clk, TX FSM reads on sclk.
+// Data-port writes (d_c=1) always push. Control-port writes with the pointer
+// at 8 also push when WR8_CTRL_PUSH=1, which is the mirror image of the RR8
+// control-port pop below and is how the IP24 PROM prints - see the parameter.
+wire        tx_fifo_wen_a   = write_en && a_b &&
+                              (d_c || (WR8_CTRL_PUSH != 0 && !d_c && reg_ptr_a == 4'd8));
+wire        tx_fifo_wen_b   = write_en && !a_b &&
+                              (d_c || (WR8_CTRL_PUSH != 0 && !d_c && reg_ptr_b == 4'd8));
 wire        tx_fifo_wfull_a, tx_fifo_wfull_b;
 wire        tx_fifo_wempty_a, tx_fifo_wempty_b; // writer-side view of empty
 wire [7:0]  tx_fifo_rdata_a, tx_fifo_rdata_b;
@@ -1711,6 +1727,10 @@ always @(posedge clk or negedge reset_n) begin
                     4'd12: begin wr12_a <= data_in; reg_ptr_a <= 4'd0; end
                     4'd13: begin wr13_a <= data_in; reg_ptr_a <= 4'd0; end
                     4'd14: begin wr14_a <= data_in; reg_ptr_a <= 4'd0; end
+                    // WR8 is the transmit buffer: the byte goes to the FIFO
+                    // through tx_fifo_wen_a, and all that happens here is the
+                    // pointer reset every register access performs.
+                    4'd8:  reg_ptr_a <= 4'd0;
                     4'd15: begin wr15_a <= data_in; reg_ptr_a <= 4'd0; end
                     default: reg_ptr_a <= 4'd0;
                 endcase
@@ -1742,6 +1762,7 @@ always @(posedge clk or negedge reset_n) begin
                     4'd12: begin wr12_b <= data_in; reg_ptr_b <= 4'd0; end
                     4'd13: begin wr13_b <= data_in; reg_ptr_b <= 4'd0; end
                     4'd14: begin wr14_b <= data_in; reg_ptr_b <= 4'd0; end
+                    4'd8:  reg_ptr_b <= 4'd0;      // transmit buffer - see Ch A
                     4'd15: begin wr15_b <= data_in; reg_ptr_b <= 4'd0; end
                     default: reg_ptr_b <= 4'd0;
                 endcase
