@@ -123,10 +123,12 @@ it, which is the only reason to believe it.
 - **No graphics.** The window answers zero so the absence is discovered
   quickly. Newport is the largest single remaining piece of work and is not on
   the path to the Command Monitor over serial.
-- **Interrupt status registers read zero.** Nothing raises an interrupt yet.
-  They are inputs to `sgi_ioc.sv` rather than storage, so wiring real sources in
-  changes nothing else. The DE1 sandbox made them read-write, which passes the
-  same tests and then lies.
+- **INT2 has three sources fitted of the twenty-odd a real Indy has**: SCSI0
+  on `LOCAL0` bit 1, the SCC on `MAP_STAT` bit 5 and the keyboard/mouse
+  controller on bit 4. Every other bit is a device this core does not have and
+  reads as an interrupt that never fires. `ERR_STAT` is a real zero, so
+  `Cause.IP6` never asserts: nothing here reports a bus error, because
+  `sgi_indy.sv` answers an unclaimed cycle rather than faulting it.
 - **The NVRAM is volatile**, so the PROM prints "NVRAM checksum is incorrect:
   reinitializing" and rebuilds the environment on every boot. That is the
   documented failure mode rather than a hang. Wiring the array to MiSTer's SD
@@ -258,7 +260,7 @@ Working:
 - A disk image attaches with `--disk ID=PATH`, and the block device moves
   512-byte blocks through the shared sector buffer.
 
-### Solved: six phantom disconnects on the bus scan — it is the missing interrupt line
+### Solved: six phantom disconnects on the bus scan — the chip accepted a command it should have refused
 
 POST printed, for IDs 2 through 7:
 
@@ -293,12 +295,64 @@ Between the two, the driver had already written `COMMAND_PHASE = 0`,
 `DESTINATION_ID`, and `COMMAND = 0x08` for the **next** ID. By the time the
 handler looked, the chip no longer said `0x04`.
 
-**Nothing is wrong with the disconnect itself.** What is wrong is that
-`sgi_indy.sv` ties INT2's sources to zero, so `sgi_scsi.sv`'s `irq` output goes
-nowhere and the CPU takes no interrupt. The driver polls instead, and polls
-*after* it has reprogrammed the chip. On real hardware the ISR runs on the
-interrupt line, before the next command is set up, and reads a chip that still
-says `0x04`.
+**Nothing is wrong with the disconnect itself, and — this is the correction —
+nothing was wrong with the interrupt line either.** An earlier version of this
+section concluded that the ISR ran late because INT2's sources were tied to
+zero, and that wiring `scsi_irq` to the CPU would fix it. INT2 is wired now,
+and it did not: the boot was byte-for-byte identical. The reason is visible in
+one line of the harness's `--irq` log:
+
+```
+[7519129] IRQ IP[6:2]=.....  L0 02/00  L1 00/02  MAP 00
+```
+
+`L0 02/00` is the SCSI interrupt asserted against a **zero L0_MASK**. The PROM
+never unmasks LOCAL0 at all; it leaves `L1_MASK = 0x02` (the front panel) and
+nothing else. During POST this driver is not interrupt-driven. It *polls*, at
+`FUN_bfc1c380`:
+
+```
+bfc1c3c4  lbu   $t1, ($t0)        ; the WD33C93's AUX STATUS, at 0x1FBC0003
+bfc1c3cc  andi  $t2, $t1, 0x80    ; bit 7 - interrupt pending?
+bfc1c3d0  beqz  $t2, ...          ; no -> return
+bfc1c3e4  jal   0xbfc1e134        ; yes -> run the handler
+```
+
+So the handler does run promptly, on the poll. What actually went wrong is one
+rule of the part that this model did not implement.
+
+**The real cause: a command must bounce off LCI while an interrupt is pending.**
+On a selection timeout the handler frees the bus by issuing DISCONNECT
+(`caseD_41` at `0xBFC1E5A8` calls `FUN_bfc1F64C` with command 4). That raises
+an interrupt — status `0x85`, phase `0x00` — which the driver deliberately does
+*not* service: it waits only for BSY to drop and moves on to the next ID. On
+real hardware the next command then bounces, and the driver's own command-issue
+routine cleans up after it. `FUN_bfc1f64c` is written around exactly that:
+
+```
+bfc1f688  lbu $t8,($v0); andi $t9,$t8,0x10; bnez $t9  ; wait for CIP to clear
+bfc1f6e4  sb  0x18, (addr) ; sb cmd, (data)           ; issue
+bfc1f710  lbu $t6,($v0); andi $t7,$t6,0x10; bnez $t7  ; wait for CIP again
+bfc1f72c  andi $t9, $t8, 0x40 ; bnez -> bfc1f6a8      ; LCI? -> retry
+bfc1f6b0  jal  0xbfc1f230                             ; "is INT pending?"
+bfc1f6c8  sb   0x17, (addr) ; lbu $zero, (data)       ; read status: clear it
+```
+
+That is the whole answer. `LCI` was set here only for a command issued while
+`CIP` was set, so the Select-and-Transfer for the next ID was **accepted**. The
+stale `0x85` sat in the SCSI Status register while the chip ran the new
+command, the poll saw the interrupt that was already pending, and the handler
+read `COMMAND = 0x08` against a status of `0x85` — the one combination
+`0xBFC1E304` complains about. With `LCI` also set on a pending interrupt, the
+driver eats the stale interrupt itself inside `FUN_bfc1f64c` and the handler is
+never dispatched for it.
+
+RESET is the exception, on the part and here: it is the escape hatch out of any
+state and clears the interrupt itself.
+
+The result is that POST now passes. The six lines are gone, so are
+`Diagnostics failed` and the `[Press any key to continue.]` prompt behind it,
+and `tests/run-prom.sh` went from over twenty-five minutes back to about four.
 
 Two smaller defects were found and fixed along the way, neither of them this:
 ATN left asserted after a selection timeout, and selection latching the *level*
@@ -309,6 +363,56 @@ Also corrected: the DISCONNECT command sets `COMMAND_PHASE` to `0x00`
 handler's first comparison; IRIS uses `0x00` (`wd33c93a.rs:1778`) and the
 handler accepts it through the second.
 
-**Next:** wire `scsi_irq` into INT2 `LOCAL0` bit 1 and INT2 into the CPU. That
-is the "interrupt-era" work `sgi_indy.sv` defers, and this is the first thing
-that actually needs it.
+### Solved: `--disk 1=` mounted an image the target then ignored
+
+A harness bug, not an RTL one, and worth recording because it was invisible:
+attaching a disk to any ID but 0 produced a boot identical to attaching none.
+
+`img_blocks` is a **single 32-bit bus shared by all seven targets** — that is
+what hps_io does on hardware, where a mount is an event and the size on the bus
+belongs to whichever slot's flag is up. `sim_scsi.h` raised every mounted flag
+at once against slot 0's size, so a disk on ID 1 saw its flag high with
+`img_blocks` = 0, and `scsi.v` reads that as "medium removed":
+
+```verilog
+if (img_mounted) begin
+    if (|img_blocks) begin ... mounted <= 1; end
+    else                       mounted <= 0;
+```
+
+The target never mounted, never answered a selection, and the PROM's scan found
+nothing — exactly what an empty bus looks like. The harness now walks the slots
+one at a time, holding each flag with its own size, and `Image mounted on
+target 1, size: 16384` appears for the first time.
+
+### INT2, as built
+
+Wired anyway, because IRIX needs it and because it is what proved the paragraph
+above wrong. `rtl/sgi/sgi_ioc.sv` implements the whole block and drives five
+lines into `Cause.IP[6:2]`:
+
+| INT2 | CPU | Source |
+|---|---|---|
+| `L0_STAT & L0_MASK` | `IP2` | LOCAL0: SCSI, Ethernet, graphics, MC DMA, and `MAP_INT0` |
+| `L1_STAT & L1_MASK` | `IP3` | LOCAL1: HPC DMA, vertical retrace, panel, and `MAP_INT1` |
+| `MAP_STAT` bit 0 | `IP4` | 8254 counter 0 |
+| `MAP_STAT` bit 1 | `IP5` | 8254 counter 1 |
+| `ERR_STAT` | `IP6` | bus error — no source in this core |
+
+Two mappable summaries fold back into the levels: `MAP_STAT & MAP_MASK0` is
+`L0_STAT` bit 7, `MAP_STAT & MAP_MASK1` is `L1_STAT` bit 3. Every status bit is
+a level that follows its device except `MAP_STAT[1:0]`, the two counters, which
+are set by an edge and cleared only by a write to `TMR_CLR` at `+0xA0` — a
+counter output is a pulse, so something has to remember it.
+
+`tests/run-int.sh` is the proof, and it exists because the PROM cannot provide
+one: it arms counter 0 and follows it to an Interrupt exception twice, directly
+on IP4 and through `MAP_MASK0` and the LOCAL0 summary on IP2, and checks both
+negatives — masked at the CPU, and masked at INT2.
+
+One thing that image found is worth repeating outside it. **A handler that
+clears a level-sensitive source and returns can be re-entered**, because the
+clearing store sits in the CPU's write FIFO and `eret` does not wait for it to
+drain. It presented as a second entry whose `Cause` had `IP4` already clear.
+A read back from the same device before returning orders behind the write and
+is what makes the clear stick.

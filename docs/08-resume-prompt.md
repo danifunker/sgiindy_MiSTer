@@ -21,16 +21,13 @@ hardware — see below).
 
 Running the real IP24 PROM under Verilator gets all the way to the Command
 Monitor, over serial, driven by keystrokes the harness sends into the SCC's
-receive pin:
+receive pin — and **POST now passes**:
 
 ```
                          Running power-on diagnostics...
 
-sc0,2,0: cmd=0x12 illegal disconnection interrupt: phase 0.  Resetting SCSI bus
-   ...five more, one per empty SCSI ID...
-
-Diagnostics failed.
-[Press any key to continue.]
+Cannot open video() for output
+Cannot open video() for output
 
 System Maintenance Menu
 
@@ -54,19 +51,9 @@ PROM Monitor SGI Version 5.3 Rev B10 R4X00/R5000 IP24 Feb 12, 1996 (BE)
 
 `tests/run-prom.sh` reproduces all of that and checks each line, so a change
 that moves the boot backwards fails a test rather than surprising you later.
-
-**It is failing right now, and the reason is worth understanding before you
-touch it.** The SCSI scan (below) prints six error lines and resets the bus
-between each, which does two things: it stretches a PROM boot from about four
-minutes to over twenty-five, and it defeats the harness's typing trigger.
-`--type-on` waits for the console to go *quiet* for `--idle` cycles before
-sending a keystroke (`sim_cputest.cpp:410`) rather than matching a prompt, so
-a console that keeps chattering never looks idle and the `5` that enters the
-Command Monitor is never sent. The run reaches `5) Enter Command Monitor` and
-stops there.
-
-Do not "fix" this by raising `--idle` or trimming the EXPECT list. The console
-noise is the bug; fix that and the test comes back on its own.
+**It passes, in about 50 seconds.** It used to print six SCSI errors, fail
+diagnostics, and take over twenty-five minutes; `docs/12-chipset.md` has that
+whole story and the correction to it.
 
 **"16 Mhz" is a real measurement of this core, and it is not a clock rate.**
 `FUN_bfc31594` derives it from CP0 `Count` across a fixed 512-iteration loop,
@@ -90,13 +77,19 @@ RTC. It is a measurement of uncached instruction throughput and nothing else.
 Against `docs/07-mister-port-plan.md`'s milestones: **M0–M3 done, M6 — the "it
 boots" milestone — reached, M4 and M5 partly done.**
 
-**The SCSI lines above are not a missing device — they are the one bug you
-should fix first, and it is already diagnosed.** A WD33C93B and seven disk
-targets are fitted (`rtl/scsi/`, `docs/12-chipset.md`). The controller passes
-the PROM's data-path test and its own diagnostic, both of which used to be the
-first two `*FAILED*` lines of POST. Selection and Select-and-Transfer work, and
-a disk attaches with `--disk ID=PATH`. What is missing is the interrupt line;
-see "Where to pick up" below.
+**SCSI works as far as the bus scan.** A WD33C93B and seven disk targets are
+fitted (`rtl/scsi/`, `docs/12-chipset.md`). The controller passes the PROM's
+data-path test and its own diagnostic, selection and Select-and-Transfer work,
+the scan of the empty IDs is silent, and a disk attaches with `--disk ID=PATH`.
+What is missing is the DMA engine that would move a block off it.
+
+**Interrupts are wired and tested.** INT2 is real — three status registers,
+three masks, the two mappable summaries and the timer latches — and drives
+`Cause.IP[6:2]`. The vendored CPU's two N64 interrupt lines were replaced with
+one five-bit vector (`rtl/cpu/r4300/UPSTREAM.md`). `tests/run-int.sh` follows
+an 8254 counter into an Interrupt exception two ways and checks that masking at
+either end stops it, because **the PROM cannot test any of this**: it leaves
+`L0_MASK` at zero and polls the SCSI chip instead.
 
 The CPU passes the 240-test suite at **2161 checks passed, 3 failed**, against
 2101/61 for IRIS's own R4400 on the same expectations. **One** test fails,
@@ -111,19 +104,17 @@ What is *not* done, and is worth knowing before you plan anything:
 - **The NVRAM is volatile.** The PROM rebuilds its environment on every boot.
   `setenv` will not survive a reset until the array is wired to MiSTer's SD
   save path.
-- **No interrupts.** INT2 has masks and no sources, and `irqRequest` on
-  `r4300_wrap` is tied to `1'b0`. This is now the top item, not a background
-  one - it is what the SCSI scan noise above is a symptom of.
+- **INT2 has three sources fitted** of the twenty-odd a real Indy has: SCSI0,
+  the SCC and the keyboard controller. Everything else is a device that does
+  not exist yet, and `ERR_STAT` is a real zero, so `Cause.IP6` never fires.
 - **No Ethernet or graphics.** SCSI is fitted; Newport and the SEEQ 8003 are
   the two devices still answering as unclaimed cycles.
 - **SCSI moves no data yet.** The data phase is PIO through the chip's data
   register; the HPC3 SCSI DMA engine is not written, so nothing has read a
-  block off a disk image in anger.
-- **A PROM boot now takes far longer than it did.** Each phantom disconnect
-  makes the driver reset the SCSI bus and retry, and `tests/run-prom.sh` went
-  from about four minutes to over twenty-five. Fixing the interrupt line should
-  fix this too, since the resets are what the phantom disconnects cause. Until
-  then, prefer `--stop-on` targets early in POST when iterating.
+  block off a disk image in anger. A disk on a non-zero ID did not even *mount*
+  until this session - `sim_scsi.h` announced every slot against slot 0's size,
+  and `scsi.v` reads a mounted flag with `img_blocks` = 0 as "no medium". See
+  `docs/12-chipset.md`.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -151,8 +142,9 @@ brew install messense/macos-cross-toolchains/mipsel-unknown-linux-gnu
 
 tests/uart/run.sh         # the harness's serial decoder, no simulator, ~1 s
 tests/run-scc.sh          # the Z8530, ~4 s
+tests/run-int.sh          # INT2 to an Interrupt exception, end to end, ~6 s
 tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
-tests/run-prom.sh         # boot the PROM to the Command Monitor, minutes
+tests/run-prom.sh         # boot the PROM to the Command Monitor, ~50 s
 
 make -C verilator cputest # headless simulator
 make -C verilator gui     # interactive simulator (SDL2 + ImGui)
@@ -197,6 +189,7 @@ The headless harness (`verilator/sim_cputest.cpp`) gives you:
 | `--console FILE` | also write the console output to a file, flushed per line |
 | `--type STR` | type STR at the console once it goes quiet |
 | `--type-on TRIG STR` | the same, but only after TRIG has appeared in the output |
+| `--irq` | one line per change of INT2's five lines, with the status and mask that decided them |
 
 **The unclaimed-address summary is printed on every exit and is the tool that
 built the chipset.** It lists every bus cycle no device answered, grouped by
@@ -258,25 +251,17 @@ any hardware-confirmed result under `tests/hardware/`.
 
 ## Where to pick up
 
-### 1. The caches are done - read this before planning anything
+### The two things that are done, so you do not redo them
 
-Both primary caches are **on**, filled over the ordinary SGI bus, and the two
-cache tests that used to fail now pass. The suite went from 2155/9 to
-**2161/3** and from 17.1M clocks to 3.5M. `docs/10-r4300-integration.md`'s
-"Caches" section has the whole thing; the short version:
+**The caches are on.** Both primary caches, filled over the ordinary SGI bus,
+and the two cache tests that used to fail now pass. The suite went from 2155/9
+to **2161/3** and from 17.1M clocks to 3.5M. `docs/10-r4300-integration.md`'s
+"Caches" section has the whole thing.
 
 | | cycles | bus transactions | checks |
 |---|---:|---:|---|
 | both off | 17,138,359 | 1,977,165 | 2155 / 9 |
 | **both on** | **3,497,582** | **224,774** | **2161 / 3** |
-
-Two things that were written here as predictions turned out to be wrong, and
-are corrected in `docs/10` rather than quietly dropped:
-
-- The two failing cache tests were attributed to the instruction cache. They
-  are **data**-cache tests, and `DATACACHEON` is what fixed them.
-- The instruction cache was expected to move `hinv`'s "16 Mhz". It cannot —
-  the PROM runs entirely from KSEG1. See "Where this is" above.
 
 What the caches did *not* fix, and would be the next honest performance work,
 is that a PROM boot is dominated by **timed waits**, not by throughput: caches
@@ -285,56 +270,65 @@ The 8254 and the RTC are already run fast in simulation
 (`docs/12-chipset.md`); pushing that further is bounded by `calibrate_delay`
 restarting forever if the timer is made too fast.
 
-### 2. Interrupts, and the bug that proves they are needed
+**Interrupts are wired.** INT2 drives `Cause.IP[6:2]`; the vendored CPU takes a
+five-bit `irq_lines` in place of upstream's two N64 lines. `tests/run-int.sh`
+proves the path. Nothing about this is speculative any more.
 
-**Do this first.** It is no longer a general "everything wants interrupts"
-argument; there is a specific failure that nothing else explains, and it is
-fully diagnosed in `docs/12-chipset.md`.
+### A warning about what this file used to say
 
-POST prints one `illegal disconnection interrupt: phase 0` per empty SCSI ID.
-IRIS, on the same PROM and image, prints none. The PROM's own handler
-(`FUN_bfc1e134`) says exactly what it wants:
+The previous version of this section said the SCSI scan's six phantom
+disconnects were caused by the missing interrupt line, and that wiring INT2 to
+the CPU would fix them. **That was wrong, and it was written with enough
+confidence to send a session straight into building the right thing for the
+wrong reason.** The interrupt line was wired; the boot came out byte for byte
+identical. The PROM leaves `L0_MASK` at zero and polls the WD33C93's AUX STATUS
+register during POST, so INT2 was never in that path at all.
 
-```
-bfc1e248  beq   $v1, 0x85, bfc1e304    ; status == DISCONNECT?
-bfc1e30c  bne   $a3, 0x43, bfc1e34c    ; COMMAND_PHASE == 0x43 -> fine
-bfc1e34c  bne   $a0, 4,    bfc1e358    ; COMMAND != 0x04 -> print
-bfc1e354  beqz  $a3,       bfc1e6e8    ; COMMAND == 4 and phase == 0 -> silent
-```
+The actual cause was one rule of the part: a command written while an interrupt
+is still pending must bounce off `LCI`, and this model only checked `CIP`. The
+PROM's own command-issue routine at `0xBFC1F64C` is built around that rule —
+issue, wait for `CIP`, test `LCI`, and on `LCI` read the status register to
+clear the stale interrupt and retry. `docs/12-chipset.md` has the full
+diagnosis and the disassembly.
 
-`$a0` and `$a3` are the chip's COMMAND and COMMAND_PHASE registers. A
-disconnect is accepted quietly only while the chip still reports that the last
-command it was given was DISCONNECT. Instrumenting the status register showed:
-
-```
-WD SSR 42 -> 85  state=0 cmdphase=43 cmd=04    the DISCONNECT lands
-WD SSR read = 85 cmdphase=00 cmd=08            the handler reads it much later
-```
-
-Between those, the driver had already reprogrammed the chip for the next ID.
-There is no interrupt line, so the ISR runs late and reads a chip that has
-moved on. On hardware it runs on the line, before the next command.
-
-The work:
-
-- `sgi_scsi.sv` already has an `irq` output and `sgi_ioc.sv` already takes
-  `l0_source`/`l1_source` and computes `int_n`. They are tied off at the
-  instantiation in `sgi_indy.sv`. SCSI is INT2 `LOCAL0` bit 1.
-- The CPU half is the larger one: `irqRequest` on `r4300_wrap`, and CP0
-  `Status.IM`/`Cause.IP` behaviour that the cpu-tests `excep` group can check.
-- The 8254 and the keyboard controller both generate interrupts already and
-  route nowhere, so they come along for free.
-
-Expect the SCSI scan to go quiet and `tests/run-prom.sh` to get its four
-minutes back.
+Two things generalise from it. **Read the driver, not just the device**: three
+routines of PROM disassembly settled in minutes what a boot log had made look
+like an interrupt-timing problem. And **the `--irq` flag exists now**; one line
+of its output (`L0 02/00` — source asserted, mask zero) is what retired the
+wrong theory.
 
 ### 3. Everything after that
 
-1. **The HPC3 SCSI DMA engine.** The data phase is PIO today. This is what
-   `boot` and IRIX need, and it is the bulk of the remaining SCSI work.
-   `sgi_hpc3.sv` has the descriptor, byte-count, CBP and NBDP registers and
-   nothing behind them. MAME's own `indy_indigo2.cpp` header carries the note
-   "Fix SCSI DMA to handle chains properly", so chaining is fiddly even there.
+1. **The HPC3 SCSI DMA engine. This is the next thing, and it is now the only
+   thing between here and a disk the PROM can see.** As of this session a disk
+   mounts and answers selection, and the trace says exactly what is missing:
+
+   ```
+   [7511634] WR 1fb91010 HPC3-SCSI-DMA  data 00034801   DMA config
+   [7555154] WR 1fb90004 HPC3-SCSI-DMA  data 08747d20   descriptor address in RAM
+   [7555195] WR 1fb91004 HPC3-SCSI-DMA  data 00000010   control: go
+   [7556623] WR 1fbc0000 WD33C93-SCSI   data 08         Select-and-Transfer
+   [7559440] RD 1fbc0000 WD33C93-SCSI   data 31         ASR = BSY|CIP|DBR
+   ...
+   sc0,1,0: cmd=0x12 timeout after 2 sec.  Resetting SCSI bus
+   ```
+
+   `ASR = 0x31` is the whole story: the chip has selected the target, walked
+   into DATA IN, taken the first INQUIRY byte and raised DBR — and nobody
+   drains it. The driver will not, because it asked for DMA: it writes
+   `Control = 0x8D`, and `Control[7:5]` is the DMA mode select (IRIS's
+   `Wd33c93a::use_dma` is `mode != 0`). Three registers accept the setup and
+   nothing is behind them.
+
+   IRIS's `PdmaChannel` in `src/hpc3.rs` is the model to follow — descriptor
+   fetch (CBP / BC / NBDP with the EOX and XIE flags), byte-at-a-time into
+   system memory, `HPC3_INTSTAT_SCSI0_DMA` on completion. MAME's own
+   `indy_indigo2.cpp` header carries the note "Fix SCSI DMA to handle chains
+   properly", so chaining is fiddly even there.
+
+   The RTL side needs `sgi_hpc3.sv` to become a **bus master**, which nothing
+   in this core is yet, and `wd33c93.sv`'s SAT data phase to hand bytes to it
+   instead of parking on DBR.
 2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
@@ -456,6 +450,22 @@ Do not rediscover these:
   correctly, out of a freshly filled line, at 3.5x the bus traffic of no cache
   at all. Nothing failed; it was only visible as a transaction count. Measure
   hit rates by counting bus cycles, not by watching tests pass.
+- **`--type-on` triggers fire in order, so one that stops being printed blocks
+  every keystroke behind it.** POST passing removed `[Press any key to
+  continue.]`, and the run then sat at the menu forever with a `5` queued
+  behind a trigger that would never match. It looks exactly like a hang.
+- **A handler that clears a level-sensitive interrupt can be re-entered.** The
+  clearing store sits in the CPU's write FIFO and `eret` does not wait for it
+  to drain, so the line is still up when the pipeline restarts. Read the device
+  back before returning. `tests/int/inttest.c` found this, and the symptom was
+  not a hang: it was a second entry whose `Cause` had already lost the bit that
+  caused the first.
+- **The PROM does not use interrupts during POST.** It masks `LOCAL0` off
+  entirely and polls the WD33C93's AUX STATUS bit 7. A boot to the Command
+  Monitor therefore proves nothing whatever about INT2, and reasoning about
+  device timing from the console will mislead you - it already did once, and
+  the wrong conclusion was written into this file. `--irq` and
+  `tests/run-int.sh` are the tools that answer interrupt questions.
 - **Three clocks run fast in simulation** and are parameterised so hardware
   keeps the real value: `sclk`, `RTC_TICK_DIV` and `PIT_TICK_DIV`. See
   `docs/12-chipset.md` — `calibrate_delay` restarts forever if the 8254 is made

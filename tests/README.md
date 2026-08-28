@@ -1,10 +1,11 @@
 # Tests
 
-Four regressions, all headless.
+Five regressions, all headless.
 
 ```sh
 tests/uart/run.sh         # the harness's serial decoder, no simulator       ~1 s
 tests/run-scc.sh          # the Z8530, driven the way the PROM drives it     ~4 s
+tests/run-int.sh          # INT2 to an Interrupt exception, end to end       ~6 s
 tests/run-cputest.sh      # the 240-test MIPS III/IV suite, on the core     ~35 s
 tests/run-prom.sh         # boot the real IP24 PROM to the Command Monitor
 ```
@@ -56,6 +57,32 @@ grab toggle and its data.
 low run on the line is exactly one bit and the auto-baud cannot come out half
 speed.
 
+## `run-int.sh` — the interrupt path
+
+This one exists because **the PROM cannot test it**. The PROM leaves `L0_MASK`
+at zero and polls the WD33C93's AUX STATUS register instead (`FUN_bfc1c380`
+reads the address port and tests bit 7), so a boot all the way to the Command
+Monitor exercises not one line of INT2 or of the CPU's `Cause.IP` handling.
+IRIX is the software that needs interrupts and IRIX does not boot yet, so
+without this image the interrupt controller would be code nothing had ever run.
+
+`int/inttest.c` arms 8254 counter 0 — the only interrupt source on this machine
+that software can raise by itself — and follows it into the CPU twice:
+
+- straight through to `Cause.IP4`, the unmasked path;
+- through `MAP_MASK0` and the `LOCAL0` summary bit to `Cause.IP2`, which is the
+  path almost every real source on this machine takes.
+
+It checks the two negatives as carefully as the positives — masked at the CPU
+with `Status.IM` clear, and masked at INT2 with `L0_MASK` clear — because a
+core that took a spurious interrupt every microsecond would pass a test that
+only looked for one arriving.
+
+One finding from writing it is worth knowing before you write a handler for
+this core: **clearing a level-sensitive source and returning can re-enter the
+handler**, because the clearing store sits in the CPU's write FIFO and `eret`
+does not wait for it to drain. Read the device back before returning.
+
 ## `run-prom.sh` — the chipset
 
 A **progress ratchet**, not a pass/fail test of the machine. The PROM is
@@ -74,9 +101,11 @@ MEMCFG, or when the CPU stops being able to form a physical address above
 Add a line to `EXPECT` when the PROM starts printing something new. Do not
 remove one to make the script pass.
 
-The run also **types a key** at `[Press any key to continue.]`, through a real
-UART on the SCC's receive pin — so it covers the receive path, not just
-transmit.
+The run also **types at the console**, through a real UART on the SCC's receive
+pin — so it covers the receive path, not just transmit. The triggers fire in
+order, which is a trap worth knowing: a trigger string that stops being printed
+blocks every keystroke behind it. That is what `[Press any key to continue.]`
+did the moment POST started passing.
 
 ## `uart/run.sh` — the harness itself
 
