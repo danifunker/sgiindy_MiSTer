@@ -155,8 +155,9 @@ fixture.
 
 `sc0,1,0: SYNC negotiation error` is expected too, and is deliberately not
 asserted either way: the PROM tries to negotiate synchronous transfer and the
-target model has no MESSAGE OUT phase to receive the message in. It is why
-`hinv` does not list the disk. See `docs/13-scsi-dma-plan.md`.
+target model has no MESSAGE OUT phase to receive the message in. `hinv` lists
+no disk either, but the two are not known to be connected — this PROM's `hinv`
+lists no SCSI controller at all. See `docs/13-scsi-dma-plan.md`.
 
 ## `uart/run.sh` — the harness itself
 

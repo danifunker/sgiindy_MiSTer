@@ -235,13 +235,14 @@ effect, and says why.
    one part of the engine with no evidence behind it.
 
 **Definition of done, restated honestly.** The plan said "`hinv` lists the
-disk". It does not, and the reason is not in this subsystem — see below. What
-is held instead: `tests/run-scsi.sh` requires the PROM to identify the disk and
-read its volume header, and `tests/run-dma.sh` requires 31 properties of the
-channel. The boot without a disk is unchanged (`tests/run-prom.sh` still
+disk". It does not, and — see the next section — that turns out to have been a
+badly chosen target, because it is not known that this PROM's `hinv` reports
+SCSI at all. What is held instead is something the machine demonstrably does:
+`tests/run-scsi.sh` requires the PROM to identify the disk and read its volume
+header, and `tests/run-dma.sh` requires 31 properties of the channel. The boot without a disk is unchanged (`tests/run-prom.sh` still
 passes), as are `run-int.sh`, `run-scc.sh` and the 240-test CPU suite.
 
-## What is between here and `hinv`
+## What is next, and what is not known about it
 
 **Synchronous transfer negotiation, and it is a target-model problem, not a DMA
 one.** The boot now prints:
@@ -251,7 +252,28 @@ dks0d1s0: volume header not valid          <- correct: blank8m.img is zeroes
 sc0,1,0: SYNC negotiation error, resetting SCSI bus
 ```
 
-and `hinv` lists no disk. The diagnosis is complete and is in the PROM's own
+**First, the thing that is NOT established, because it would be easy to read
+the rest of this section as if it were.** `hinv` lists no disk — and it lists
+no SCSI *controller* either, and `hinv -v` adds nothing. Two readings fit that
+equally well and they lead to different work:
+
+* the inventory is built during the bus scan and the failed negotiation keeps
+  the disk out of it; or
+* this PROM's `hinv` does not report SCSI at all, in which case the negotiation
+  and the empty `hinv` are unrelated and the plan's definition of done was
+  aimed at a string that was never going to appear.
+
+Nothing here distinguishes them. One paste of a real IP24's `hinv` with a disk
+attached does, and `docs/08-resume-prompt.md` asks for exactly that. The
+strings the PROM carries are `"SCSI Disk"`, `"%*s: scsi(%u)disk(%u)\n"` and
+`"%*s: Controller %u, ID %u, removable media\n"`, all reached from
+`FUN_bfc4119c`; `hinv`'s walker is at `0xBFC41728`. Reading that walker far
+enough to see what list it iterates would also settle it, without hardware.
+
+Fix the negotiation because it is a real gap that resets the bus on every boot,
+not because it is known to be the thing standing between here and `hinv`.
+
+The negotiation diagnosis itself *is* complete, and is in the PROM's own
 disassembly, so the next session should not have to redo it:
 
 * `0xBFC1CA6C` calls `FUN_bfc1f320(dev, 5000)` — wait for an interrupt, with a

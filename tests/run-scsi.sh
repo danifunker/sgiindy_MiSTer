@@ -28,8 +28,11 @@
 # The PROM tries to negotiate synchronous transfer with a SELECT-with-ATN and
 # an SDTR message, and the target model has no MESSAGE OUT phase to receive it
 # in - scsi.v's PHASE_MESSAGE_OUT is MESSAGE IN in SCSI's naming and only ever
-# sends COMMAND COMPLETE. The boot survives it and the disk still reads, but
-# `hinv` does not list the disk. See docs/13-scsi-dma-plan.md.
+# sends COMMAND COMPLETE. The boot survives it and the disk still reads.
+#
+# `hinv` also lists no disk, and it is NOT established that the two are
+# connected: this PROM's hinv lists no SCSI controller either, and -v adds
+# nothing. See docs/13-scsi-dma-plan.md.
 #
 #   tests/run-scsi.sh [--no-build]
 

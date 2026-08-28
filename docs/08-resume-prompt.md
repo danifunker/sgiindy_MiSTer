@@ -55,6 +55,11 @@ that moves the boot backwards fails a test rather than surprising you later.
 diagnostics, and take over twenty-five minutes; `docs/12-chipset.md` has that
 whole story and the correction to it.
 
+That boot has **no disk on it**, deliberately - it is the machine's own ratchet
+and must not depend on a block device. Add one with `--disk 1=PATH` and the
+PROM finds it, names it `dks0d1s0` and reads its volume header off the image.
+`tests/run-scsi.sh` is that boot.
+
 **"16 Mhz" is a real measurement of this core, and it is not a clock rate.**
 `FUN_bfc31594` derives it from CP0 `Count` across a fixed 512-iteration loop,
 so what it reports is how many clocks that loop actually took. `Count` itself
@@ -85,12 +90,22 @@ names the disk `dks0d1s0` and reads its volume header through a descriptor
 chain in main memory. `tests/run-scsi.sh` holds that, and `tests/run-dma.sh`
 holds thirty-one properties of the channel that a boot cannot reach.
 
-What it does **not** do yet is get the disk into `hinv`, and the reason is not
-in the DMA engine. The PROM negotiates synchronous transfer with a
-SELECT-with-ATN and an SDTR message; `scsi.v` has no MESSAGE OUT phase and
-ignores `atn`, so the negotiation times out and the driver resets the bus. The
-diagnosis is complete, down to the two instructions in the PROM that are
-waiting for status `0x8E`, in `docs/13-scsi-dma-plan.md`.
+What it does **not** do is get the disk into `hinv`, which is what the plan for
+this work called done. One thing about that is established and one is not.
+
+Established: **the PROM's synchronous-transfer negotiation fails.** It issues
+SELECT-with-ATN and waits for an interrupt saying the target has asked for
+MESSAGE OUT; `scsi.v` ignores `atn` and has no such phase, so the wait times
+out and the driver resets the bus and prints `SYNC negotiation error`. That is
+a real gap and `docs/13-scsi-dma-plan.md` has it down to the instructions.
+
+**Not** established: that the negotiation is why `hinv` is empty. `hinv` here
+lists no SCSI at all - not the controller either - and `hinv -v` adds nothing,
+which is equally consistent with this PROM's `hinv` simply not reporting SCSI.
+The negotiation is worth fixing either way; what must not happen is a session
+spent on the target model *expecting* a disk to appear in `hinv` at the end of
+it. See "Things to ask the user for", which asks for the one thing that
+settles it.
 
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
@@ -123,8 +138,9 @@ What is *not* done, and is worth knowing before you plan anything:
   is tested, but no byte has ever gone out through it. Nothing in a boot writes
   to a disk and the bare-metal image has no device to write to.
 - **The SCSI bus has no message phases.** No MESSAGE OUT at all, and MESSAGE IN
-  only ever carries COMMAND COMPLETE. That is what stops `hinv` listing a disk;
-  see above.
+  only ever carries COMMAND COMPLETE, so the PROM's sync negotiation fails and
+  the driver resets the bus over it. Whether that is also what keeps the disk
+  out of `hinv` is a guess, not a finding - see above.
 - **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
   template and no resource numbers exist.
 
@@ -134,15 +150,20 @@ What is *not* done, and is worth knowing before you plan anything:
 
 1. **`docs/12-chipset.md`** — the chipset as built, and the order in which each
    device blocked the next. Read this before touching `rtl/sgi/`.
-2. **`docs/02-address-map.md`** — the register map, now corrected against the
+2. **`docs/13-scsi-dma-plan.md`** — the SCSI DMA engine as built, and the one
+   bus phase this core has never had. Read it before touching
+   `rtl/scsi/` or `rtl/sgi/hpc3_scsi_dma.sv`, and read it in full if SCSI is
+   what you are here for: it is the only place the descriptor format, the
+   arbiter's rules and the failed sync negotiation are written down.
+3. **`docs/02-address-map.md`** — the register map, now corrected against the
    SGI chip specifications rather than the PROM's inventory.
-3. **`docs/10-r4300-integration.md`** — the CPU as built. The byte-lane
+4. **`docs/10-r4300-integration.md`** — the CPU as built. The byte-lane
    contract, the R4400 presentation, the bugs fixed in the vendored core.
-4. `docs/09-cpu-validation.md` — the test suite and the oracle policy. This is
+5. `docs/09-cpu-validation.md` — the test suite and the oracle policy. This is
    the document that determines *how you work*.
-5. `docs/06-simulation.md` — both harnesses, headless and interactive.
-6. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
-7. `docs/07-mister-port-plan.md` — the milestones.
+6. `docs/06-simulation.md` — both harnesses, headless and interactive.
+7. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
+8. `docs/07-mister-port-plan.md` — the milestones.
 
 ## Build and run
 
@@ -263,7 +284,7 @@ any hardware-confirmed result under `tests/hardware/`.
 
 ## Where to pick up
 
-### The two things that are done, so you do not redo them
+### The three things that are done, so you do not redo them
 
 **The caches are on.** Both primary caches, filled over the ordinary SGI bus,
 and the two cache tests that used to fail now pass. The suite went from 2155/9
@@ -285,6 +306,20 @@ restarting forever if the timer is made too fast.
 **Interrupts are wired.** INT2 drives `Cause.IP[6:2]`; the vendored CPU takes a
 five-bit `irq_lines` in place of upstream's two N64 lines. `tests/run-int.sh`
 proves the path. Nothing about this is speculative any more.
+
+**The HPC3 SCSI DMA engine is built, and the core has an arbiter.**
+`rtl/sgi/hpc3_scsi_dma.sv` is channel 8 — descriptor fetch, byte-at-a-time
+transfer, chaining, XIE, FLUSH — and `sgi_indy.sv` carries the two-master
+arbiter that lets it reach main memory. `wd33c93.sv` hands DATA IN and DATA OUT
+bytes to it when `Control[7:5]` is non-zero; the polled DBR path is untouched
+and still what the chip's own diagnostics use. `tests/run-dma.sh` is 31 checks
+on the channel with no SCSI in the image at all.
+
+Do not rebuild any of that, and in particular **do not add a general bus
+crossbar**. The arbiter covers one port on purpose; the Ethernet channels will
+want the same port and the same arbiter will serve. `docs/13-scsi-dma-plan.md`
+has the register map, the three-word descriptor, and the four things the plan
+for it got wrong.
 
 ### A warning about what this file used to say
 
@@ -311,10 +346,12 @@ wrong theory.
 
 ### 3. Everything after that
 
-1. **SCSI message phases, and with them the disk in `hinv`.** The DMA engine
-   is built and the PROM reads blocks through it, so what is left between here
-   and a disk the machine will admit to having is one bus phase this core has
-   never had. The PROM negotiates synchronous transfer:
+1. **SCSI message phases.** The DMA engine is built and the PROM reads blocks
+   through it; the next visible failure on a boot with a disk is one bus phase
+   this core has never had. Note the caveat above and in "Things to ask the
+   user for": fixing this is worth doing on its own terms, but do **not** count
+   on it putting the disk into `hinv`. The PROM negotiates synchronous
+   transfer:
 
    ```
    dks0d1s0: volume header not valid          <- correct, the image is zeroes
@@ -352,7 +389,7 @@ wrong theory.
 
 ### Things to ask the user for
 
-Two things, batched.
+Three things, batched.
 
 **A serial capture of a real Indy booting `070-9101-011`.** `roms/` has a
 capture for the IP22 but not the IP24, so the console output above has never
@@ -368,6 +405,19 @@ correctness argument has never been checked against the part it claims to be.
 `identity/config_k0_writable` is worth watching too - it writes `Config.K0 = 2`
 with dirty lines live, which is a coherence hazard on real hardware and passes
 here.
+
+**And what `hinv` actually prints on a real IP24 with a disk attached.** The
+SCSI work is now aimed at a target nobody here has seen: this PROM's `hinv`
+lists no SCSI at all - not the disk, and not the controller either - and `-v`
+adds nothing. Two readings fit that and they lead different places. Either the
+inventory is built during the bus scan and the failed sync negotiation is
+keeping the disk out of it, or this PROM's `hinv` simply does not report SCSI
+and the whole "definition of done" in `docs/13` is aimed at the wrong string.
+One paste of a real machine's `hinv` output settles it before any more work
+goes into the target model. The strings the PROM carries for it are
+`"SCSI Disk"`, `"%*s: scsi(%u)disk(%u)\n"` and
+`"%*s: Controller %u, ID %u, removable media\n"`, all reached from
+`FUN_bfc4119c`.
 
 ## Ground rules
 
