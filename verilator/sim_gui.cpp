@@ -38,6 +38,7 @@
 #include "Vsim_top.h"
 #include "verilated.h"
 #include "sim_devices.h"
+#include "sim_scsi.h"
 #include "sim_uart.h"
 #include "sim_ps2.h"
 
@@ -141,6 +142,7 @@ static void usage()
         "  --boot-pc HEX     override the reset PC (default 0xBFC00000)\n"
         "  --testdev         fit the IRIS test device in GIO64 slot 0\n"
         "  --ram-mb N        main memory size (default 64)\n"
+        "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1)\n"
         "  --run             start running immediately\n");
 }
 
@@ -195,6 +197,7 @@ int main(int argc, char **argv)
     std::string prom_path, elf_path;
     uint32_t boot_pc = 0xBFC00000, ram_mb = 64;
     bool testdev = false, start_running = false;
+    std::vector<std::pair<int, std::string>> disks;
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -208,6 +211,16 @@ int main(int argc, char **argv)
         else if (a == "--testdev") testdev   = true;
         else if (a == "--run")     start_running = true;
         else if (a == "--ram-mb")  ram_mb    = strtoul(next("--ram-mb"), nullptr, 0);
+        else if (a == "--disk") {
+            // --disk ID=PATH, or --disk PATH for ID 1. ID 0 is the host
+            // adapter's own ID on SGI, so a disk never lives there.
+            std::string spec = next("--disk");
+            size_t eq = spec.find('=');
+            int id = 1;
+            if (eq != std::string::npos) { id = atoi(spec.substr(0, eq).c_str()); spec = spec.substr(eq + 1); }
+            if (id < 0 || id > 6) { fprintf(stderr, "--disk: target %d is out of range\n", id); return 2; }
+            disks.push_back({id, spec});
+        }
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (a.rfind("+", 0) == 0 || a.rfind("-V", 0) == 0) { }
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return 2; }
@@ -216,6 +229,15 @@ int main(int argc, char **argv)
     g_dev.ram.resize((size_t)ram_mb * 1024 * 1024);
     g_dev.prom.resize(512 * 1024);
     g_dev.testdev.present = testdev;
+
+    for (auto &d : disks) {
+        if (!g_dev.scsi[d.first].load(d.second)) {
+            fprintf(stderr, "cannot open disk %s\n", d.second.c_str());
+            return 2;
+        }
+        printf("SCSI %d: %s (%zu blocks)\n", d.first, d.second.c_str(),
+               g_dev.scsi[d.first].blocks());
+    }
 
     std::string load_msg;
     if (!prom_path.empty()) {
@@ -326,10 +348,13 @@ int main(int argc, char **argv)
     // Re-tile on the first frame, and whenever the user asks for it.
     bool relayout = true;
 
+    ScsiBlockDev scsi_dev;
+
     auto step_cycle = [&]() {
         if (cycle == 8) top->reset = 0;
 
         top->clk = 1; top->eval();
+        scsi_dev.step(top);
         if ((cycle & (SCLK_DIV - 1)) == 0) top->sclk = !top->sclk;
 
         urx.sample(cycle, top->txdb);
@@ -416,6 +441,7 @@ int main(int argc, char **argv)
             urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;
             for (int b = 0; b < 6; b++) err_count[b] = 0;
             g_dev.testdev.out.clear(); g_dev.testdev.exited = false;
+            scsi_dev.reset();
             do_reset = false;
         }
         if (step_once) { step_cycle(); step_once = false; }

@@ -19,6 +19,20 @@ public:
     // block needs, with room to spare so the ack outlives the last write.
     static constexpr int XFER_CYCLES = 300;
 
+    // Cycles each slot's mount flag is held while its size is on the bus. Only
+    // has to outlast one clock edge in the target; a few is cheap insurance
+    // against the harness and the RTL disagreeing about which edge counts.
+    static constexpr int MOUNT_HOLD = 8;
+
+private:
+    uint8_t mount_set  = 0;     // which slots the walk below is announcing
+    int     mount_step = 0;     // position in the walk; >= 7*MOUNT_HOLD is done
+
+public:
+    // Restart the mount walk. The GUI rebuilds the whole design on reset, so
+    // the targets forget they were mounted and have to be told again.
+    void reset() { mount_set = 0; mount_step = 0; }
+
     template <typename TOP>
     void step(TOP *top)
     {
@@ -31,13 +45,47 @@ public:
         // Cleared every cycle; only a live block transfer raises it.
         top->scsi_sd_buff_wr = 0;
 
-        // hps_io presents one mounted flag and one size per slot; the targets
-        // latch them. Held rather than pulsed, which is what scsi.v's
-        // `mounted` latch expects to see.
-        uint8_t mounted = 0;
-        for (int i = 0; i < 7; i++) if (g_dev.scsi[i].mounted) mounted |= (1u << i);
-        top->scsi_img_mounted = mounted;
-        top->scsi_img_blocks  = (uint32_t)(g_dev.scsi[0].blocks());
+        // Mount the images, ONE SLOT AT A TIME.
+        //
+        // `img_blocks` is a single 32-bit bus shared by all seven targets
+        // (sgi_scsi.sv wires the same wire to every one), exactly as hps_io
+        // does on hardware: a mount is an *event*, and the size on the bus
+        // belongs to whichever slot's flag is up at that moment. Each target
+        // latches it in scsi.v:
+        //
+        //     if (img_mounted) begin
+        //         if (|img_blocks) begin ... mounted <= 1; end
+        //         else                       mounted <= 0;
+        //
+        // so a slot whose flag is high while the bus carries somebody else's
+        // size latches that size - and a slot that sees zero unmounts itself.
+        // This used to raise every flag at once against slot 0's size, which
+        // meant `--disk 1=...` presented a mounted flag with `img_blocks` = 0
+        // and the target quietly took it as "no medium". It never answered a
+        // selection, and the only symptom was the PROM's bus scan finding
+        // nothing - identical to having attached no disk at all.
+        //
+        // So walk the slots: hold one flag with its own size for a window,
+        // drop it, move on. The walk restarts if the set of mounted images
+        // ever changes, which is what an OSD mount looks like from here.
+        {
+            uint8_t want = 0;
+            for (int i = 0; i < 7; i++) if (g_dev.scsi[i].mounted) want |= (1u << i);
+            if (want != mount_set) { mount_set = want; mount_step = 0; }
+
+            uint8_t flag  = 0;
+            uint32_t size = 0;
+            int slot = mount_step / MOUNT_HOLD;
+            if (slot < 7) {
+                if (mount_set & (1u << slot)) {
+                    flag = (uint8_t)(1u << slot);
+                    size = (uint32_t)g_dev.scsi[slot].blocks();
+                }
+                mount_step++;
+            }
+            top->scsi_img_mounted = flag;
+            top->scsi_img_blocks  = size;
+        }
 
         for (int i = 0; i < 7; i++) {
             ScsiDisk &d = g_dev.scsi[i];
