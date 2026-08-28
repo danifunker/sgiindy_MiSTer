@@ -183,30 +183,40 @@ module sgi_ioc #(
         .out   (pit_out)
     );
 
+    // AN IF/ELSE CHAIN, NOT A CASE. Called as ioc_rd(1'b0)/ioc_rd(1'b1),
+    // so Quartus 17.0 constant-evaluates the body and crashes on a case
+    // whose expression and items differ in width - here a 6-bit idx
+    // against `localparam int` labels. See the longer note on hpc3_rd in
+    // sgi_hpc3.sv; this is the same bug and the same fix.
     function automatic logic [7:0] ioc_rd(input logic w);
         logic [5:0] idx;
         idx = {addr[7:3], w};
-        case (idx)
-            // The PC-style keyboard/mouse controller. Nothing is fitted, and
-            // the pair has to read 0 rather than read back what was written:
-            // +0x44 is the command port on a write but the STATUS port on a
-            // read, and the PROM's self-test writes 0xAA there and then polls
-            // it. A loopback answers 0xAA, whose bit 1 says "input buffer
-            // full", and the PROM waits for the controller to drain forever.
-            // Zero is "idle, nothing to read", so the self-test times out and
-            // the diagnostic reports the controller missing - which it is.
-            I_KBD_DATA,
-            I_KBD_CMD:  ioc_rd = 8'h00;
-            I_SYS_ID:   ioc_rd = SYS_ID_VALUE;
-            I_L0_STAT:  ioc_rd = l0_stat;
-            I_L1_STAT:  ioc_rd = l1_stat;
-            I_MAP_STAT: ioc_rd = map_stat;
-            I_ERR_STAT: ioc_rd = err_stat;
-            // Write-only. The PROM does not read it back, but a loopback here
-            // would report interrupts that are not pending.
-            I_TMR_CLR:  ioc_rd = 8'h00;
-            default:    ioc_rd = (idx >= I_PIT_BASE) ? pit_dout : reg8[idx];
-        endcase
+        // The PC-style keyboard/mouse controller. Nothing is fitted, and
+        // the pair has to read 0 rather than read back what was written:
+        // +0x44 is the command port on a write but the STATUS port on a
+        // read, and the PROM's self-test writes 0xAA there and then polls
+        // it. A loopback answers 0xAA, whose bit 1 says "input buffer
+        // full", and the PROM waits for the controller to drain forever.
+        // Zero is "idle, nothing to read", so the self-test times out and
+        // the diagnostic reports the controller missing - which it is.
+        if (idx == I_KBD_DATA || idx == I_KBD_CMD)
+            ioc_rd = 8'h00;
+        else if (idx == I_SYS_ID)
+            ioc_rd = SYS_ID_VALUE;
+        else if (idx == I_L0_STAT)
+            ioc_rd = l0_stat;
+        else if (idx == I_L1_STAT)
+            ioc_rd = l1_stat;
+        else if (idx == I_MAP_STAT)
+            ioc_rd = map_stat;
+        else if (idx == I_ERR_STAT)
+            ioc_rd = err_stat;
+        // Write-only. The PROM does not read it back, but a loopback here
+        // would report interrupts that are not pending.
+        else if (idx == I_TMR_CLR)
+            ioc_rd = 8'h00;
+        else
+            ioc_rd = (idx >= I_PIT_BASE) ? pit_dout : reg8[idx];
     endfunction
 
     wire [1:0] wr_en = {sel && we && (|be[3:0]), sel && we && (|be[7:4])};

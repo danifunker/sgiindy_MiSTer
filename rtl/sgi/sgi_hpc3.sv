@@ -209,51 +209,78 @@ module sgi_hpc3 (
     // not set XIE, so this whole path can be wrong without the boot noticing.
     wire [9:0] intstat = {1'b0, scsi_dma_irq, 8'h00};
 
+    // AN IF/ELSE CHAIN, NOT A CASE, and it has to stay one.
+    //
+    // This function is reached with a constant argument - hpc3_rd(1'b0)
+    // and hpc3_rd(1'b1) - so Quartus 17.0 tries to CONSTANT-EVALUATE the
+    // body rather than elaborate it. Its evaluator then meets
+    // `case (blk)`, where blk is a non-constant 3-bit enum while the case
+    // items evaluate at integer width, and asserts on the mismatch:
+    //
+    //    Internal Error: Sub-system: VRFX, File: verivalue_elab.cpp,
+    //                    Line: 1789
+    //    case_expr && case_expr->Size() == Size()
+    //
+    // That is a tool crash, not an error message: no line number, no file,
+    // and a stack trace naming only Verific internals. The width mismatch
+    // is what does it - the same case over a plain `enum` compiles - and
+    // comparisons are evaluated by a different path, so the chain below is
+    // the fix. It is exactly equivalent: the labels are distinct constants
+    // and `default` is the final else.
+    //
+    // ioc_rd in sgi_ioc.sv is the same shape for the same reason. Anything
+    // that cases a sized expression against differently sized items, in a
+    // function called with constants, will crash Quartus the same way.
     function automatic logic [31:0] hpc3_rd(input logic w);
-        case (blk)
-            BLK_DESC:   hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
-                                            : dma_desc[{sub, w}];
-            BLK_CTRL:   hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
-                                            : dma_ctrl[{sub, ctrl_reg(w)}];
-            // 0x1FBB0000 and 0x1FBB000C are the two halves of intstat and are
-            // generated, not stored; 0x1FBB0004 and 0x1FBB0008 are storage.
-            BLK_GEN:    hpc3_rd = ({addr[4:3], w} == 3'd0) ? {27'h0, intstat[4:0]}
-                                : ({addr[4:3], w} == 3'd3) ? {22'h0, intstat[9:5], 5'h0}
-                                :                            gen[{addr[4:3], w}];
-            BLK_CFGDMA: hpc3_rd = cfgdma[addr[11:9]];
-            BLK_CFGPIO: hpc3_rd = cfgpio[addr[11:8]];
-            // HAL2 ANSWERS ITS REVISION REGISTER AND NOTHING ELSE, and that
-            // is enough to be listed. There is no audio path behind this and
-            // there is not meant to be yet: `hinv` prints the audio line out
-            // of HAL2_REV, not out of anything that makes a sound.
-            //
-            //   0x4010, the value IRIS returns (src/hal2.rs). The PROM's node
-            //   printer at 0xBFC41664 splits it as
-            //     (v >> 12) & 7  .  (v >> 4) & 0xF  .  v & 0xF
-            //   so 0x4010 is revision 4.1.0, and the "A2" beside it is a
-            //   hardcoded string at 0xBFC54B58 rather than anything this chip
-            //   reports. That is the whole of
-            //     Audio: Iris Audio Processor: version A2 revision 4.1.0
-            //
-            // BIT 15 IS THE SWITCH. Set, it means "no audio present", and both
-            // the PROM and the IRIX driver skip the audio path entirely -
-            // which is what this returned before, deliberately, as IRIS's
-            // hal2_absent_read does. Clearing it commits to answering the
-            // init sequence at 0xBFC00BD0, which writes IAR/IDR and then spins
-            // on ISR bit 0 three times. Every register other than REV reads 0,
-            // so busy is always clear and each spin exits on its first pass;
-            // the init does not read indirect data back, so discarding the
-            // writes costs nothing. **If that ever stops being true this hangs
-            // the boot rather than skipping audio**, which is the risk bit 15
-            // was buying off.
-            //
-            // The byte offset of the addressed register is addr with bit 2
-            // replaced by w, so its 0x10-granular index is addr[7:4] whichever
-            // half is being read.
-            BLK_HAL2:   hpc3_rd = (addr[7:4] == 4'h2) ? 32'h0000_4010
-                                                      : 32'h0000_0000;
-            default:    hpc3_rd = 32'h0000_0000;
-        endcase
+        if (blk == BLK_DESC)
+            hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
+                                : dma_desc[{sub, w}];
+        else if (blk == BLK_CTRL)
+            hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
+                                : dma_ctrl[{sub, ctrl_reg(w)}];
+        // 0x1FBB0000 and 0x1FBB000C are the two halves of intstat and are
+        // generated, not stored; 0x1FBB0004 and 0x1FBB0008 are storage.
+        else if (blk == BLK_GEN)
+            hpc3_rd = ({addr[4:3], w} == 3'd0) ? {27'h0, intstat[4:0]}
+                    : ({addr[4:3], w} == 3'd3) ? {22'h0, intstat[9:5], 5'h0}
+                    :                            gen[{addr[4:3], w}];
+        else if (blk == BLK_CFGDMA)
+            hpc3_rd = cfgdma[addr[11:9]];
+        else if (blk == BLK_CFGPIO)
+            hpc3_rd = cfgpio[addr[11:8]];
+        // HAL2 ANSWERS ITS REVISION REGISTER AND NOTHING ELSE, and that
+        // is enough to be listed. There is no audio path behind this and
+        // there is not meant to be yet: `hinv` prints the audio line out
+        // of HAL2_REV, not out of anything that makes a sound.
+        //
+        //   0x4010, the value IRIS returns (src/hal2.rs). The PROM's node
+        //   printer at 0xBFC41664 splits it as
+        //     (v >> 12) & 7  .  (v >> 4) & 0xF  .  v & 0xF
+        //   so 0x4010 is revision 4.1.0, and the "A2" beside it is a
+        //   hardcoded string at 0xBFC54B58 rather than anything this chip
+        //   reports. That is the whole of
+        //     Audio: Iris Audio Processor: version A2 revision 4.1.0
+        //
+        // BIT 15 IS THE SWITCH. Set, it means "no audio present", and both
+        // the PROM and the IRIX driver skip the audio path entirely -
+        // which is what this returned before, deliberately, as IRIS's
+        // hal2_absent_read does. Clearing it commits to answering the
+        // init sequence at 0xBFC00BD0, which writes IAR/IDR and then spins
+        // on ISR bit 0 three times. Every register other than REV reads 0,
+        // so busy is always clear and each spin exits on its first pass;
+        // the init does not read indirect data back, so discarding the
+        // writes costs nothing. **If that ever stops being true this hangs
+        // the boot rather than skipping audio**, which is the risk bit 15
+        // was buying off.
+        //
+        // The byte offset of the addressed register is addr with bit 2
+        // replaced by w, so its 0x10-granular index is addr[7:4] whichever
+        // half is being read.
+        else if (blk == BLK_HAL2)
+            hpc3_rd = (addr[7:4] == 4'h2) ? 32'h0000_4010
+                                          : 32'h0000_0000;
+        else
+            hpc3_rd = 32'h0000_0000;
     endfunction
 
     // ---- write data ------------------------------------------------------

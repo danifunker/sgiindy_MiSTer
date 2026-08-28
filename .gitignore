@@ -32,6 +32,8 @@ imgui.ini
 *.jdi
 *.pin
 *.done
+# Quartus writes this when it crashes with an internal error.
+cr_ie_info.json
 *.log
 *.fst
 *.vcd
