@@ -334,6 +334,28 @@ end
 reg [7:0] cd_ap_ch0, cd_ap_vol0, cd_ap_ch1, cd_ap_vol1,
           cd_ap_ch2, cd_ap_vol2, cd_ap_ch3, cd_ap_vol3;
 reg [7:0]  msel_bdlen;
+
+// ===== SGI LOCAL CHANGE: the CD-ROM logical block size is not always 2048 ===
+// Upstream hardwires a CDROM target to 2048-byte logical blocks. IRIX does not
+// accept that: an SGI install CD is a 512-byte volume-header disc, and dksc
+// switches the drive to 512 for EFS and back to 2048 for ISO 9660 with a MODE
+// SELECT block descriptor. IRIS models the same switch (src/scsi.rs).
+//
+// Upstream reads the block descriptor's LENGTH (msel_bdlen) and then throws
+// the descriptor's contents away, so that MODE SELECT was accepted and
+// ignored: the drive stayed at 2048, every READ LBA was multiplied by four,
+// and `sashARCS` at 512-block 52875 was fetched from byte 108288000 instead of
+// 27072000. The failure is silent - a successful read of the wrong data.
+//
+// cd_blklen is the current logical block size and cd_lba_shift is how many
+// places to shift a logical LBA to reach the 512-byte host block it starts at.
+// Only the three sizes a real drive is asked for are honoured; anything else
+// keeps the previous setting rather than inventing a shift for it.
+reg [23:0] cd_blklen = 24'd2048;
+wire [1:0] cd_lba_shift = (cd_blklen == 24'd512)  ? 2'd0 :
+                          (cd_blklen == 24'd1024) ? 2'd1 : 2'd2;
+// ===========================================================================
+
 reg [7:0]  msel_page;
 wire [7:0]  msel_din  = store_low ? odd_byte_r : din;
 wire [31:0] msel_pgoff = data_cnt - {24'd0, msel_bdlen} - 32'd4;
@@ -350,6 +372,14 @@ always @(posedge clk) begin
 	end else if ((CDROM != 0) && cmd_mode_select &&
 	             (buffer0_wr || buffer1_wr)) begin
 		if (data_cnt == 32'd3) msel_bdlen <= msel_din;
+		// SGI LOCAL CHANGE: an 8-byte block descriptor carries the block
+		// length in its last three bytes, which are parameter bytes 9..11.
+		// This is the half of MODE SELECT upstream drops. See cd_blklen.
+		if (msel_bdlen == 8'd8) begin
+			if (data_cnt == 32'd9)  cd_blklen[23:16] <= msel_din;
+			if (data_cnt == 32'd10) cd_blklen[15:8]  <= msel_din;
+			if (data_cnt == 32'd11) cd_blklen[7:0]   <= msel_din;
+		end
 		if (data_cnt >= 32'd4) begin
 			if (msel_pgoff == 32'd0) msel_page <= msel_din;
 			else if (msel_page == 8'h0E) begin
@@ -729,15 +759,19 @@ wire [7:0] inquiry_dout_next3 = inquiry_byte(data_cnt_next3);
 //wire [31:0] capacity = 32'd1024096;   // 1024000 + 96 blocks = 500MB
 // Initialized: the CDROM target answers MODE SENSE before any image has ever
 // been mounted (drive present, no disc), so the capacity bytes must not be X.
-reg [31:0] capacity = 32'd0;
+// SGI LOCAL CHANGE: capacity is DERIVED, not latched. It is reported in
+// logical blocks, and the logical block size can change after the medium is
+// mounted - a MODE SELECT to 512 has to move READ CAPACITY and MODE SENSE with
+// it or the drive claims a quarter of the disc it has. img_blocks is kept
+// instead, and the arithmetic that used to run once at mount now runs here.
+reg [31:0] img_blocks_r = 32'd0;
+wire [31:0] capacity = (CDROM != 0) ? ((img_blocks_r >> cd_lba_shift) - 1'd1)
+                                    : (img_blocks_r - 1'd1);
 reg        mounted = 0;
 always @(posedge clk) begin
 	if (img_mounted) begin
 		if (|img_blocks) begin
-			// CDROM: capacity is in 2048-byte logical blocks (last LBA), i.e.
-			// the mounted 512-block count / 4 - 1. Disks: 512-blocks - 1.
-			capacity <= (CDROM != 0) ? ({2'b00, img_blocks[31:2]} - 1'd1)
-			                         : (img_blocks - 1'd1);
+			img_blocks_r <= img_blocks;
 			if (!mounted) $display("Image mounted on target %d, size: %d", ID, img_blocks);
 			mounted <= 1;
 		end else
@@ -756,28 +790,28 @@ wire [7:0] read_capacity_dout =
 		(data_cnt == 32'd1 )?capacity[23:16]:
 		(data_cnt == 32'd2 )?capacity[15:8]:
 		(data_cnt == 32'd3 )?capacity[7:0]:
-		(data_cnt == 32'd6 )?((CDROM != 0)?8'h08:8'd2): // block length 2048 (CD) / 512 (disk)
+		(data_cnt == 32'd6 )?((CDROM != 0)?cd_blklen[15:8]:8'd2): // block length 2048 (CD) / 512 (disk)
 		8'h00;
 wire [7:0] read_capacity_dout_next =
 		(data_cnt_next == 32'd0 )?capacity[31:24]:
 		(data_cnt_next == 32'd1 )?capacity[23:16]:
 		(data_cnt_next == 32'd2 )?capacity[15:8]:
 		(data_cnt_next == 32'd3 )?capacity[7:0]:
-		(data_cnt_next == 32'd6 )?((CDROM != 0)?8'h08:8'd2):
+		(data_cnt_next == 32'd6 )?((CDROM != 0)?cd_blklen[15:8]:8'd2):
 		8'h00;
 wire [7:0] read_capacity_dout_next2 =
 		(data_cnt_next2 == 32'd0 )?capacity[31:24]:
 		(data_cnt_next2 == 32'd1 )?capacity[23:16]:
 		(data_cnt_next2 == 32'd2 )?capacity[15:8]:
 		(data_cnt_next2 == 32'd3 )?capacity[7:0]:
-		(data_cnt_next2 == 32'd6 )?((CDROM != 0)?8'h08:8'd2):
+		(data_cnt_next2 == 32'd6 )?((CDROM != 0)?cd_blklen[15:8]:8'd2):
 		8'h00;
 wire [7:0] read_capacity_dout_next3 =
 		(data_cnt_next3 == 32'd0 )?capacity[31:24]:
 		(data_cnt_next3 == 32'd1 )?capacity[23:16]:
 		(data_cnt_next3 == 32'd2 )?capacity[15:8]:
 		(data_cnt_next3 == 32'd3 )?capacity[7:0]:
-		(data_cnt_next3 == 32'd6 )?((CDROM != 0)?8'h08:8'd2):
+		(data_cnt_next3 == 32'd6 )?((CDROM != 0)?cd_blklen[15:8]:8'd2):
 		8'h00;
 
 // =====================================================================
@@ -1041,7 +1075,7 @@ function [7:0] cd_mode_sense_byte;
 			(cnt == 32'd5 )?capacity[23:16]:
 			(cnt == 32'd6 )?capacity[15:8]:
 			(cnt == 32'd7 )?capacity[7:0]:
-			(cnt == 32'd10)?8'h08:                      // block length 0x000800 = 2048
+			(cnt == 32'd10)?cd_blklen[15:8]:           // SGI: the live block length
 			(cnt == 32'd12)?8'h30:                      // page code (0x30 request only)
 			(cnt == 32'd14)?"A":(cnt == 32'd15)?"P":
 			(cnt == 32'd16)?"P":(cnt == 32'd17)?"L":
@@ -1073,7 +1107,7 @@ function [7:0] cd_ms0e_byte;
 			(cnt == 32'd5 )?capacity[23:16]:
 			(cnt == 32'd6 )?capacity[15:8]:
 			(cnt == 32'd7 )?capacity[7:0]:
-			(cnt == 32'd10)?8'h08:                      // block length 0x000800 = 2048
+			(cnt == 32'd10)?cd_blklen[15:8]:           // SGI: the live block length
 			(cnt == 32'd12)?8'h0E:                      // page code
 			(cnt == 32'd13)?8'h0E:                      // page length = 14
 			(cnt == 32'd14)?8'h04:                      // IMMED=1, SOTC=0
@@ -1109,7 +1143,7 @@ function [7:0] cd_ms2a_byte;
 			(cnt == 32'd5 )?capacity[23:16]:
 			(cnt == 32'd6 )?capacity[15:8]:
 			(cnt == 32'd7 )?capacity[7:0]:
-			(cnt == 32'd10)?8'h08:                      // block length 0x000800 = 2048
+			(cnt == 32'd10)?cd_blklen[15:8]:           // SGI: the live block length
 			(cnt == 32'd12)?8'h2A:                      // page code
 			(cnt == 32'd13)?8'h18:                      // page length = 24
 			(cnt == 32'd16)?8'h71:                      // payload[2]
@@ -2708,9 +2742,12 @@ always @(posedge clk) begin
 		// whole downstream ring/flush/data_len machinery runs unmodified in
 		// 512-byte units. Non-READ commands keep raw CDB values (their
 		// lengths are byte counts, e.g. MODE SELECT / AUDIO CONTROL).
+		// SGI LOCAL CHANGE: shift by the LIVE block size, not by a constant
+		// two. At 2048 this is the original `<< 2`; at 512 it is `<< 0` and
+		// the CDB's LBA already is a host block number.
 		if ((CDROM != 0) && cmd_read) begin
-			lba  <= (cmd6_cpl?{11'd0, lba6}:lba10) << 2;
-			tlen <= (cmd6_cpl?{7'd0, tlen6}:tlen10) << 2;
+			lba  <= (cmd6_cpl?{11'd0, lba6}:lba10) << cd_lba_shift;
+			tlen <= (cmd6_cpl?{7'd0, tlen6}:tlen10) << cd_lba_shift;
 		end else begin
 			lba <= cmd6_cpl?{11'd0, lba6}:lba10;
 			tlen <= cmd6_cpl?{7'd0, tlen6}:tlen10;

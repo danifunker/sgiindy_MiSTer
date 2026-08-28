@@ -46,6 +46,28 @@ decode those rather than the names:
 | `PHASE_STATUS_OUT` | 0,1,1 | STATUS | target → initiator |
 | `PHASE_MESSAGE_OUT` | 1,1,1 | MESSAGE IN | target → initiator |
 
+## `scsi.v` is no longer pristine
+
+One local change, marked in the source with `SGI LOCAL CHANGE` at every hunk so
+a re-vendor can find them:
+
+**The CD-ROM logical block size follows MODE SELECT instead of being hardwired
+to 2048.** Upstream reads the block descriptor's *length* and discards its
+contents, so a drive stayed at 2048 whatever it was told. IRIX will not accept
+that — an SGI install CD is a 512-byte volume-header disc, and `dksc` switches
+the drive to 512 for EFS and back to 2048 for ISO 9660. IRIS models the same
+switch in `src/scsi.rs`.
+
+The failure it caused was silent, which is why it is worth the divergence: the
+drive read the wrong blocks *successfully*. `sashARCS` lives at 512-block
+52875, and a drive stuck at 2048 fetched byte 108288000 instead of 27072000.
+
+Six sites move: the new `cd_blklen` register and its `cd_lba_shift`, the
+capture out of the MODE SELECT block descriptor, `capacity` (now derived rather
+than latched at mount, because the block size can change after a medium is in),
+the READ CAPACITY block-length byte, the MODE SENSE block-length byte on the
+three CD pages, and the LBA/transfer-length scale at command latch.
+
 ## Provenance
 
 `scsi.v` and `scsi_vendor.vh` are taken from the MacLC MiSTer core, which
