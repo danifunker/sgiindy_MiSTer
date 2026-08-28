@@ -328,7 +328,9 @@ wrong theory.
 
    The RTL side needs `sgi_hpc3.sv` to become a **bus master**, which nothing
    in this core is yet, and `wd33c93.sv`'s SAT data phase to hand bytes to it
-   instead of parking on DBR.
+   instead of parking on DBR. **`docs/13-scsi-dma-plan.md` is the plan** -
+   registers, descriptor format, a five-stage build with a test at each stage,
+   and the hazards worth knowing before you start.
 2. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
    rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
    path is the difference between a machine that remembers a `setenv` and one
