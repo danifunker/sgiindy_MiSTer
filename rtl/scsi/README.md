@@ -24,9 +24,13 @@ command set and CD audio, which pulls in `cd_audio.sv` through a
 `scsi_vendor.vh` sets the 8-byte INQUIRY vendor string. It is deliberately a
 separate file so a build can change it without touching tracked source.
 
-`cd_audio.sv` is deliberately **not** vendored. It is only reachable through
-`generate if (CDROM != 0)`, and it pulls in a volume lookup table this core has
-no use for.
+`cd_audio.sv` here is **ours, and a stub** — it is not the MacLC engine. The
+real one is only reachable through `generate if (CDROM != 0)` and pulls in a
+volume lookup table this core has no use for, so what is checked in is the
+`g_no_cd_audio` tie-off branch wearing the `g_cd_audio` port list. That is what
+lets a CD-ROM elaborate without vendoring the engine and without forking
+`scsi.v`. READ TOC answers zeroes and the audio commands are no-ops; the data
+path is untouched. See `docs/FEATURES_EVALUATE.md`.
 
 ## Phase encoding
 
@@ -44,7 +48,9 @@ decode those rather than the names:
 
 ## Provenance
 
-`scsi.v`, `scsi_vendor.vh` and `cd_audio.sv` are taken from the MacLC MiSTer
-core, which carries no per-file licence header. They are used here on the
+`scsi.v` and `scsi_vendor.vh` are taken from the MacLC MiSTer core, which
+carries no per-file licence header. **`cd_audio.sv` is not** — it is written
+here, and only borrows the port list and the constants of the branch it
+replaces. They are used here on the
 understanding that both cores are the same author's work. Anyone republishing
 this repository should confirm that before shipping.
