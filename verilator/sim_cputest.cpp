@@ -140,6 +140,8 @@ struct Options {
     // --type, but they arrive at the keyboard port rather than the serial
     // console, which is the only way to exercise the PC keyboard path.
     std::vector<std::pair<std::string, std::string>> keys;
+    // Key batches fired at a cycle count rather than on console text.
+    std::vector<std::pair<uint64_t, std::string>> keys_at;
     // Disk images, as ID=path. Repeatable; IDs 0..6.
     // (id, path, writable). See ScsiDisk in sim_devices.h for what writable
     // costs and buys: --disk keeps the host file untouched, --disk-rw does not.
@@ -222,6 +224,9 @@ static void usage()
         "  --fbindex         dump the colour index as grey, not the colour\n"
         "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
         "                    console on the serial port\n"
+        "  --key-at N STR    press STR at the keyboard once cycle N is reached.\n"
+        "                    --key-on triggers on console text, and there is no\n"
+        "                    console once Newport is fitted\n"
         "  --watch HEX       report every bus access to HEX (repeatable). PROM\n"
         "                    text is uncached, so this is a PC watch\n"        "  --uart            also decode the SCC's txdb line and compare\n"
         "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1),\n"
@@ -290,6 +295,15 @@ int main(int argc, char **argv)
             else opt.disks.push_back({atoi(spec.substr(0, eq).c_str()), spec.substr(eq + 1), true});
         }
         else if (a == "--key")         opt.keys.push_back({"", unescape(next("--key"))});
+        // --key-at exists because --key-on triggers on CONSOLE text, and once
+        // Newport is fitted there is no console: the PROM draws its prompts
+        // into the frame buffer. A cycle number is crude, but it is the only
+        // trigger available for "type at the graphics head", which is the only
+        // way anything reaches the keyboard controller at all.
+        else if (a == "--key-at") {
+            uint64_t at = strtoull(next("--key-at"), nullptr, 0);
+            opt.keys_at.push_back({at, unescape(next("--key-at"))});
+        }
         else if (a == "--key-on") {
             std::string ktrig = unescape(next("--key-on"));
             opt.keys.push_back({ktrig, unescape(next("--key-on"))});
@@ -408,6 +422,7 @@ int main(int argc, char **argv)
     UartRx   uart;
     UartTx   utx;
     Ps2Injector ps2;
+    size_t key_at_n = 0;
     ScsiBlockDev scsi_dev;
     size_t   key_at = 0;
     size_t   type_at = 0;          // next --type string to send
@@ -452,6 +467,22 @@ int main(int argc, char **argv)
         top->rxdb = utx.line;
         ps2.step(top, cycle);
         scsi_dev.step(top);
+
+        // Key batches with a cycle trigger, for the graphics console.
+        if (key_at_n < opt.keys_at.size() && cycle >= opt.keys_at[key_at_n].first
+            && ps2.idle()) {
+            const std::string &text = opt.keys_at[key_at_n].second;
+            fprintf(stderr, "[%10llu] pressing %zu key(s) at the graphics head\n",
+                    static_cast<unsigned long long>(cycle), text.size());
+            for (char c : text) {
+                uint8_t code; bool shift;
+                if (!ps2_code_for_ascii(c, code, shift)) continue;
+                if (shift) ps2.push_key(0x12, false, true);
+                ps2.tap(code);
+                if (shift) ps2.push_key(0x12, false, false);
+            }
+            key_at_n++;
+        }
 
         // Queue the next --key/--key-on batch once its trigger has been seen
         // and the previous batch has drained.

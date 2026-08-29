@@ -232,15 +232,44 @@ toggle changes.
 `[7:0]` flags, `[15:8]` dx, `[23:16]` dy — so `i8042.sv` forwards them
 unchanged rather than reassembling a packet the mouse already sent.
 
-### What is not proven
+### Keystroke delivery, end to end
 
-The controller protocol is: the PROM's `0xED` / LED-argument / `0xF4` sequence
-now reads back `0xFA` for each, and the diagnostic passes. **Keystroke
-delivery end to end is not**, because nothing in the machine reads the
-keyboard yet — the PROM's console is the serial port, so injected scan codes
-sit in the queue unread. That stays true until either graphics arrive or IRIX
-does; it is not a reason to distrust the controller, but it is not evidence
-for it either.
+This section used to say that keystroke delivery was **not** proven, "because
+nothing in the machine reads the keyboard yet — the PROM's console is the
+serial port, so injected scan codes sit in the queue unread. That stays true
+until either graphics arrive or IRIX does." Graphics arrived, and it is proven
+now.
+
+Two 400-million-cycle boots with Newport fitted, identical except that one
+presses keys at the graphics head:
+
+| | keyboard-port accesses | final screen |
+|---|---:|---|
+| no keys | 597,166 | `Unable to boot; press any key to continue:` |
+| seven `5`s | 388,421 | `Command Monitor.` and `>> 5555` |
+
+Both halves of that are evidence. The **six hundred thousand polls** are the
+PROM sitting in its input loop with nothing to read, which is what proves it
+is reading the controller at all; the drop to 388,421 is it getting an answer
+and moving on. And the second screen is the whole path: the first `5`
+dismissed the prompt, the second chose *5) Enter Command Monitor* from the
+menu, and the remaining five echoed at the `>>` prompt - `ps2_key` to the
+i8042's queue to the PROM's read at IOC `+0x40` to ARCS's ConsoleIn to REX3
+drawing the echo.
+
+`--key-on` triggers on **console text**, which does not exist once the console
+is a screen, so this needed `--key-at CYCLE STR` - a cycle number is crude,
+but it is the only trigger available for typing at a graphics head.
+
+The controller protocol was already covered: POST's own diagnostic writes
+`0xAA` to the command port and reads `0x55` back, sets the controller command
+byte through `0x60`/`0x20`, sends `0xF5` to the keyboard device and reads
+`0xFA`, and prints no `PC keyboard/mouse controller diagnostic *FAILED*`.
+
+**The mouse is still unproven.** Nothing on the PROM's path moves a pointer -
+`Ng1CursorInit` is a stub in the PROM's own driver and VC2's cursor planes are
+not built here either - so the mouse waits for IRIX the way the keyboard
+waited for graphics.
 
 `sgiindy.sv` is still the stock template and does not instantiate the core, so
 there is no `hps_io` connection on hardware.
