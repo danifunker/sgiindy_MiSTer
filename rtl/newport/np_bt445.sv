@@ -67,22 +67,36 @@ module np_bt445 #(
     // Which set the address port refers to. Set by CRS 3.
     logic set_is_ctrl;
 
+    // REGISTERED, one cycle after `sel`, like every other chip on this bus -
+    // see np_xmap9.sv. Hoisting the two array reads above the reset also keeps
+    // the gamma table and the control space out of flip-flops; they are only
+    // 8 Kbit between them, which is not what broke the first synthesis, but it
+    // is 8 Kbit that has no business being registers.
     logic [23:0] rd_gamma;
+    logic  [7:0] rd_ctrl;
+    logic  [7:0] rdata_c;
+    always_ff @(posedge clk) begin
+        rd_gamma <= gamma[addr];
+        rd_ctrl  <= ctrl[addr];
+        rdata    <= rdata_c;
+    end
+
     always_comb begin
-        rd_gamma = gamma[addr];
         case (crs)
-            3'd0: rdata = cmd;
-            3'd1: rdata = addr;
-            3'd2: rdata = set_is_ctrl
-                        ? ((addr == CTRL_REVISION) ? REVISION : ctrl[addr])
-                        : ((rgb_ctr == 2'd0) ? rd_gamma[7:0]
-                        :  (rgb_ctr == 2'd1) ? rd_gamma[15:8]
-                        :                      rd_gamma[23:16]);
-            3'd3: rdata = {7'b0, set_is_ctrl};
-            default: rdata = 8'h00;
+            3'd0: rdata_c = cmd;
+            3'd1: rdata_c = addr;
+            3'd2: rdata_c = set_is_ctrl
+                          ? ((addr == CTRL_REVISION) ? REVISION : rd_ctrl)
+                          : ((rgb_ctr == 2'd0) ? rd_gamma[7:0]
+                          :  (rgb_ctr == 2'd1) ? rd_gamma[15:8]
+                          :                      rd_gamma[23:16]);
+            3'd3: rdata_c = {7'b0, set_is_ctrl};
+            default: rdata_c = 8'h00;
         endcase
     end
 
+    // Nine fixed indices, which synthesises as nine registers rather than as a
+    // memory read - that is correct and does not stop the array inferring.
     assign curs_color1 = {ctrl[8'h13], ctrl[8'h12], ctrl[8'h11]};
     assign curs_color2 = {ctrl[8'h16], ctrl[8'h15], ctrl[8'h14]};
     assign curs_color3 = {ctrl[8'h19], ctrl[8'h18], ctrl[8'h17]};

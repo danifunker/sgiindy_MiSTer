@@ -135,6 +135,13 @@ module fb_linecache #(
     assign miss     = miss_q;
 
     always_ff @(posedge clk) begin
+        // ABOVE THE RESET, for the reason np_vc2.sv spells out: a reset on the
+        // register an array reads into stops Quartus inferring a memory, and
+        // these two are 172 Kbit that would become flip-flops. The reads are
+        // unconditional anyway.
+        q0 <= buf0[req_off];
+        q1 <= buf1[req_off];
+
         if (reset) begin
             val0 <= 1'b0; val1 <= 1'b0;
             tag0 <= 11'h7FF; tag1 <= 11'h7FF;
@@ -153,8 +160,7 @@ module fb_linecache #(
             miss_q <= 1'b0;
 
             // ---- the display's read, unconditionally one cycle -----------
-            q0 <= buf0[req_off];
-            q1 <= buf1[req_off];
+            // (the array read itself is hoisted above the reset, see above)
             if (px_req) begin
                 ack_q  <= 1'b1;
                 sel_q  <= hit1;

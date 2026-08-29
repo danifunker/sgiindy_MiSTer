@@ -302,6 +302,7 @@ module np_rex3 #(
     logic [31:0] dcb_result;
     logic        dcb_is_read;
     logic        dcb_start_rd, dcb_start_wr;
+    logic        dcb_rd_waited;   // one settling cycle per read beat
 
     // VC2 takes a whole transfer of the declared width in one go; every other
     // chip on the bus is byte-wide and takes them MSB first.
@@ -882,6 +883,7 @@ module np_rex3 #(
             dcb_byte <= 3'd0; dcb_crs_run <= 3'd0; dcb_data <= 32'h0;
             dcb_result <= 32'h0; dcb_is_read <= 1'b0;
             dcb_start_rd <= 1'b0; dcb_start_wr <= 1'b0;
+            dcb_rd_waited <= 1'b0;
         end else begin
             ack          <= 1'b0;
             dcb_start_rd <= 1'b0;
@@ -1035,12 +1037,24 @@ module np_rex3 #(
                         dcbst       <= DCB_XFER;
                     end
                 end
-                DCB_XFER: begin
-                    // VC2 takes the whole transfer at once; the byte-wide
-                    // chips take one beat per byte, with CRS advancing when
-                    // DCBMODE asks for it. A read accumulates exactly one byte
-                    // per beat, so the last one lands in the low byte - which
-                    // is where `dcbdata0.bybyte.b3` reads it from.
+                // EVERY CHIP ON THIS BUS ANSWERS A READ ONE CYCLE AFTER
+                // `sel`, so a read waits a cycle here before it samples. That
+                // used to be true of VC2 alone; it is true of all four now,
+                // because their register arrays had to become real memories
+                // and a memory read is registered by definition. See
+                // np_cmap.sv for what that cost and why.
+                //
+                // A WRITE DOES NOT WAIT. Only reads pay the cycle, so loading
+                // a timing table or a palette runs at the speed it always did.
+                DCB_XFER: if (dcb_is_read && !dcb_is_vc2 && !dcb_rd_waited) begin
+                    dcb_rd_waited <= 1'b1;
+                end else begin
+                    dcb_rd_waited <= 1'b0;
+                    // The byte-wide chips take one beat per byte, with CRS
+                    // advancing when DCBMODE asks for it. A read accumulates
+                    // exactly one byte per beat, so the last one lands in the
+                    // low byte - which is where `dcbdata0.bybyte.b3` reads it
+                    // from.
                     if (dcb_is_read && !dcb_is_vc2)
                         dcb_result <= {dcb_result[23:0], dcb_rdata[7:0]};
                     if (dcb_is_vc2) begin

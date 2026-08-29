@@ -70,11 +70,26 @@ module np_cmap #(
     wire [12:0]  paddr_inc = paddr + 13'd1;      // wraps at 13 bits, as the part does
 
     // ---- read ------------------------------------------------------------
-    // Reading the palette port advances the same sequencer a write does, so a
-    // read-back has to start from a known state - that is what CRS 7 is for.
+    // BOTH READS OF THE PALETTE ARE REGISTERED, AND THAT IS NOT A STYLE
+    // CHOICE. This array is 8192 x 24, and Quartus infers a memory only when
+    // the read goes straight into a register: with `assign look_rgb =
+    // palette[...]` for the display and `rd_entry = palette[...]` in an
+    // always_comb for the host, both were asynchronous, both CMAPs became
+    // flip-flops, and Analysis & Synthesis stopped with
+    //
+    //   Error (276003): Cannot convert all sets of registers into RAM
+    //   megafunctions ... exceeds the number of registers in the device
+    //
+    // Two read ports and one write port is a shape Quartus builds by keeping
+    // two copies of the memory, which is 393 Kbit of M10K per CMAP and cheap
+    // against the alternative.
+    //
+    // The cost is a cycle on each side. The display's is absorbed by an extra
+    // delay stage on the syncs in newport.sv; the host's is why the Display
+    // Control Bus now waits a cycle before sampling a read - see np_rex3.sv.
     logic [23:0] rd_entry;
+    logic [23:0] look_q;
     always_comb begin
-        rd_entry = palette[paddr[AW-1:0]];
         case (crs)
             3'd0:    rdata = addr_lo;
             3'd1:    rdata = addr_hi;
@@ -92,9 +107,13 @@ module np_cmap #(
         endcase
     end
 
-    assign look_rgb = palette[look_addr[AW-1:0]];
+    assign look_rgb = look_q;
 
     always_ff @(posedge clk) begin
+        // Above the reset, so nothing sits between the array and the flop.
+        look_q   <= palette[look_addr[AW-1:0]];
+        rd_entry <= palette[paddr[AW-1:0]];
+
         if (reset) begin
             addr_lo    <= 8'h00;
             addr_hi    <= 8'h00;

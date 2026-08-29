@@ -44,21 +44,29 @@ module np_xmap9 #(
     wire [4:0] rd_entry = mode_addr[6:2];
     wire [1:0] rd_byte  = mode_addr[1:0];
 
+    // REGISTERED, one cycle after `sel`, the same as every other chip on this
+    // bus. The mode table is small enough to have stayed combinational, but a
+    // Display Control Bus where some chips answer immediately and others a
+    // cycle later needs two rules in the sequencer instead of one, and the one
+    // that reads the wrong chip late is a bug nobody would find twice.
+    logic [7:0] rdata_c;
+    always_ff @(posedge clk) rdata <= rdata_c;
+
     always_comb begin
         case (crs)
-            3'd0:    rdata = config_reg;
-            3'd1:    rdata = REVISION;
+            3'd0:    rdata_c = config_reg;
+            3'd1:    rdata_c = REVISION;
             // FIFO fill level. 2 = three entries free, the reset value; this
             // model has no FIFO and xmap9FIFOWait only needs a non-full answer.
-            3'd2:    rdata = 8'd2;
-            3'd3:    rdata = curs_cmap_msb;
-            3'd4:    rdata = pup_cmap_msb;
-            3'd5:    rdata = (rd_byte == 2'd0) ? mode_table[rd_entry][7:0]
+            3'd2:    rdata_c = 8'd2;
+            3'd3:    rdata_c = curs_cmap_msb;
+            3'd4:    rdata_c = pup_cmap_msb;
+            3'd5:    rdata_c = (rd_byte == 2'd0) ? mode_table[rd_entry][7:0]
                            : (rd_byte == 2'd1) ? mode_table[rd_entry][15:8]
                            : (rd_byte == 2'd2) ? mode_table[rd_entry][23:16]
                            :                     8'h00;
-            3'd7:    rdata = mode_addr;
-            default: rdata = 8'h00;
+            3'd7:    rdata_c = mode_addr;
+            default: rdata_c = 8'h00;
         endcase
     end
 

@@ -245,6 +245,22 @@ module np_vc2 #(
 
     integer i;
     always_ff @(posedge clk) begin
+        // THE SRAM READ LIVES HERE, ABOVE THE RESET, AND THAT IS WHAT PUTS IT
+        // IN M10Ks. Quartus infers a memory only when the array read goes
+        // straight into a register with nothing in the way, and a reset on
+        // that register is something in the way: with `ram_q <= 16'h0` in the
+        // reset branch and the read in the else, this 32K x 16 array became
+        // 524,288 flip-flops and Analysis & Synthesis gave up with
+        //
+        //   Error (276003): Cannot convert all sets of registers into RAM
+        //   megafunctions ... exceeds the number of registers in the device
+        //
+        // sgi_ds1386.sv learned the same lesson at 30,430 ALUTs; syn/README.md
+        // has that story. The read is unconditional, so hoisting it changes
+        // nothing about behaviour - `ram_q` is only ever consumed under the
+        // state machine's own control.
+        ram_q <= ram[ram_ra[AW-1:0]];
+
         if (reset) begin
             for (i = 0; i < 32; i = i + 1) regs[i] <= 16'h0;
             index        <= 5'h0;
@@ -266,10 +282,7 @@ module np_vc2 #(
             y_ctr        <= 11'h0;
             de_d         <= 1'b0;
             vert_int_n_d <= 1'b1;
-            ram_q        <= 16'h0;
         end else begin
-            ram_q <= ram[ram_ra[AW-1:0]];
-
             // ---- host access ---------------------------------------------
             if (host_idx_wr) index <= host_idx;
             if (host_reg_wr) begin

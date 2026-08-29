@@ -315,19 +315,30 @@ module newport #(
     assign vid_g = de ? pix_rgb[15:8]  : 8'h00;
     assign vid_b = de ? pix_rgb[23:16] : 8'h00;
 
-    // The pixel is one read behind the timing generator, so the syncs are
-    // delayed to match rather than the data being pushed forward.
+    // TWO STAGES, NOT ONE, and the second one is CMAP's. The pixel is one read
+    // behind the timing generator - that is the frame buffer - and now one
+    // more behind it again, because the palette lookup had to become a
+    // registered read for the array to infer as M10K rather than as 393 Kbit
+    // of flip-flops (see np_cmap.sv). The syncs are delayed to match rather
+    // than the data being pushed forward, so the picture moves as a whole.
+    //
+    // Getting this wrong is a one-pixel horizontal shift of the entire image,
+    // which is exactly the kind of thing that survives a glance and fails
+    // tests/run-rex3.sh's replay.
     logic hs_d, vs_d, de_d;
+    logic hs_q, vs_q, de_q;
     always_ff @(posedge clk) begin
         if (reset) begin
             hs_d <= 1'b0; vs_d <= 1'b0; de_d <= 1'b0;
+            hs_q <= 1'b0; vs_q <= 1'b0; de_q <= 1'b0;
         end else if (ce_pix) begin
             hs_d <= vc2_hsync; vs_d <= vc2_vsync; de_d <= vc2_de;
+            hs_q <= hs_d;      vs_q <= vs_d;      de_q <= de_d;
         end
     end
-    assign hsync = hs_d;
-    assign vsync = vs_d;
-    assign de    = de_d;
+    assign hsync = hs_q;
+    assign vsync = vs_q;
+    assign de    = de_q;
 
     assign gfx_irq = vc2_vint;
 
