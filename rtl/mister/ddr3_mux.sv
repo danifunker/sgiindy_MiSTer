@@ -56,14 +56,14 @@ module ddr3_mux #(
     // buffer aliased the whole of RAM. The unit test caught it as a display
     // read returning data the rasteriser had never written.
     //
-    // MAIN MEMORY GETS 128 MB WHETHER OR NOT IT IS USING IT. The OSD offers up
-    // to 128, and a map that moved with the selection would put the frame
-    // buffer at a different address for each one - which the guest never sees
-    // but every debugging session would. 144.5 MB of the 256 is spoken for and
-    // the rest is spare.
-    parameter logic [31:0] BASE_RAM  = 32'h0000_0000,  // 128 MB
-    parameter logic [31:0] BASE_FB   = 32'h0800_0000,  //  16 MB
-    parameter logic [31:0] BASE_PROM = 32'h0900_0000   // 512 KB
+    // MAIN MEMORY GETS 64 MB WHETHER OR NOT IT IS USING IT. The OSD offers 32,
+    // 48 and 64, and the region is sized for the largest rather than for the
+    // selection: a map that moved with the menu would put the frame buffer at
+    // a different address for every entry, which the guest never sees and
+    // every debugging session would. 80.5 MB of the 256 is spoken for.
+    parameter logic [31:0] BASE_RAM  = 32'h0000_0000,  //  64 MB
+    parameter logic [31:0] BASE_FB   = 32'h0400_0000,  //  16 MB
+    parameter logic [31:0] BASE_PROM = 32'h0500_0000   // 512 KB
 ) (
     input  logic        clk,
     input  logic        reset,

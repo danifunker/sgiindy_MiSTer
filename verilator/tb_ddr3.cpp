@@ -184,7 +184,7 @@ int main(int argc, char **argv)
     printf("running %d cycles of four-master traffic ...\n", ROUNDS);
 
     auto region_size = [](Master *m) -> uint32_t {
-        if (m == &m_ram)  return 128u * 1024 * 1024;   // the OSD's largest
+        if (m == &m_ram)  return 64u * 1024 * 1024;    // the OSD's largest
         if (m == &m_prom) return 512u * 1024;
         return 8u * 1024 * 1024;               // frame buffer, a slice of it
     };
