@@ -259,11 +259,53 @@ and Newport's raster on `VGA_*`. `docs/18-mister-integration.md` is the whole
 of it, including what will be wrong on the first hardware run.
 
 **Quartus lives on another machine, and you can drive it.** See the memory
-files: `m900` over SSH, Quartus 17.0.2 Lite, the repo at the same path. **Do
+files, which name it: a Linux box over SSH, Quartus 17.0.2 Lite, the repo
+checked out at the same path. **Do
 not change files or git state there** - push to origin and let the user pull;
-running a build is fine. Analysis & Synthesis now SUCCEEDS: 37,773 registers,
-2,236,027 block memory bits, 128 `altsyncram` instances. It took two fixes to
-get there and both are the kind that Verilator can never find:
+running a build is fine.
+
+**THE WHOLE FLOW COMPLETES AND THE DESIGN MEETS TIMING.** 43 minutes, zero
+errors through synthesis, fit, assembler and TimeQuest, `sgiindy.rbf` written.
+On a `5CSEBA6U23I7`:
+
+| | | |
+|---|---|---|
+| Logic | **30,485 / 41,910 ALMs** | 73% |
+| Registers | 38,889 | |
+| Block memory | 2,236,027 bits, 284 / 553 M10K | 39% / 51% |
+| DSP | 51 / 112 | 46% |
+| Core clock | constrained **50.0 MHz**, slack **+4.122 ns** | **Fmax 62.98 MHz** |
+
+Every setup, hold, recovery, removal and minimum-pulse-width slack is positive
+and **TNS is 0.000 on every clock in the design**. The tightest path anywhere
+is the HDMI pixel clock at +0.491 ns, which is framework and not ours. Against
+the CPU-only measurement in `syn/README.md` (19,137 ALMs, 63.77 MHz), Newport
+plus the memory system plus the top level cost **+11,348 ALMs and about
+0.8 MHz**, and 27% of the device is still free.
+
+**There is no diet to go on, and one specific thing not to do.** `np_cmap`'s
+`u_cmap1|palette` still reports uninferred, but the entire design spends 960
+ALMs on memory, so it is costing nothing worth chasing. **Do not "fix" it by
+wiring `cmap1_rgb` into the pixel path** - IRIS displays from `cmap0` alone
+(`rex3.rs:4062`) and `cmap1` exists only to answer Display Control Bus reads
+at address 3 (`rex3.rs:3168`); `cmap.rs` has no parity notion at all. Making
+it look used would change the picture to make a report tidier.
+
+**One clock is unconstrained, and you should know which one.** STA reports "1
+Unconstrained Clock" and it is `emu:emu|sclk`. `sgiindy.sdc` leaves it out
+deliberately. The comment there used to claim `sclk` was sampled as data and
+clocked nothing, which was false - `rtl/sgi/z8530_scc.sv:339`, `:343` and
+`:395` are `always @(posedge sclk_a ...)` - and it has been corrected. It is a
+genuine second clock domain: an NCO-toggled register, crossed both ways by
+Gray-coded FIFO pointers, given local routing rather than a global network.
+At 3.6864 MHz through shift-register-depth logic there is ~270 ns of slack to
+lose and it will almost certainly work; nothing has measured that. **The
+honest fix is to stop using it as a clock** - an NCO output belongs on a clock
+enable against `clk_sys`, which deletes the domain and the crossing together.
+Constraining it would only quieten the report.
+
+It took two fixes to get synthesis clean, and both are the kind that Verilator
+can never find:
 
 - **The root project had no `VHDL_INPUT_VERSION`.** `cpu.vhd` uses sized
   bit-string literals (`40x"0"`), which are VHDL-2008, and the first compile
@@ -365,8 +407,9 @@ What is *not* done, and is worth knowing before you plan anything:
   anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
   COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
   reselects, and the target's INQUIRY still reports ANSI version 0.
-- **Nothing has been through Quartus.** `sgiindy.sv` is still the stock MiSTer
-  template and no resource numbers exist.
+- **Nothing has run on real hardware.** The bitstream exists, fits in 73% of
+  the device and meets timing on every clock - the numbers are above - and no
+  board has ever been programmed with it.
 
 ## Read first
 
@@ -691,6 +734,16 @@ never done is run. The first build is a bring-up exercise and
 `docs/18-mister-integration.md` lists what to expect, but two are worth
 repeating here because they are the ones that will waste a day:
 
+* **The PROM loads itself; you do not need the OSD.** `boot.rom` in the repo
+  root is PROM Monitor 5.3 under the name MiSTer's framework uploads
+  automatically out of the core's directory at startup - index 0, the same
+  index the `FS0` menu entry produces, so one decode in `sgiindy.sv` serves
+  both and this needed no RTL. It goes at
+  `/media/fat/games/SGIIndy/boot.rom`. The framework releases reset *before*
+  it sends the file, so the CPU fetches garbage for a moment and
+  `prom_download` re-asserts reset; that is designed for rather than a
+  symptom, and the PROM region is read-only to the core so nothing in that
+  window can damage the image about to run.
 * **If it executes garbage from the very first fetch, invert the PROM
   download's byte swap in `sgiindy.sv`.** That is the one thing in the whole
   path that is reasoned rather than measured - `hps_io`'s WIDE mode byte order

@@ -26,8 +26,10 @@
 //     buffer against 688 KB of M10K, most of which the CPU's caches already
 //     have. ddr3_mux.sv carves the 256 MB window MiSTer gives a core.
 //  2. THE PROM COMES OFF THE SD CARD. It is SGI firmware; it is not in the
-//     bitstream. The OSD loads it, ioctl writes it into DDR3, and the core is
-//     held in reset until that finishes.
+//     bitstream. The framework loads `boot.rom` out of the core's directory
+//     by itself at startup; the OSD's "Load PROM" does the same job by hand.
+//     Either way ioctl writes it into DDR3 and the core is held in reset
+//     until the download finishes.
 //  3. THE VIDEO IS CORRECT AND THE REFRESH IS LOW. The raster is exactly the
 //     one the PROM's timing table describes - 1318 x 1065, asserted by
 //     tests/run-newport.sh - but VC2 derives its pixel clock by dividing the
@@ -252,6 +254,20 @@ wire [31:0] mem_mb = (mem_sel == 2'd1) ? 32'd32
 // access landing inside that walk is not latched, and the pipeline wedges
 // 4096 clocks later. That is written up in docs/08-resume-prompt.md; this
 // counter is the top level's half of the same rule.
+// INDEX 0 IS BOTH WAYS IN. The CONF_STR entry above is `FS0`, so a hand-picked
+// file arrives as index 0 - and MiSTer's framework loads `boot.rom` from the
+// core's own directory at startup with the same index 0, with no CONF_STR
+// entry required and the `.rom` name hardcoded. One decode covers both, which
+// is why there is no second download path for the automatic one.
+//
+// THE FRAMEWORK RELEASES RESET BEFORE IT SENDS boot.rom. It clears status[0]
+// and only then starts the transfer, so between those two moments the CPU is
+// fetching from a PROM region that holds whatever DDR3 came up with. That is
+// survivable and not ignorable: the line below re-asserts reset the instant
+// the download begins, and the counter holds it for 65,535 clocks after the
+// end. Nothing the machine did in that window outlives the reset - the PROM
+// region is read-only to the core, so garbage cannot have damaged the image
+// that is about to be executed.
 wire prom_download = ioctl_download && (ioctl_index[5:0] == 6'd0);
 
 // A CHANGE OF MEMORY SIZE RESETS THE MACHINE, because the PROM sizes memory

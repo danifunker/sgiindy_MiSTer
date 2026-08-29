@@ -225,10 +225,40 @@ behind it. Neither is built.
 
 ## Using it
 
-The OSD carries:
+### Installing it
 
-* **Load PROM** — an SGI firmware image. It is not in the bitstream, and it is
-  not going to be; the core holds itself in reset until the download finishes.
+```
+/media/fat/_Computer/SGIIndy_<date>.rbf     the core
+/media/fat/games/SGIIndy/boot.rom           the PROM, loaded automatically
+```
+
+**`boot.rom` is a framework feature, not a core one.** MiSTer's Main scans the
+core's home directory at startup and, finding a file with that exact name,
+uploads it over `ioctl` with **index 0** — no CONF_STR entry needed, the name
+and the `.rom` extension both hardcoded on the HPS side. The core's decode is
+`ioctl_index[5:0] == 0`, which is also what the `FS0` menu entry produces, so
+one path serves both and the automatic load needed no RTL at all. (The
+numbered form `boot0.rom` … `boot3.rom` exists too and passes `i << 6`; only
+`boot0`/`boot.rom` lands on index 0, which is the one this core answers.)
+
+`boot.rom` in the repository root is `ip24prom.070-9101-011.bin` — PROM Monitor
+5.3 Rev B10, the image every test here boots — copied under the name the
+framework looks for. `roms/IP24_Indy/` keeps both that and the 5.0 image under
+their real names.
+
+**The framework releases reset *before* it sends `boot.rom`.** It clears
+`status[0]` and only then starts the transfer, so there is a window in which
+the CPU fetches from a PROM region holding whatever DDR3 powered up with. The
+core rescues itself: `prom_download` re-asserts reset the moment the transfer
+begins and holds it for 65,535 clocks past the end. Nothing done in that window
+survives, and it cannot have corrupted the image, because the PROM region is
+read-only to everything except the download master.
+
+### The OSD
+
+* **Load PROM** — an SGI firmware image, for loading one by hand or replacing
+  the automatic one. It is not in the bitstream and it is not going to be; the
+  core holds itself in reset until the download finishes.
 * **SCSI ID1 / ID2 / ID6 CD** — three virtual drives, because `sgi_scsi.sv`'s
   `TARGET_EN` builds exactly those three. ID 6 elaborates as a CD-ROM, which is
   an elaboration-time choice and not a mount-time one: `CDROM` changes INQUIRY,

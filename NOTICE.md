@@ -23,11 +23,13 @@ than trusted.
 
 ## Boot PROM images
 
-`roms/` holds SGI boot PROM dumps for IP12, IP20, IP22 and IP24. They are
-**SGI-copyrighted firmware**, not covered by this repository's licence, and
-they are here at the repository owner's decision rather than because anything
-needs them to be: the core loads a PROM from the SD card at runtime, the way
-every MiSTer core loads a BIOS, so deleting `roms/` breaks nothing in the RTL.
+`roms/` holds SGI boot PROM dumps for IP12, IP20, IP22 and IP24, and `boot.rom`
+in the repository root is a second copy of the IP24 5.3 image under the name
+MiSTer's framework loads automatically. They are **SGI-copyrighted firmware**,
+not covered by this repository's licence, and they are here at the repository
+owner's decision rather than because anything needs them to be: the core loads
+a PROM from the SD card at runtime, the way every MiSTer core loads a BIOS, so
+deleting both breaks nothing in the RTL.
 
 Anyone redistributing this repository should decide for themselves whether to
 carry them.
