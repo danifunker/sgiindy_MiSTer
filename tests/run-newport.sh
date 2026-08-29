@@ -25,6 +25,13 @@
 #   lit pixels            REX3 drew, the readout found it, XMAP9's mode table
 #                         and CMAP's palette turned it into colour, and it came
 #                         out of the pins.
+#   all three channels    red, green and blue each carry something. A DEAD
+#                         CHANNEL IS INVISIBLE EVERYWHERE ELSE: the frame
+#                         buffer holds a colour index, so a Display Control Bus
+#                         that dropped the third byte of every palette write
+#                         left the store perfect, the geometry perfect and the
+#                         pixel count perfect, and turned the whole boot screen
+#                         yellow-green.
 #
 # A frame buffer dump is written beside the console so a failure can be looked
 # at rather than guessed at: tests/out/newport-fb.ppm.
@@ -98,6 +105,23 @@ else
           "$([[ "$(sed -E 's/.*last ([0-9]+x[0-9]+).*/\1/' <<<"$vline")" == "$WANT_SIZE" ]] && echo ok)"
     check "REX3 drew at least $MIN_LIT pixels onto it" \
           "$([[ ${lit:-0} -ge $MIN_LIT ]] && echo ok)"
+fi
+
+cline="$(printf '%s\n' "$out" | grep -m1 '^video colour: ')"
+if [[ -z "$cline" ]]; then
+    echo "  FAILED  no video colour summary in the run output"
+    fail=1
+else
+    echo "  $cline"
+    cr=$(sed -E 's/^video colour: ([0-9]+) red.*/\1/'      <<<"$cline")
+    cg=$(sed -E 's/.*, ([0-9]+) green.*/\1/'               <<<"$cline")
+    cb=$(sed -E 's/.*, ([0-9]+) blue.*/\1/'                <<<"$cline")
+    # A tenth of the lit pixels in each channel. The boot screen is a blue
+    # gradient with grey and yellow on it, so every channel is well past this;
+    # what the threshold rules out is a channel that is dead or nearly so.
+    MIN_CHAN=$(( MIN_LIT / 10 ))
+    check "red, green and blue all carry pixels" \
+          "$([[ ${cr:-0} -ge $MIN_CHAN && ${cg:-0} -ge $MIN_CHAN && ${cb:-0} -ge $MIN_CHAN ]] && echo ok)"
 fi
 
 # The PROM opened video() this time, so the message it has printed on every

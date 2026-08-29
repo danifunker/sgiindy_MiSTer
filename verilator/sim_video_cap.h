@@ -13,7 +13,9 @@
 // problem, and nothing in either is a rasteriser problem.
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 struct VideoCapture {
@@ -39,6 +41,14 @@ struct VideoCapture {
     // are ratios of these, and a ratio is what tells you whether the timing
     // generator is walking the table or wandering through it.
     uint64_t hsyncs = 0, vsyncs = 0, de_rises = 0, de_pixels = 0;
+    // Displayed pixels with a non-zero value in each channel, over the whole
+    // run. A CHANNEL THAT IS IDENTICALLY ZERO IS A BUG AND NOT A PICTURE, and
+    // it is not one you can see in the frame buffer dump: the store holds a
+    // colour index, so a Display Control Bus that dropped the third byte of
+    // every palette write left the store perfect and every colour on the
+    // screen without its blue. The whole boot screen came out yellow-green
+    // and nothing failed.
+    uint64_t chan[3] = {0, 0, 0};
     bool     de_d = false;
 
     VideoCapture() { fb.assign((size_t)MAXW * MAXH, 0xFF000000u); }
@@ -49,6 +59,7 @@ struct VideoCapture {
         frames = lit = lit_run = 0;
         best_w = best_h = 0;
         hsyncs = vsyncs = de_rises = de_pixels = 0;
+        chan[0] = chan[1] = chan[2] = 0;
         dirty = true;
     }
 
@@ -62,7 +73,12 @@ struct VideoCapture {
         de_d = de;
         if (hs && !hs_d) hsyncs++;
         if (vs && !vs_d) vsyncs++;
-        if (ce && de) de_pixels++;
+        if (ce && de) {
+            de_pixels++;
+            if (r) chan[0]++;
+            if (g) chan[1]++;
+            if (b) chan[2]++;
+        }
 
         if (vs && !vs_d) {
             seen_h  = y;
@@ -89,6 +105,38 @@ struct VideoCapture {
         }
     }
 };
+
+// What came out of the PINS, as a binary PPM. THIS IS NOT THE SAME PICTURE AS
+// --fbdump AND THE DIFFERENCE IS THE POINT: --fbdump shows the store, which is
+// an 8-bit colour index that dump_framebuffer_ppm renders as grey, while this
+// is the index after XMAP9's mode table chose how to read it and CMAP turned
+// it into 24 bits of colour. A fault in the palette, in the mode table, or in
+// the channel order of the readout is invisible in one and obvious in the
+// other.
+//
+// `w` and `h` come from the largest frame seen rather than from the buffer's
+// stride, so what lands in the file is one frame of whatever geometry the
+// machine actually produced.
+inline bool dump_video_ppm(const std::string &path, const VideoCapture &vc)
+{
+    int w = vc.best_w, h = vc.best_h;
+    if (w <= 0 || h <= 0) return false;
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    std::vector<uint8_t> row((size_t)w * 3);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint32_t px = vc.fb[(size_t)y * VideoCapture::MAXW + x];
+            row[(size_t)x * 3 + 0] = (uint8_t)(px & 0xFF);          // r
+            row[(size_t)x * 3 + 1] = (uint8_t)((px >> 8) & 0xFF);   // g
+            row[(size_t)x * 3 + 2] = (uint8_t)((px >> 16) & 0xFF);  // b
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
+    return true;
+}
 
 // The frame buffer store as the rasteriser left it, without going through the
 // video path. Eight bytes a pixel: the drawing planes in the low word and the

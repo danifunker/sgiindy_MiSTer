@@ -126,6 +126,7 @@ struct Options {
     // routine reached at all" without a trace of four million transactions.
     std::vector<uint32_t> watch;
     std::string fbdump;
+    std::string viddump;
     bool        fbindex = false;
     // Newport fitted. Default on, because a real Indy always has a graphics
     // board; the serial-console regressions turn it off, because the PROM
@@ -216,6 +217,8 @@ static void usage()
         "  --fbdump FILE     on exit, write Newport's frame buffer as a PPM.\n"
         "                    Once graphics are found the PROM moves its console\n"
         "                    there and the serial port goes quiet\n"
+        "  --viddump FILE    on exit, write what came out of the video PINS as a\n"
+        "                    PPM - the index after XMAP9 and CMAP, not the store\n"
         "  --fbindex         dump the colour index as grey, not the colour\n"
         "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
         "                    console on the serial port\n"
@@ -263,6 +266,7 @@ int main(int argc, char **argv)
         // Once Newport is fitted the PROM moves its console to the graphics
         // head, so the serial port stops being the whole story.
         else if (a == "--fbdump")     opt.fbdump = next("--fbdump");
+        else if (a == "--viddump")    opt.viddump = next("--viddump");
         else if (a == "--fbindex")    opt.fbindex = true;
         else if (a == "--no-gfx")     opt.gfx = false;
         else if (a == "--watch")       opt.watch.push_back(
@@ -755,6 +759,19 @@ int main(int argc, char **argv)
                static_cast<unsigned long long>(vidcap.vsyncs),
                static_cast<unsigned long long>(vidcap.de_rises),
                static_cast<unsigned long long>(vidcap.de_pixels));
+        // Per channel, because a dead one is invisible everywhere else. See
+        // sim_video_cap.h.
+        printf("video colour: %llu red, %llu green, %llu blue pixels\n",
+               static_cast<unsigned long long>(vidcap.chan[0]),
+               static_cast<unsigned long long>(vidcap.chan[1]),
+               static_cast<unsigned long long>(vidcap.chan[2]));
+    }
+
+    if (!opt.viddump.empty()) {
+        if (dump_video_ppm(opt.viddump, vidcap))
+            printf("video output written to %s\n", opt.viddump.c_str());
+        else
+            printf("could not write %s (no complete frame?)\n", opt.viddump.c_str());
     }
 
     if (!opt.fbdump.empty()) {

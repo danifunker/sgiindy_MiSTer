@@ -184,7 +184,21 @@ cputest-rex3-debug: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
-.PHONY: cputest gui vc2test cputest-rex3-debug all clean
+# --- the same harness with the Display Control Bus traced -----------------
+# np_rex3.sv and np_cmap.sv's `ifdef DCB_DEBUG blocks print one line per DCB
+# transfer - chip address, register select, width, swap and the whole 32-bit
+# datum - and one per byte the colour map receives. Everything on the Newport
+# board except REX3 is reached through that bus, so when a palette, a mode
+# table or a timing table is wrong this is the only place the wrongness is
+# visible: the transfer either carried the byte or it did not.
+#   make cputest-dcb-debug && ./obj_dir_dcbdbg/Vsim_top --prom ... 2>&1 | less
+cputest-dcb-debug: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_dcbdbg --top-module sim_top \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) +define+DCB_DEBUG \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
+
+.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal

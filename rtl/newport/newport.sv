@@ -87,6 +87,12 @@ module newport #(
     wire        hi_word = ~aoff[2];
     wire [12:0] r3_off  = {addr[12:3], aoff[2], 2'b00};
     wire [31:0] r3_wdata = aoff[2] ? wdata[31:0] : wdata[63:32];
+    // The four byte enables belonging to that word, [3] the most significant.
+    // `be[7-i]` guards byte i of the doubleword, so the high word's lanes are
+    // be[7:4] and the low word's are be[3:0]. REX3 needs them for exactly one
+    // register - DCBDATA0, whose datum has to be re-aligned to the top of the
+    // word before the Display Control Bus shifts it out. See np_rex3.sv.
+    wire  [3:0] r3_be   = aoff[2] ? be[3:0] : be[7:4];
 
     logic [31:0] r3_rdata;
     logic        r3_ack;
@@ -176,6 +182,7 @@ module newport #(
         .we        (we),
         .off       (r3_off),
         .wdata     (r3_wdata),
+        .be        (r3_be),
         .rdata     (r3_rdata),
         .ack       (r3_ack),
         .dcb_sel   (dcb_sel),

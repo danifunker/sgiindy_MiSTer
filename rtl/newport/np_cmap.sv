@@ -103,6 +103,11 @@ module np_cmap #(
             green_temp <= 8'h00;
             command    <= 8'h00;
         end else if (sel) begin
+`ifdef DCB_DEBUG
+            if (ENTRIES == 8192)
+                $display("[CMAP%0d] %s crs=%0d data=%02h ctr=%0d addr=%04h",
+                         REVISION[7:4], we ? "WR" : "RD", crs, wdata, rgb_ctr, paddr);
+`endif
             if (we) begin
                 case (crs)
                     3'd0: begin addr_lo <= wdata; rgb_ctr <= 2'd0; end

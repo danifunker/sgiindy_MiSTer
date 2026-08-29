@@ -52,6 +52,9 @@ module np_rex3 #(
     input  logic        we,
     input  logic [12:0] off,          // byte offset in the 8 KB window
     input  logic [31:0] wdata,
+    // The byte lanes this write actually carries, [3] the most significant.
+    // Only DCBDATA0 uses them, and it has to: see `dcb_align` below.
+    input  logic  [3:0] be,
     output logic [31:0] rdata,
     output logic        ack,
 
@@ -304,13 +307,16 @@ module np_rex3 #(
     // chip on the bus is byte-wide and takes them MSB first.
     wire dcb_is_vc2 = (dcbm_addr == 4'd0);
 
+    // DCBMODE[28] reverses the byte order WITHIN THE DATA WIDTH, and the PROM
+    // sets it for the two-byte palette-address write - which is the only
+    // transfer on the boot path that uses it.
     logic [31:0] dcb_swapped;
     always_comb begin
         case (dcbm_width)
             2'd2:    dcb_swapped = {dcb_data[23:16], dcb_data[31:24],
                                     dcb_data[7:0],   dcb_data[15:8]};
-            2'd3:    dcb_swapped = {dcb_data[7:0], dcb_data[15:8], dcb_data[23:16],
-                                    dcb_data[31:24]};
+            2'd3:    dcb_swapped = {dcb_data[15:8], dcb_data[23:16],
+                                    dcb_data[31:24], dcb_data[7:0]};
             2'd0:    dcb_swapped = {dcb_data[7:0], dcb_data[15:8],
                                     dcb_data[23:16], dcb_data[31:24]};
             default: dcb_swapped = dcb_data;
@@ -318,26 +324,43 @@ module np_rex3 #(
     end
     wire [31:0] dcb_val = dcbm_swap ? dcb_swapped : dcb_data;
 
-    // The byte the current beat carries. A transfer of n bytes sends the LOW
-    // n bytes of DCBDATA0, most significant of those first.
+    // The byte the current beat carries. THE DATUM IS LEFT-ALIGNED IN DCBDATA0
+    // AND THE BUS SHIFTS IT OUT FROM THE TOP, whatever the width.
     //
-    // RIGHT-ALIGNED, NOT LEFT. The driver stores a byte-wide datum through
-    // `rex->set.dcbdata0.bybyte.b3` - the register's least significant byte -
-    // and a halfword through `.byword` at the same end. Taking the byte from
-    // the top instead sends whatever was left in the register, which for the
-    // VC2 index register means every indexed access lands on register 0. The
-    // symptom is not a wrong pixel: it is Ng1RegisterInit reading DC_CONTROL
-    // back as zero, ORing its bits into that, and writing the video timing
-    // enable straight back off again a few thousand clocks after turning it
-    // on. See docs/16-newport-plan.md.
+    // That is not what the register holds when the CPU writes it. A byte store
+    // lands in the lane it addressed - the driver uses
+    // `rex->set.dcbdata0.bybyte.b3`, the register's least significant byte -
+    // and a halfword through `.byword` at the same end, so both arrive
+    // right-aligned. `dcb_align` below shifts them back up, which is exactly
+    // what IRIS does at its bus layer: write8 calls dcb_write(val << 24) and
+    // write16 calls it with val << ((offset & 2) << 3).
+    //
+    // TAKING THE LOW n BYTES INSTEAD IS ALMOST RIGHT, and that is what made it
+    // survive. For a byte transfer the two rules agree. For the halfword the
+    // PROM writes the palette address with, they disagree - and the PROM sets
+    // DCBMODE's SWAPENDIAN on that transfer, which swapped it back by
+    // accident. It is the THREE-byte transfer that has nowhere to hide:
+    // cmapSetRGB writes r, g and b as one word, 0xRRGGBB00, and taking the low
+    // three bytes sends (r, g, 0). Every colour in the machine lost its blue
+    // channel, so the whole screen came out yellow-green - a grey ramp read
+    // back as (n, n, 0) - and nothing failed, because a palette is only ever
+    // looked at.
+    function automatic logic [31:0] dcb_align(input logic [31:0] v,
+                                              input logic  [3:0] lanes);
+        if      (lanes[3]) dcb_align = v;                  // already at the top
+        else if (lanes[2]) dcb_align = {v[23:0],  8'h0};
+        else if (lanes[1]) dcb_align = {v[15:0], 16'h0};
+        else if (lanes[0]) dcb_align = {v[7:0],  24'h0};
+        else               dcb_align = v;
+    endfunction
+
     logic [7:0] dcb_beat;
-    wire  [2:0] beat_shift = dcb_nbytes - 3'd1 - dcb_byte;
     always_comb begin
-        case (beat_shift)
-            3'd0:    dcb_beat = dcb_val[7:0];
-            3'd1:    dcb_beat = dcb_val[15:8];
-            3'd2:    dcb_beat = dcb_val[23:16];
-            default: dcb_beat = dcb_val[31:24];
+        case (dcb_byte)
+            3'd0:    dcb_beat = dcb_val[31:24];
+            3'd1:    dcb_beat = dcb_val[23:16];
+            3'd2:    dcb_beat = dcb_val[15:8];
+            default: dcb_beat = dcb_val[7:0];
         endcase
     end
 
@@ -348,7 +371,22 @@ module np_rex3 #(
     // the index into [28:24] and the data into [23:8], which is not a byte
     // stream. Every other chip on the bus takes one byte at a time, in the low
     // byte, which is the end its driver stored it at.
-    assign dcb_wdata = (dcb_is_vc2 || dcb_word32) ? dcb_val : {24'h0, dcb_beat};
+    // VC2 takes a whole transfer of the declared width in one go rather than a
+    // byte stream, and its own decode expects the datum right-aligned - so the
+    // alignment above has to be undone for it, which is what IRIS's dcb_write
+    // does with `val >> 24` and `val >> 16` in its VC2 arm.
+    logic [31:0] dcb_vc2_val;
+    always_comb begin
+        case (dcbm_width)
+            2'd1:    dcb_vc2_val = {24'h0, dcb_val[31:24]};
+            2'd2:    dcb_vc2_val = {16'h0, dcb_val[31:16]};
+            default: dcb_vc2_val = dcb_val;
+        endcase
+    end
+
+    assign dcb_wdata = dcb_is_vc2  ? dcb_vc2_val
+                     : dcb_word32  ? dcb_val
+                     :               {24'h0, dcb_beat};
 
     // ======================================================================
     //  Draw engine
@@ -788,6 +826,7 @@ module np_rex3 #(
     logic        wr_held;
     logic [12:0] wr_off;
     logic [31:0] wr_data;
+    logic  [3:0] wr_lanes;
     logic        wr_go;
 
     wire engine_busy = (dr != DR_IDLE) || go_pending
@@ -796,6 +835,7 @@ module np_rex3 #(
     wire [12:0] wr_reg   = wr_held ? wr_off  : reg_off;
     wire [31:0] wr_val   = wr_held ? wr_data : wdata;
     wire        wr_isgo  = wr_held ? wr_go   : is_go;
+    wire  [3:0] wr_be    = wr_held ? wr_lanes : be;
 
 `ifdef REX3_DEBUG
     logic [31:0] rex3_gos;
@@ -833,7 +873,8 @@ module np_rex3 #(
             vrint <= 1'b0; videoint <= 1'b0;
             ack <= 1'b0; rdata <= 32'h0;
             go_pending <= 1'b0;
-            wr_held <= 1'b0; wr_off <= 13'h0; wr_data <= 32'h0; wr_go <= 1'b0;
+            wr_held <= 1'b0; wr_off <= 13'h0; wr_data <= 32'h0;
+            wr_lanes <= 4'h0; wr_go <= 1'b0;
 `ifdef REX3_DEBUG
             rex3_gos <= 32'd0;
 `endif
@@ -852,9 +893,10 @@ module np_rex3 #(
             // See the note on the graphics FIFO above `engine_busy`.
             if (sel && we && engine_busy) begin
                 wr_held <= 1'b1;
-                wr_off  <= reg_off;
-                wr_data <= wdata;
-                wr_go   <= is_go;
+                wr_off   <= reg_off;
+                wr_data  <= wdata;
+                wr_lanes <= be;
+                wr_go    <= is_go;
             end
             if (wr_apply) begin
                     wr_held <= 1'b0;
@@ -923,7 +965,10 @@ module np_rex3 #(
                         R_HOSTRW0:     hostrw0 <= wr_val;
                         R_HOSTRW1:     hostrw1 <= wr_val;
                         R_DCBMODE:     dcbmode <= wr_val;
-                        R_DCBDATA0:    begin dcbdata0 <= wr_val; dcb_start_wr <= 1'b1; end
+                        // Aligned on the way in, so the DCB sequencer and a
+                        // read-back both see what the bus will actually send.
+                        R_DCBDATA0:    begin dcbdata0 <= dcb_align(wr_val, wr_be);
+                                             dcb_start_wr <= 1'b1; end
                         R_DCBDATA1:    dcbdata1 <= wr_val;
                         R_SMASK1X:     smask1x <= wr_val;
                         R_SMASK1Y:     smask1y <= wr_val;
@@ -971,6 +1016,12 @@ module np_rex3 #(
             dcb_sel <= 1'b0;
             case (dcbst)
                 DCB_IDLE: begin
+`ifdef DCB_DEBUG
+                    if (dcb_start_wr || dcb_start_rd)
+                        $display("[DCB] %s addr=%0d crs=%0d width=%0d crsinc=%b data=%08h",
+                                 dcb_start_wr ? "WR" : "RD", dcbm_addr, dcbm_crs,
+                                 dcbm_width, dcbm_crsinc, dcbdata0);
+`endif
                     if (dcb_start_wr || dcb_start_rd) begin
                         dcb_is_read <= dcb_start_rd;
                         dcb_we      <= dcb_start_wr;

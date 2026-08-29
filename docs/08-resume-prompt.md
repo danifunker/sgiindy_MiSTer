@@ -796,8 +796,20 @@ Do not rediscover these:
   queue must stall the bus instead, which is what the part does when the FIFO
   fills — silently dropping the commands it cannot hold loses 13% of a boot's
   drawing and looks like nothing at all.
-- **The Display Control Bus is right-aligned.** A byte-wide DCB transfer
-  carries its datum in the LOW byte of `DCBDATA0` — the driver stores it
+- **The Display Control Bus shifts from the TOP of `DCBDATA0`, and the CPU
+  writes to the bottom.** A byte store lands in the lane it addressed - the
+  driver uses `.bybyte.b3` - so the datum has to be re-aligned to the top
+  before the bus sends it, which is what IRIS does at its bus layer and what
+  `dcb_align` in `np_rex3.sv` does here with the write's byte enables. Taking
+  the low n bytes instead agrees for a byte, is rescued for a halfword by
+  SWAPENDIAN, and drops the third byte of every three-byte colour write:
+  every colour in the machine lost its blue channel and the boot screen came
+  out yellow-green, with a perfect frame buffer dump and perfect geometry.
+  **A colour is not checkable from the frame buffer** - the store holds an
+  index. `--viddump` shows the pins; `--fbdump` shows the store.
+- **The old note, kept because it is the same bus and the first way it was
+  wrong:** a byte-wide DCB transfer carries its datum in the LOW byte of
+  `DCBDATA0` — the driver stores it
   through `rex->set.dcbdata0.bybyte.b3`, and a halfword through `.byword` at
   the same end. Taking the byte from the top instead sends whatever was left in
   the register, and the first casualty is VC2's index register: every indexed

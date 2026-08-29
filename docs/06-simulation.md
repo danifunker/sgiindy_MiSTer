@@ -237,7 +237,18 @@ that:
 |---|---|
 | `--no-gfx` | leave Newport unfitted. Every serial-console test in `tests/` passes this, because otherwise there is nothing to read |
 | `--fbdump FILE` | write the frame buffer as a binary PPM on exit. `sips -s format png` converts it |
+| `--viddump FILE` | write what came out of the video **pins** as a PPM: the index after XMAP9's mode table and CMAP's palette, one frame of whatever geometry the machine produced |
 | `--fbindex` | dump the colour index as grey rather than the 24-bit colour, which is what you want before a palette has been loaded |
+
+**`--fbdump` and `--viddump` are not the same picture, and the difference is a
+diagnostic.** The first is the frame buffer store, which in the PROM's 8-bit
+colour-index mode holds an index rendered as grey; the second is that index
+after the mode table chose how to read it and the palette turned it into
+colour. A fault in the palette, in the mode table, or in the channel order of
+the readout is invisible in one and unmissable in the other - which is how a
+Display Control Bus that dropped the third byte of every colour write was
+found. It made every colour on the screen lose its blue channel and turned the
+whole boot screen yellow-green, while the store dump looked perfect.
 
 The harness prints a video summary on every exit that fits a board:
 
@@ -274,6 +285,25 @@ so a trace line and the driver source together settle in minutes what a
 screenshot cannot settle at all. Three separate rasteriser defects survived a
 whole session of looking at the picture and none of them survived ten minutes
 of the trace.
+
+### The Display Control Bus
+
+`make -C verilator cputest-dcb-debug` builds the simulator with `DCB_DEBUG`
+enabled, in its own `obj_dir_dcbdbg`. It prints one line per Display Control
+Bus transfer and one per byte the colour map receives:
+
+```
+[DCB] WR addr=1 crs=2 width=3 crsinc=0 data=05050500
+[CMAP4] WR crs=2 data=05 ctr=0 addr=1d05
+[CMAP4] WR crs=2 data=05 ctr=1 addr=1d05
+[CMAP4] WR crs=2 data=00 ctr=2 addr=1d05
+```
+
+Four lines, and the bug is in them: the PROM asked for grey 5 and the third
+byte arrived as zero, because the datum is left-aligned in `DCBDATA0` and the
+bus shifts it out from the top. Everything on the Newport board except REX3 is
+reached through this bus, so when a palette, a mode table or a timing table is
+wrong, this is where the wrongness is either visible or ruled out.
 
 `tests/rex3_replay.py` closes the loop: it replays the trace into a model frame
 buffer and compares it against the one the run dumped, pixel for pixel.

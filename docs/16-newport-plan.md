@@ -265,18 +265,49 @@ the frame buffer instead. Every serial-console ratchet in `tests/` therefore
 passes `--no-gfx`, which is a real machine configuration and not a fiction: it
 is the machine every boot log in this repository before now was showing.
 
-**The Display Control Bus is right-aligned, and getting that wrong is almost
-invisible.** A byte-wide DCB transfer carries its datum in the LOW byte of
-`DCBDATA0` - the driver stores it through `rex->set.dcbdata0.bybyte.b3`, and a
-halfword through `.byword` at the same end. Taking the byte from the top
-instead sends whatever was left in the register, and the first thing that
-breaks is VC2's index register: every indexed access lands on register 0.
+**The Display Control Bus shifts its datum out from the TOP of `DCBDATA0`,
+and the datum has to be put there first.** A byte store lands in the lane it
+addressed - the driver uses `rex->set.dcbdata0.bybyte.b3`, the register's
+least significant byte, and a halfword through `.byword` at the same end - so
+what the register holds is right-aligned and what the bus sends is not. IRIS
+normalises at its bus layer, `dcb_write(val << 24)` for a byte and
+`val << ((offset & 2) << 3)` for a halfword, and then takes bytes MSB-first;
+this core does the same with the write's byte enables, which is the only place
+the access size is still known.
 
-The symptom was not a blank screen. It was `Ng1RegisterInit` reading
-`DC_CONTROL` back as zero, ORing its bits into that, and writing the video
-timing enable straight back **off** a few thousand clocks after turning it on -
-so the machine produced about eighty scan lines per boot instead of tens of
-thousands, and the picture that did come out looked like a timing bug.
+**Taking the low n bytes instead is almost right, which is why it survived
+twice.** For a byte transfer the two rules agree. For the halfword the PROM
+writes a palette address with they disagree - and the PROM sets DCBMODE's
+SWAPENDIAN on that transfer, which swapped it back by accident. It is the
+three-byte transfer that has nowhere to hide: `cmapSetRGB` writes r, g and b
+as one word, `0xRRGGBB00`, and the low three bytes are `(r, g, 0)`. Every
+colour in the machine lost its blue channel, a grey ramp read back as
+`(n, n, 0)`, and the whole boot screen came out yellow-green while the frame
+buffer dump, the geometry and the pixel counts were all perfect - because the
+store holds a colour *index* and only the palette was wrong.
+
+The first time this bus was got wrong the symptom was not a blank screen
+either. It was `Ng1RegisterInit` reading `DC_CONTROL` back as zero, ORing its
+bits into that, and writing the video timing enable straight back **off** a
+few thousand clocks after turning it on - so the machine produced about eighty
+scan lines per boot instead of tens of thousands, and the picture that did
+come out looked like a timing bug.
+
+`make -C verilator cputest-dcb-debug` exists because of the second time. Four
+lines of it are the whole diagnosis:
+
+```
+[DCB] WR addr=1 crs=2 width=3 crsinc=0 data=05050500
+[CMAP4] WR crs=2 data=05 ctr=0 addr=1d05
+[CMAP4] WR crs=2 data=05 ctr=1 addr=1d05
+[CMAP4] WR crs=2 data=00 ctr=2 addr=1d05
+```
+
+The PROM asked for grey 5 and the third byte arrived as zero. `--viddump` is
+the other half: it writes what came out of the *pins*, after the mode table
+and the palette, where `--fbdump` writes the store. A dead colour channel is
+unmissable in one and invisible in the other, and `tests/run-newport.sh` now
+asserts that all three carry pixels.
 
 `verilator/tb_vc2.cpp` exists because of that: it drives np_vc2's DCB port
 directly with a table of a known geometry, so the timing generator can be
