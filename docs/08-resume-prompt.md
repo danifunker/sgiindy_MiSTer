@@ -176,6 +176,68 @@ that boot.
 is completely untested, and `docs/13` is the argument for not leaving it that
 way.
 
+**Newport graphics are built, and the machine draws its own boot screen —
+correctly, at 1280x1024, checked pixel by pixel.** `rtl/newport/` is REX3, VC2,
+two XMAP9s, two CMAPs and a BT445 RAMDAC. The PROM finds the board, runs POST's
+graphics diagnostic on it and passes, initialises all five chips, clears the
+screen and draws the whole Indy splash: the gradient background, the hourglass,
+"Starting up the system...", the "Stop for Maintenance" button, "WELCOME TO
+INDY" and "Silicon Graphics Computer Systems", all in the PROM's own fonts.
+`tests/run-newport.sh` writes it to `tests/out/newport-fb.ppm`. VC2's timing
+generator walks the tables the PROM loads and drives real sync and display
+enable; `--fbdump FILE` writes the frame buffer as a PPM and the harness prints
+a video summary on every exit.
+
+**Finding the board moves the console off the serial port**, and that is the
+single most important thing to know about this. ARCS installs a
+DisplayController with `ConsoleOut|Output` and the PROM stops printing to the
+SCC entirely: the banner, POST, the menu and `hinv` are all drawn into the
+frame buffer. **Every serial-console test in `tests/` therefore passes
+`--no-gfx`**, which fits no graphics board — a real configuration, and the one
+every boot log in this repository before now was showing. `run-prom.sh` still
+passes, unchanged, in 56 seconds.
+
+**The two defects this file used to describe are closed, and they were five
+bugs, not two.** The frame was "a stable 1082 x 813 where the tables say
+1304 x 1065, short by about a fifth in both directions", and the drawing
+"smeared horizontally". Neither description survived contact with a
+measurement:
+
+- **1082 x 813 was a correct 1024x768 raster.** CMAP 1 reported monitor type 0,
+  which `Ng1DacInit` reads as "unknown", and on a Guinness the unknown arm
+  defaults to low resolution — so the PROM loaded `n1024_r3` and VC2 drew what
+  it was given. CMAP 1 now reports 10, the 16-inch Mitsubishi, which is what
+  IRIS reports and what selects n1280 at 60 Hz.
+- **A duration field of D was being held for D+1 two-pixel units.** Decode all
+  nineteen tables in `np_timing.h` and under the D rule each has a single line
+  total; under D+1 each has four or five. Every line of a raster is the same
+  length, so that settles it without reading a word of the specification.
+- **REX3's logic op is at `DRAWMODE1[31:28]`, not [15:12].** The low position
+  is COMPARE, which the PROM always sets to 7 to disable it, and 7 is OR — so
+  every filled box was OR-ed onto what was underneath. That is the "smear": OR
+  with the right colour is *mostly* the right colour, so the screen came out as
+  bands of nearly-right grey drifting by a bit or two across a span.
+- **REX3 had no graphics FIFO and no back-pressure.** `Ng1TpDrawbitmap` fires
+  sixteen `rex3SetAndGo(zpattern, ...)` with one `REX3WAIT` before them and
+  none between; without a queue the later ones landed on top of running spans
+  and 1317 of a boot's 10,412 GOs were dropped outright.
+- **`USER_STATUS` at 0x133C is an alias of `STATUS`**, and it was answering a
+  writable register of zero. `REX3WAIT` polls 0x133C, so the PROM was told the
+  engine was never busy and never waited for anything. This is the one that
+  made the other two possible.
+
+**`tests/run-rex3.sh` is the ratchet, and it is the strongest test in this
+repository.** It boots with `np_rex3.sv`'s `REX3_DEBUG` trace on — one line per
+accepted GO with every register the command depends on — and
+`tests/rex3_replay.py` replays all 10,412 commands into a model frame buffer
+and compares **every one of the 1,310,720 pixels**. Both of the rasteriser bugs
+above fail it; the FIFO one fails it by 1102 pixels, which is a number no
+eyeball finds on a 1280x1024 screen. `tests/run-newport.sh` now asserts the
+frame size exactly rather than with a threshold, and `make -C verilator
+vc2test` still drives the timing generator on its own in one second.
+`docs/16-newport-plan.md` has the whole scope, the format of the timing tables,
+and all of the above written out.
+
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
 `Cause.IP[6:2]`. The vendored CPU's two N64 interrupt lines were replaced with
@@ -200,11 +262,20 @@ What is *not* done, and is worth knowing before you plan anything:
 - **INT2 has three sources fitted** of the twenty-odd a real Indy has: SCSI0,
   the SCC and the keyboard controller. Everything else is a device that does
   not exist yet, and `ERR_STAT` is a real zero, so `Cause.IP6` never fires.
-- **No Ethernet or graphics.** SCSI is fitted; Newport and the SEEQ 8003 are
-  the two devices still answering as unclaimed cycles.
-- **SCSI writes are tested but narrow.** `tests/run-scsiwr.sh` does one
-  WRITE(6) of one block and reads it back. No multi-block write, no WRITE(10),
-  no descriptor chain longer than one data descriptor.
+- **No Ethernet.** The SEEQ 8003 at `0x1FBD4000` is the last device still
+  answering as an unclaimed cycle.
+- **Newport is a console, not a graphics card.** The cursor, the DID table,
+  24-bit RGB drawing, line and antialiased address modes, the colour DDAs,
+  blending, dithering and the GIO64 pixel-DMA path are all absent. Nothing the
+  PROM does needs any of them; everything IRIX does needs most of them. See
+  `docs/16-newport-plan.md`, milestone N4.
+- **No audio path.** `HAL2_REV` reports a processor that is not there.
+- **The SCSI data path is tested at width now, and it is correct.**
+  `tests/run-scsiwr.sh` is six phases: one block, four blocks, WRITE(10),
+  a three-descriptor scatter-gather chain, 16 KB over four descriptors each
+  way, and four 2048-byte logical blocks off the CD-ROM over a chain. Every
+  byte compares. What is still untested is *sustained* traffic - the installer
+  copies megabytes, and nothing here runs longer than 16 KB in one command.
 - **The SCSI message phases are minimal.** MESSAGE OUT receives and rejects
   anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
   COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
@@ -223,15 +294,20 @@ What is *not* done, and is worth knowing before you plan anything:
    `rtl/scsi/` or `rtl/sgi/hpc3_scsi_dma.sv`, and read it in full if SCSI is
    what you are here for: it is the only place the descriptor format, the
    arbiter's rules and the failed sync negotiation are written down.
-3. **`docs/02-address-map.md`** — the register map, now corrected against the
+3. **`docs/16-newport-plan.md`** — the graphics board as built: the five
+   chips, VC2's timing-table format, and every one of the five bugs finding
+   the picture wrong turned out to be. Read it before touching
+   `rtl/newport/`, and read the driver in `~/repos/irix-657m-src` before
+   reading a register map.
+4. **`docs/02-address-map.md`** — the register map, now corrected against the
    SGI chip specifications rather than the PROM's inventory.
-4. **`docs/10-r4300-integration.md`** — the CPU as built. The byte-lane
+5. **`docs/10-r4300-integration.md`** — the CPU as built. The byte-lane
    contract, the R4400 presentation, the bugs fixed in the vendored core.
-5. `docs/09-cpu-validation.md` — the test suite and the oracle policy. This is
+6. `docs/09-cpu-validation.md` — the test suite and the oracle policy. This is
    the document that determines *how you work*.
-6. `docs/06-simulation.md` — both harnesses, headless and interactive.
-7. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
-8. `docs/07-mister-port-plan.md` — the milestones.
+7. `docs/06-simulation.md` — both harnesses, headless and interactive.
+8. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
+9. `docs/07-mister-port-plan.md` — the milestones.
 
 ## Build and run
 
@@ -243,10 +319,13 @@ tests/uart/run.sh         # the harness's serial decoder, no simulator, ~1 s
 tests/run-scc.sh          # the Z8530, ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end, ~6 s
 tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it, ~12 s
-tests/run-scsiwr.sh       # a block written to a disk and read back, ~30 s
+tests/run-scsiwr.sh       # the SCSI data path, six phases wide, ~40 s
 tests/run-cdrom.sh        # a CD-ROM drive on ID 6, listed by hinv
 tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
-tests/run-prom.sh         # boot the PROM to the Command Monitor, ~50 s
+tests/run-prom.sh         # boot the PROM to the Command Monitor, ~56 s
+tests/run-newport.sh      # boot with graphics fitted, and check the picture
+tests/run-rex3.sh         # every pixel REX3 drew against every command it got
+make -C verilator vc2test && verilator/obj_dir_vc2/Vnp_vc2   # VC2's VTG, ~1 s
 tests/run-scsi.sh         # the same boot with a disk, and a block read off it
 
 make -C verilator cputest # headless simulator
@@ -288,6 +367,7 @@ The headless harness (`verilator/sim_cputest.cpp`) gives you:
 | `--hot` | the most-accessed addresses on exit |
 | `--watch HEX` | every bus access to HEX, repeatable. PROM text is uncached, so this is a PC watch: zero hits means a routine was never reached |
 | `make -C verilator cputest-dma-debug` | the same harness with the SCSI DMA engine's per-cycle state trace, in its own `obj_dir_dmadbg` |
+| `make -C verilator cputest-rex3-debug` | the same harness with one line per REX3 drawing command, in its own `obj_dir_rex3dbg`. `tests/rex3_replay.py` turns that into a frame buffer and compares |
 | `--uart` | decode the SCC's `txdb` line and compare it with the byte tap |
 | `--testdev` | fit the IRIS test device in GIO64 slot 0 |
 | `--no-icache`, `--no-dcache` | run with one or both primary caches off |
@@ -295,6 +375,9 @@ The headless harness (`verilator/sim_cputest.cpp`) gives you:
 | `--type STR` | type STR at the console once it goes quiet |
 | `--type-on TRIG STR` | the same, but only after TRIG has appeared in the output |
 | `--irq` | one line per change of INT2's five lines, with the status and mask that decided them |
+| `--no-gfx` | leave Newport unfitted, which keeps the PROM's console on the serial port. Every serial ratchet needs this |
+| `--fbdump FILE` | write Newport's frame buffer as a PPM on exit |
+| `--fbindex` | dump the colour index as grey rather than the colour |
 
 **The unclaimed-address summary is printed on every exit and is the tool that
 built the chipset.** It lists every bus cycle no device answered, grouped by
@@ -464,36 +547,46 @@ exception frame is well formed. This is a null pointer in the guest, not a
 CPU fault. `HPC3 bus error status register: 0x0` says the chipset did not
 report a bus error either.
 
-**The leading hypothesis, and the reason it is strong: the crash is immediately
-after `Copy complete`.** The copy is the first substantial *write* this core
-has ever done, and the write path is barely tested - `tests/run-scsiwr.sh` is
-exactly one WRITE(6) of one block. Multi-block writes, WRITE(10), and
-descriptor chains with more than one data descriptor are all untried. If the
-copy put corrupted data on the disk, the installer then read or executed it and
-found a zero where a pointer should have been.
+**THE LEADING HYPOTHESIS HAS BEEN TESTED AND IT IS WRONG.** This file used to
+say the crash was probably corrupted data - the copy being the first
+substantial write this core had ever done, against a write path covered by
+exactly one WRITE(6) of one block, and the CD read path covered by nothing at
+all. That was a reasonable place to look and it was the first thing to widen.
+`tests/run-scsiwr.sh` is now six phases:
 
-The second candidate is the other direction: **no block has ever been read off
-the CD-ROM in a test**. `tests/run-cdrom.sh` says so out loud - it proves the
-drive is listed, not that the 2048-byte logical block path works. The copy
-reads from the CD and writes to the disk, so both newly-exercised directions
-are in the path, at a scale nothing has covered.
+| phase | what it does |
+|---|---|
+| 1 | one block, WRITE(6)/READ(6), one descriptor |
+| 2 | four blocks in one WRITE(6), so the target advances its own LBA |
+| 3 | four blocks through WRITE(10)/READ(10) - a ten-byte CDB |
+| 4 | four blocks out over three data descriptors, back over two |
+| 5 | **16 KB** over four descriptors each way, WRITE(10) |
+| 6 | four 2048-byte logical blocks off the **CD-ROM**, over a chain |
+
+**Every byte of all six compares, first time.** The patterns are per-phase
+seeded and byte-asymmetric, the CD read is at a non-zero LBA so a missing x4
+scale would show, and the descriptor splits differ between the write and the
+read so a chaining bug cannot cancel itself. So the data path is not where the
+installer's null pointer comes from, at least at that scale.
+
+**What that leaves.** In rough order of how much they are worth:
+
+1. **Sustained traffic.** The installer copies megabytes; the widest thing
+   tested is one 16 KB command. Something that only fails after thousands of
+   commands - a descriptor pool that wraps, an interrupt that is missed under
+   load, the message phases under repetition - is still open.
+2. **The GIO DMA engine in the MC is a stub that reports success.** The PROM's
+   boot memory clear "works" and clears nothing. A null pointer is what an
+   uninitialised *pointer* looks like, and a machine whose memory clear is a
+   lie is a machine where anything that expected zeroed memory got whatever
+   was there. This is now the most suspicious thing in the core that the
+   installer touches and nothing tests.
+3. **The message phases are minimal.** Nothing disconnects and reselects. A
+   target that never disconnects is legal, and IRIX's driver may or may not
+   care - but the installer is the first software here that would notice.
 
 Do not start from the CPU. It passes 2161/3 including the TLB tests, and the
 exception it produced is correct for the address that was loaded.
-
-**Where to start, in order:**
-
-1. **Widen `tests/run-scsiwr.sh` to a multi-block write** - several blocks in
-   one WRITE(6), then WRITE(10), then a descriptor chain with more than one
-   data descriptor - and read every block back. This is the cheapest test of
-   the most suspicious path.
-2. **Read a block off the CD-ROM and compare it.** `tests/run-cdrom.sh` builds
-   a patterned ISO precisely so that a test which reads it can fail; nothing
-   reads it yet.
-3. **Compare the two paths against each other.** The same image mounted as a
-   disk on ID 1 and as a CD-ROM on ID 6 must produce identical bytes. It did
-   for `sashARCS` - the byte counts matched exactly - so that comparison
-   already works once and can be extended to bulk data.
 
 The image and the exact steps are reproducible: `IRIX 5.3 XFS.iso` on ID 6 as a
 CD-ROM, a writable disk on ID 1, maintenance menu option 2.
@@ -505,23 +598,21 @@ CD-ROM, a writable disk on ID 1, maintenance menu option 2.
    path is the difference between a machine that remembers a `setenv` and one
    that does not.
 
-2. **Read a block off the CD-ROM.** The drive is listed and answers INQUIRY,
-   TEST UNIT READY and MODE SELECT, but no data has ever come off it, so the
-   2048-byte logical block path is untested end to end. This is the same shape
-   of gap DATA OUT was, and `tests/run-scsiwr.sh` is the pattern to copy.
-3. **Widen the SCSI write path.** One WRITE(6) of one block is tested. A
-   multi-block write, WRITE(10), and a descriptor chain with more than one data
-   descriptor are all still untried, and the four bugs above are the argument
-   for trying them.
-3. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
-   and a start reports instant completion; no data moves.
-4. **Ethernet**, the last device still answering as an unclaimed cycle
+2. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
+   and a start reports instant completion; no data moves - so the PROM clears
+   nothing and believes it did. See the installer section above: this is now
+   the most suspicious untested thing the installer touches.
+3. **Ethernet**, the last device still answering as an unclaimed cycle
    (`0x1FBD4000`, SEEQ 8003).
-5. **Newport**, which is the rest of the machine, and `sgiindy.sv`'s real top
-   level - still the stock MiSTer template, so nothing has been through Quartus
-   and no resource numbers exist. The MiSTer N64 core runs this same CPU at
-   93.75 MHz on a DE10-Nano (`N64_MiSTer/rtl/pll.v`), which is the only real
-   evidence available about what this design might close timing at.
+4. **`sgiindy.sv`'s real top level.** Newport is built and drawing correctly,
+   but the MiSTer wrapper is still the stock template: nothing hands anything
+   to `VGA_*`, and the frame buffer needs the DDR3 mux
+   `N64_MiSTer/rtl/DDR3Mux.vhd` is the precedent for. `syn/` has been through
+   Quartus and the numbers are recorded there.
+5. **The rest of Newport** - the cursor, the DID table, 24-bit RGB drawing, the
+   line address modes, the colour DDAs, blending and the GIO64 pixel-DMA path.
+   Nothing the PROM does needs any of them; most of what IRIX does does. See
+   `docs/16-newport-plan.md`, milestone N4.
 
 ### Things to ask the user for
 
@@ -684,6 +775,44 @@ Do not rediscover these:
   device timing from the console will mislead you - it already did once, and
   the wrong conclusion was written into this file. `--irq` and
   `tests/run-int.sh` are the tools that answer interrupt questions.
+- **A picture is not a test, and three Newport bugs proved it.** The logic op
+  read from the wrong bits, a missing graphics FIFO and a status register that
+  never reported busy all produced a screen that a human looked at and called
+  "smeared" — a description that fits about forty different causes and none of
+  them precisely. What settled it in minutes was `+define+REX3_DEBUG`: one line
+  per drawing command, compared against `ng1_tp.c`, then replayed in Python and
+  diffed against the frame buffer. **Before theorising about a wrong picture,
+  print what the engine was asked to draw.** `tests/run-rex3.sh` is that, kept.
+- **A device model that reports "not busy" is worse than one that hangs.**
+  REX3's `USER_STATUS` answered zero, so `REX3WAIT` returned immediately, so
+  the PROM wrote registers into running commands for as long as this core has
+  had graphics. Nothing failed; the machine just drew slightly wrong things
+  slightly too often. When a driver polls a status bit, check that the bit can
+  actually be set — an alias register decoded as its own storage will read a
+  perfectly plausible zero forever.
+- **Where a driver batches writes, the hardware has a queue.** Sixteen
+  `rex3SetAndGo`s in a row with one wait in front of them is not sloppy driver
+  code, it is a driver written against a 60-deep FIFO. A model without the
+  queue must stall the bus instead, which is what the part does when the FIFO
+  fills — silently dropping the commands it cannot hold loses 13% of a boot's
+  drawing and looks like nothing at all.
+- **The Display Control Bus is right-aligned.** A byte-wide DCB transfer
+  carries its datum in the LOW byte of `DCBDATA0` — the driver stores it
+  through `rex->set.dcbdata0.bybyte.b3`, and a halfword through `.byword` at
+  the same end. Taking the byte from the top instead sends whatever was left in
+  the register, and the first casualty is VC2's index register: every indexed
+  access lands on register 0. The symptom was not a blank screen but
+  `Ng1RegisterInit` reading `DC_CONTROL` back as zero, ORing its bits into
+  that, and writing the video timing enable straight back **off** a few
+  thousand clocks after turning it on — eighty scan lines a boot instead of
+  tens of thousands, looking exactly like a timing bug.
+- **`~/repos/irix-657m-src` is the IRIX 6.5.7m source and it contains the
+  PROM's own drivers.** `stand/arcs/lib/libsk/graphics/NEWPORT/` is the code
+  this PROM image runs for graphics, and
+  `stand/arcs/ide/fforward/graphics/NEWPORT/` is the diagnostic POST runs on
+  it. Read those before reading a register map: `test_rex3` in `rex3.c` is
+  where every REX3 register's real width is written down, and it is the reason
+  POST's graphics test passes.
 - **Three clocks run fast in simulation** and are parameterised so hardware
   keeps the real value: `sclk`, `RTC_TICK_DIV` and `PIT_TICK_DIV`. See
   `docs/12-chipset.md` — `calibrate_delay` restarts forever if the 8254 is made

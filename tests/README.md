@@ -1,16 +1,27 @@
 # Tests
 
-Seven regressions, all headless.
+Eleven regressions, all headless.
 
 ```sh
 tests/uart/run.sh         # the harness's serial decoder, no simulator       ~1 s
+make -C verilator vc2test && verilator/obj_dir_vc2/Vnp_vc2   # VC2's timing generator
 tests/run-scc.sh          # the Z8530, driven the way the PROM drives it     ~4 s
 tests/run-int.sh          # INT2 to an Interrupt exception, end to end       ~6 s
 tests/run-dma.sh          # the HPC3 SCSI DMA channel, no SCSI in it        ~12 s
+tests/run-scsiwr.sh       # a block written to a disk and read back         ~30 s
 tests/run-cputest.sh      # the 240-test MIPS III/IV suite, on the core     ~35 s
 tests/run-prom.sh         # boot the real IP24 PROM to the Command Monitor
 tests/run-scsi.sh         # the same boot with a disk on it, and a block read
+tests/run-cdrom.sh        # the same boot with a CD-ROM drive on ID 6
+tests/run-newport.sh      # the same boot with graphics, and the picture
+tests/run-rex3.sh         # every pixel REX3 drew against every command it got
 ```
+
+**Everything except the last two passes `--no-gfx`**, and that is not a
+shortcut: the moment ARCS finds a graphics board the PROM moves its console
+onto it and the serial port goes quiet. A serial ratchet has to fit a machine
+with no graphics card, which is a real configuration and the one every boot log
+in this repository showed before Newport existed.
 
 ## `run-cputest.sh` — the CPU
 
@@ -158,11 +169,66 @@ The boot is now free of SCSI errors entirely, and the forbidden list says so:
 real until the SCSI message phases were built — the PROM negotiates synchronous
 transfer and the target had nowhere to receive the message.
 
-**`hinv` still lists no disk**, and this script deliberately does not assert
-anything about that. Two theories about why have already been wrong: the failed
-negotiation was not it, and neither is "this PROM's `hinv` does not report
-SCSI". The disk is missing from the ARCS device tree.
+**`hinv` lists the disk, and this script asserts it.** It always did: three
+successive theories about why the disk was "missing from the ARCS device tree"
+were all wrong, because the harness was stopping the run on `Mbytes` and the
+PROM prints the SCSI lines *after* `Memory size:`. Nobody checked whether the
+line was being printed before working out why it was not.
 See `docs/13-scsi-dma-plan.md`.
+
+## `run-scsiwr.sh` — the SCSI data path, in both directions
+
+Six phases against two targets, all bare metal, no PROM:
+
+| phase | what it does |
+|---|---|
+| 1 | one block, WRITE(6)/READ(6), one descriptor |
+| 2 | four blocks in one WRITE(6), so the target advances its own LBA |
+| 3 | four blocks through WRITE(10)/READ(10) — a ten-byte CDB, which is a different length decode in both the WD33C93B and the target |
+| 4 | four blocks out over three data descriptors, back over two |
+| 5 | 16 KB over four descriptors each way |
+| 6 | four 2048-byte logical blocks off the CD-ROM on ID 6, over a chain |
+
+Three details are load-bearing and a casual version of this test misses all
+three. **The pattern is seeded per phase**, so a transfer that moved nothing
+cannot pass on the previous phase's bytes still sitting in the buffer. **The
+descriptor splits differ between the write and the read**, so a chaining bug
+cannot cancel itself. And **the CD read is at a non-zero LBA**, because
+`scsi.v` multiplies a CD-ROM's logical block number by four to reach the
+512-byte host blocks behind it, and at LBA 0 a missing multiply and a correct
+one give the same answer.
+
+Phase 1 found four bugs when it was written, three of them in code every boot
+runs. Phases 2 to 6 were added to test the leading theory about why the IRIX
+5.3 installer panics after "Copy complete" — and they passed first time, which
+means that theory is wrong. See `docs/13-scsi-dma-plan.md`.
+
+## `run-newport.sh` — the picture
+
+The same boot with a graphics board fitted, which moves the console off the
+serial port entirely, so every assertion is made on the **video output pins**
+and the frame buffer instead of on text. The frame size is checked exactly —
+1318 x 1065, which is what walking `n1280_r3` out of `np_timing.h` by hand
+gives — because VC2's timing generator is an interpreter for a table the PROM
+loads, and for an interpreter "close" is a bug. The frame buffer is written to
+`tests/out/newport-fb.ppm` so a failure can be looked at.
+
+## `run-rex3.sh` — every pixel against every command
+
+The strongest test here, and the only one that can tell a rasteriser drawing
+the wrong thing from one drawing the right thing. It boots with `np_rex3.sv`'s
+`REX3_DEBUG` trace on — one line per accepted drawing command, carrying every
+register that command depends on — and `tests/rex3_replay.py` replays those
+commands into a model frame buffer and compares it with the one the run dumped.
+A current boot is 10,412 commands and all 1,310,720 pixels, with none left
+unchecked.
+
+It exists because **three separate defects survived a whole session of looking
+at the picture**: the logic op decoded from the wrong bits of `DRAWMODE1`, a
+missing graphics FIFO that dropped 13% of a boot's drawing commands, and a
+`USER_STATUS` alias answering zero so `REX3WAIT` never waited. None of them
+made the machine hang, fail POST, or print anything wrong. All three fail this
+test, one of them by 1102 pixels.
 
 ## `uart/run.sh` — the harness itself
 
