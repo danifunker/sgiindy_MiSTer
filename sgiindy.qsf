@@ -15,6 +15,14 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 
 set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Standard Edition"
 
+# THE VENDORED CPU IS VHDL-2008 AND WILL NOT PARSE AS ANYTHING ELSE. cpu.vhd
+# uses sized bit-string literals - `mul1 <= 40x"0" & ...` - which are a 2008
+# construct, and without this the very first compile stops with 59 syntax
+# errors on lines that are perfectly good VHDL. syn/sgiindy_syn.qsf has carried
+# this since the CPU first went through Quartus; the root project did not,
+# because the root project had never been compiled.
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
+
 set_global_assignment -name GENERATE_RBF_FILE ON
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
