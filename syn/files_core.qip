@@ -28,6 +28,20 @@ set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/scsi/wd33c93.sv
 set_global_assignment -name VERILOG_FILE      ../rtl/scsi/scsi.v
 set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/scsi/cd_audio.sv
 
+# --- Newport graphics ----------------------------------------------------
+# sgi_indy instantiates `newport` unconditionally - `gfx_present` gates what
+# answers on the bus, not whether the board is built - so these belong in the
+# fit whether or not the wrapper drives them. The frame buffer is NOT in here:
+# it is 10 MB and lives in external memory on hardware, so what these files
+# add is the rasteriser, the timing generator and the palettes, not storage.
+set_global_assignment -name SEARCH_PATH ../rtl/newport
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/newport.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/np_rex3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/np_vc2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/np_xmap9.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/np_cmap.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../rtl/newport/np_bt445.sv
+
 # --- CPU: the MiSTer N64 project's R4300i, vendored as VHDL --------------
 # Order matters: packages and leaf entities before the units that use them.
 # The `mem` library holds the primitives cpu.vhd instantiates as

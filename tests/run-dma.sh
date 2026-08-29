@@ -35,7 +35,11 @@ fi
 
 [[ -x "$SIM" ]] || { echo "no $SIM" >&2; exit 2; }
 
-out="$("$SIM" --elf "$ELF" --testdev --max-cycles 200000000 --stuck 20000000 2>&1)"
+out="$(# --no-gfx leaves Newport unfitted. A real Indy always has a graphics
+# board, and the PROM moves its console to it the moment it finds one -
+# so a serial-console ratchet has to ask for the machine that talks to a
+# terminal. tests/run-newport.sh is the one that fits the board.
+"$SIM" --elf "$ELF" --testdev --no-gfx --max-cycles 200000000 --stuck 20000000 2>&1)"
 rc=$?
 echo "$out"
 echo

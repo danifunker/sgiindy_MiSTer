@@ -15,7 +15,7 @@ V_INC = +incdir+$(RTL)
 V_DEFINE = +define+SIMULATION=1 \
 	-CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g" \
 	--timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
-	-I$(RTL) -I$(RTL)/sgi -I$(RTL)/cpu \
+	-I$(RTL) -I$(RTL)/sgi -I$(RTL)/cpu -I$(RTL)/newport \
 	--timing
 
 # Warnings that don't affect simulation correctness in this style of RTL.
@@ -113,6 +113,12 @@ CPUTEST_V = \
 	$(RTL)/sgi/eeprom_93c56.sv \
 	$(RTL)/sgi/sgi_scc.sv \
 	$(RTL)/sgi/z8530_scc.sv \
+	$(RTL)/newport/newport.sv \
+	$(RTL)/newport/np_rex3.sv \
+	$(RTL)/newport/np_vc2.sv \
+	$(RTL)/newport/np_xmap9.sv \
+	$(RTL)/newport/np_cmap.sv \
+	$(RTL)/newport/np_bt445.sv \
 	$(RTL)/cpu/r4300_bus.sv \
 	$(RTL)/cpu/generated/r4300_wrap.v
 
@@ -155,7 +161,30 @@ gui: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o ../obj_dir/Vsim_gui $(CPUTEST_V) $(GUI_C)
 
-.PHONY: cputest gui all clean
+# --- VC2 video timing generator unit test ---------------------------------
+# The timing generator is an interpreter for a table in VC2's external SRAM.
+# This drives it directly with a table of a known geometry, so a wrong picture
+# in a boot can be attributed to the walk or ruled out of it.
+#   make vc2test && ./obj_dir_vc2/Vnp_vc2
+vc2test:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_vc2 --top-module np_vc2 \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vnp_vc2 $(RTL)/newport/np_vc2.sv tb_vc2.cpp
+
+# --- the same harness with REX3's per-command trace ------------------------
+# np_rex3.sv's `ifdef REX3_DEBUG block prints one line per accepted GO: the
+# drawmode words, the two corners, the octant, the z-pattern and the colour.
+# A wrong picture is nearly always a command the engine was given rather than
+# one it mishandled, and ng1_tp.c is right there to compare against.
+#   make cputest-rex3-debug && ./obj_dir_rex3dbg/Vsim_top --prom ... 2>&1 | less
+cputest-rex3-debug: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3dbg --top-module sim_top \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) +define+REX3_DEBUG \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
+
+.PHONY: cputest gui vc2test cputest-rex3-debug all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal

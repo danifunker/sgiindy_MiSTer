@@ -45,3 +45,8 @@ tests/disks/
 
 # a scratch install target; 2 GB sparse, not something to track
 disks/
+
+# The VC2 timing generator unit test builds into its own directory.
+verilator/obj_dir_vc2/
+# So does the simulator with REX3's per-command trace compiled in.
+verilator/obj_dir_rex3dbg/

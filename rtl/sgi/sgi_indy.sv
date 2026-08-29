@@ -109,6 +109,40 @@ module sgi_indy #(
     input  logic [63:0] prom_rdata,
     input  logic        prom_ack,
 
+    // Whether a graphics board is fitted. A real Indy always has one, and on
+    // hardware this is tied high; the harness can clear it because the PROM
+    // moves its console to the graphics head the moment it finds Newport, and
+    // every serial-console regression in tests/ would otherwise be testing a
+    // machine that has stopped talking to it. A board-less Indy is a real
+    // configuration, not a fiction - it is what every boot log in this
+    // repository before now was showing.
+    input  logic        gfx_present,
+
+    // ---- Newport's frame buffer -----------------------------------------
+    // Two ports, because the frame buffer is VRAM: the rasteriser owns the
+    // random port and the display owns the serial one, and they run at the
+    // same time. See rtl/newport/newport.sv.
+    output logic        fbw_req,
+    output logic        fbw_we,
+    output logic [31:0] fbw_addr,
+    output logic [63:0] fbw_wdata,
+    output logic  [7:0] fbw_be,
+    input  logic [63:0] fbw_rdata,
+    input  logic        fbw_ack,
+    output logic        fbr_req,
+    output logic [31:0] fbr_addr,
+    input  logic [63:0] fbr_rdata,
+    input  logic        fbr_ack,
+
+    // ---- video out -------------------------------------------------------
+    output logic        vid_ce_pix,
+    output logic        vid_hsync,
+    output logic        vid_vsync,
+    output logic        vid_de,
+    output logic  [7:0] vid_r,
+    output logic  [7:0] vid_g,
+    output logic  [7:0] vid_b,
+
     // ---- GIO64 expansion slot 0 -----------------------------------------
     output logic        gio_req,
     output logic        gio_we,
@@ -315,14 +349,11 @@ module sgi_indy #(
     // be taken out of HPC3's range rather than sitting beside it. `claimed`
     // then subtracts the parts of HPC3 that are not modelled yet, so they keep
     // showing up as unclaimed cycles instead of quietly reading back zero.
-    // Newport is not modelled at all, and the window reads back zero rather
-    // than being left unclaimed. That is not cosmetic: the PROM polls REX3's
-    // STATUS at 0x1F0F1338 for the engine to go idle, up to 100000 times, and
-    // an unclaimed cycle answers 0xFFFFFFFF - busy, forever. Zero makes every
-    // one of those waits fall straight through to the "graphics failed" path,
-    // which is the right answer for a machine with no graphics board and turns
-    // several hundred thousand wasted bus cycles into none. A real Indy always
-    // has graphics; modelling it is M6 work (docs/02-address-map.md).
+    // Newport claims the whole 1 MB window. Only REX3 at 0x1F0F0000 is real;
+    // the rest of it answers zero from inside newport.sv rather than being
+    // left unclaimed, because an unclaimed read answers all ones and REX3's
+    // STATUS at 0x1F0F1338 would then read busy forever - the PROM polls it
+    // 100000 times before giving up. See docs/16-newport-plan.md.
     assign sel_gfx   = (bus_addr >= GFX_BASE)  && (bus_addr < GFX_BASE + GFX_SIZE);
     assign sel_rtc   = (bus_addr >= RTC_BASE)  && (bus_addr < RTC_BASE + RTC_SIZE);
     assign sel_hpc3  = (bus_addr >= HPC3_BASE) && (bus_addr < HPC3_BASE + HPC3_SIZE)
@@ -672,6 +703,51 @@ module sgi_indy #(
     );
 
     //------------------------------------------------------------------
+    // Newport graphics
+    //------------------------------------------------------------------
+    logic [63:0] gfx_rdata;
+    logic        gfx_ack;
+    logic        gfx_absent_ack;
+
+    // With no board fitted the window still answers zero rather than being
+    // left unclaimed: REX3's STATUS reads busy forever if an unclaimed cycle
+    // answers all ones, and the PROM polls it 100000 times before giving up.
+    always_ff @(posedge clk)
+        gfx_absent_ack <= !reset && bus_req && sel_gfx && !gfx_present;
+
+    newport #(.FB_BASE(32'h0000_0000)) u_newport (
+        .clk       (clk),
+        .reset     (reset),
+        .sel       (bus_req && sel_gfx && gfx_present),
+        .we        (bus_we),
+        .addr      (bus_addr[19:0]),
+        .aoff      (bus_aoff),
+        .be        (bus_be),
+        .wdata     (bus_wdata),
+        .rdata     (gfx_rdata),
+        .ack       (gfx_ack),
+        .fbw_req   (fbw_req),
+        .fbw_we    (fbw_we),
+        .fbw_addr  (fbw_addr),
+        .fbw_wdata (fbw_wdata),
+        .fbw_be    (fbw_be),
+        .fbw_rdata (fbw_rdata),
+        .fbw_ack   (fbw_ack),
+        .fbr_req   (fbr_req),
+        .fbr_addr  (fbr_addr),
+        .fbr_rdata (fbr_rdata),
+        .fbr_ack   (fbr_ack),
+        .ce_pix    (vid_ce_pix),
+        .hsync     (vid_hsync),
+        .vsync     (vid_vsync),
+        .de        (vid_de),
+        .vid_r     (vid_r),
+        .vid_g     (vid_g),
+        .vid_b     (vid_b),
+        .gfx_irq   ()
+    );
+
+    //------------------------------------------------------------------
     // Response mux
     //------------------------------------------------------------------
     // Devices that answer combinationally get their ack generated here, one
@@ -679,18 +755,15 @@ module sgi_indy #(
     logic        none_ack;
     logic        gio_absent_ack;
     logic        mem_hole_ack;
-    logic        gfx_ack;
 
     always_ff @(posedge clk) begin
         none_ack       <= 1'b0;
         gio_absent_ack <= 1'b0;
         mem_hole_ack   <= 1'b0;
-        gfx_ack        <= 1'b0;
         bus_unclaimed  <= 1'b0;
 
         if (!reset && bus_req) begin
             if (sel_ram && !mem_hit) mem_hole_ack <= 1'b1;
-            if (sel_gfx)             gfx_ack      <= 1'b1;
             if (sel_gio && !gio_present) gio_absent_ack <= 1'b1;
             if (sel_none) begin
                 none_ack      <= 1'b1;
@@ -706,11 +779,12 @@ module sgi_indy #(
 
     assign bus_ack   = cpu_ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
                      | ioc_ack | rtc_ack | scc_ack | kbd_ack | scsi_ack | none_ack | gio_absent_ack
-                     | mem_hole_ack | gfx_ack;
+                     | mem_hole_ack | gfx_ack | gfx_absent_ack;
 
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
     // read shift in r4300_bus lands on it whichever word was addressed.
-    assign bus_rdata = (mem_hole_ack | gfx_ack) ? 64'h0
+    assign bus_rdata = (mem_hole_ack | gfx_absent_ack) ? 64'h0
+                     : gfx_ack  ? gfx_rdata
                      : cpu_ram_ack ? ram_rdata
                      : prom_ack ? prom_rdata
                      : gio_ack  ? gio_rdata

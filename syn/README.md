@@ -14,6 +14,15 @@ It does now. It did not at first, and the difference is not a smaller design -
 it is the same design with three memories that Quartus can actually recognise
 as memories.
 
+**THE NUMBERS BELOW PREDATE NEWPORT.** `syn/files_core.qip` now pulls in
+`rtl/newport/` because `sgi_indy` instantiates it, and nothing here has been
+back through Quartus since. What that adds is a rasteriser, a timing generator
+whose external SRAM is 32K x 16, and two 8192-entry palettes - about 900 Kbit
+of memory that should infer as M10K (none of those arrays is cleared by a
+reset loop, which is the whole lesson below) plus the logic around them. The
+frame buffer itself is not in the project and never will be: it is 10 MB and
+lives in external memory.
+
 Quartus Prime 17.0.2 Lite, `5CSEBA6U23I7`, `syn_top`:
 
 | | ALMs | registers | M10K | block mem bits | Fmax |

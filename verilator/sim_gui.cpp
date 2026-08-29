@@ -41,6 +41,7 @@
 #include "sim_scsi.h"
 #include "sim_uart.h"
 #include "sim_ps2.h"
+#include "sim_video_cap.h"
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -198,6 +199,8 @@ int main(int argc, char **argv)
 
     std::string prom_path, elf_path;
     uint32_t boot_pc = 0xBFC00000, ram_mb = 64;
+    // Newport fitted. Off puts the PROM console back on the serial port.
+    bool gfx_present = true;
     bool testdev = false, start_running = false;
     struct Mount { int id; std::string path; bool rw; };
     std::vector<Mount> disks;
@@ -212,6 +215,7 @@ int main(int argc, char **argv)
         else if (a == "--elf")     elf_path  = next("--elf");
         else if (a == "--boot-pc") boot_pc   = strtoul(next("--boot-pc"), nullptr, 0);
         else if (a == "--testdev") testdev   = true;
+        else if (a == "--no-gfx")  gfx_present = false;
         else if (a == "--run")     start_running = true;
         else if (a == "--ram-mb")  ram_mb    = strtoul(next("--ram-mb"), nullptr, 0);
         else if (a == "--disk") {
@@ -240,6 +244,7 @@ int main(int argc, char **argv)
 
     g_dev.ram.resize((size_t)ram_mb * 1024 * 1024);
     g_dev.prom.resize(512 * 1024);
+    g_dev.vram.resize(sgisim::VRAM_BYTES);
     g_dev.testdev.present = testdev;
 
     for (auto &d : disks) {
@@ -311,6 +316,7 @@ int main(int argc, char **argv)
     top->boot_pc = boot_pc;
     top->mem_mb  = ram_mb;
     top->gio_present = testdev ? 1 : 0;
+    top->gfx_present = gfx_present ? 1 : 0;
     top->icache_en = 1;
     top->dcache_en = 1;
     top->rxdb = 1;
@@ -319,6 +325,16 @@ int main(int argc, char **argv)
     Ps2Injector ps2;
     bool ps2_grab = false;
     uint8_t mouse_buttons = 0;
+
+    // What the monitor sees, built from the video output pins. See
+    // sim_video_cap.h for why it is the pins and not the frame buffer.
+    VideoCapture vidcap;
+    GLuint vid_tex = 0, vram_tex = 0;
+    std::vector<uint32_t> vram_rgba;
+    bool     vid_show_vram = false;   // raw frame buffer instead of the pins
+    bool     vid_index     = false;   // show the colour index as grey
+    float    vid_zoom      = 0.5f;
+    uint64_t vram_last_upload = 0;
 
     uint64_t cycle = 0;
     bool     running = start_running;
@@ -357,7 +373,18 @@ int main(int argc, char **argv)
     // want while watching a boot, so they start closed.
     bool show_control = true, show_console = true, show_trace = true;
     bool show_holes = true, show_hot = true, show_patches = true;
-    bool show_ram = false, show_prom = false;
+    bool show_ram = false, show_prom = false, show_display = true;
+
+    // Per-pane section folds. Every pane is an ImGui window and folds at its
+    // title bar; these fold the groups INSIDE a pane, so a pane can be kept
+    // open for the one thing being watched without the rest of it taking the
+    // screen. They are plain bools rather than ImGui's own header state
+    // because the layout code resets them with the layout.
+    bool sec_ctl_load = true, sec_ctl_run = true, sec_ctl_err = true;
+    bool sec_con_input = true;
+    bool sec_trace_ctl = true, sec_hot_ctl = true;
+    bool sec_holes_help = true, sec_patch_help = true;
+    bool sec_vid_ctl = true;
     // Re-tile on the first frame, and whenever the user asks for it.
     bool relayout = true;
 
@@ -376,6 +403,9 @@ int main(int argc, char **argv)
         ps2.step(top, cycle);
 
         if (top->tx_valid) console.push_back((char)top->tx_data);
+
+        vidcap.step(top->vid_ce_pix, top->vid_de, top->vid_hsync, top->vid_vsync,
+                    top->vid_r, top->vid_g, top->vid_b);
 
         if (top->bus_ack) {
             hot[top->bus_addr]++;
@@ -422,9 +452,15 @@ int main(int argc, char **argv)
                 if (ev.key.keysym.sym == SDLK_F6)  step_many = true;
                 // F12 hands the keyboard and mouse to the machine, and takes
                 // them back. Without a toggle every F5 would also land in the
-                // guest, and there is no framebuffer yet to make it obvious
-                // which of the two has focus.
-                if (ev.key.keysym.sym == SDLK_F12) ps2_grab = !ps2_grab;
+                // guest. While grabbed the pointer is captured in relative
+                // mode, so the guest sees continuous motion instead of a
+                // pointer that stops at the edge of the window - which is the
+                // difference between a mouse the machine can use and one it
+                // cannot.
+                if (ev.key.keysym.sym == SDLK_F12) {
+                    ps2_grab = !ps2_grab;
+                    SDL_SetRelativeMouseMode(ps2_grab ? SDL_TRUE : SDL_FALSE);
+                }
             }
             if (ps2_grab && !ImGui::GetIO().WantCaptureKeyboard &&
                 (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP)) {
@@ -449,12 +485,15 @@ int main(int argc, char **argv)
             top = new Vsim_top;
             top->reset = 1; top->sclk = 0; top->clk = 0;
             top->boot_pc = boot_pc; top->gio_present = testdev ? 1 : 0; top->rxdb = 1;
+            top->gfx_present = gfx_present ? 1 : 0;
             top->mem_mb  = ram_mb;
             top->icache_en = 1; top->dcache_en = 1;
             cycle = 0; console.clear(); trace.clear(); hot.clear(); holes.clear();
             urx = UartRx(); utx = UartTx(); td_seen = 0; err_prev = 0;
             for (int b = 0; b < 6; b++) err_count[b] = 0;
             g_dev.testdev.out.clear(); g_dev.testdev.exited = false;
+            std::fill(g_dev.vram.bytes.begin(), g_dev.vram.bytes.end(), 0);
+            vidcap.clear(); vram_last_upload = 0;
             scsi_dev.reset();
             do_reset = false;
         }
@@ -490,6 +529,7 @@ int main(int argc, char **argv)
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View")) {
+                ImGui::MenuItem("Display",             nullptr, &show_display);
                 ImGui::MenuItem("Control",             nullptr, &show_control);
                 ImGui::MenuItem("Console",             nullptr, &show_console);
                 ImGui::MenuItem("Bus trace",           nullptr, &show_trace);
@@ -527,44 +567,136 @@ int main(int argc, char **argv)
             ImGui::SetNextWindowSize(ImVec2(w, h),          place);
         };
 
+        //---------------- Display ----------------
+        // Newport's output, and the frame buffer behind it. Both are here on
+        // purpose: pixels in the store but not on the pins is a video timing
+        // fault, and nothing in either is a rasteriser fault. See
+        // sim_video_cap.h.
+        if (show_display) {
+            tile(0, 0, cw * 2.0f, H * 0.6f);
+            ImGui::Begin("Display (Newport)", &show_display);
+
+            if (ImGui::CollapsingHeader("Source and scale",
+                                        sec_vid_ctl ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                ImGui::Checkbox("frame buffer instead of video out", &vid_show_vram);
+                ImGui::SameLine();
+                ImGui::Checkbox("show colour index", &vid_index);
+                ImGui::SameLine();
+                if (ImGui::Button("clear capture")) vidcap.clear();
+                ImGui::SetNextItemWidth(-140.0f);
+                ImGui::SliderFloat("zoom", &vid_zoom, 0.125f, 2.0f, "%.3fx");
+                ImGui::Text("frames %llu   last %dx%d   lit pixels %llu",
+                            (unsigned long long)vidcap.frames,
+                            vidcap.seen_w, vidcap.seen_h,
+                            (unsigned long long)vidcap.lit);
+                ImGui::TextDisabled(
+                    "F12 %s. While grabbed the pointer is captured and every key "
+                    "goes to the machine's keyboard controller.",
+                    ps2_grab ? "releases the keyboard and mouse"
+                             : "gives the keyboard and mouse to the machine");
+            }
+
+            int tw = 0, th = 0;
+            GLuint tex = 0;
+            if (vid_show_vram) {
+                // 8 bytes a pixel on a 2048-pixel stride. Rebuilt at most once
+                // a frame: it is 1.3 M pixels and the machine is not going to
+                // change them faster than the display can show it.
+                tw = 1280; th = 1024;
+                if (vram_rgba.size() != (size_t)tw * th)
+                    vram_rgba.assign((size_t)tw * th, 0xFF000000u);
+                if (cycle != vram_last_upload) {
+                    vram_to_rgba(g_dev.vram.bytes.data(), g_dev.vram.size(),
+                                 tw, th, sgisim::VRAM_STRIDE, vid_index,
+                                 vram_rgba.data(), tw);
+                    vram_last_upload = cycle;
+                    if (!vram_tex) glGenTextures(1, &vram_tex);
+                    glBindTexture(GL_TEXTURE_2D, vram_tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, vram_rgba.data());
+                }
+                tex = vram_tex;
+            } else {
+                tw = vidcap.seen_w > 0 ? vidcap.seen_w : 640;
+                th = vidcap.seen_h > 0 ? vidcap.seen_h : 480;
+                if (tw > VideoCapture::MAXW) tw = VideoCapture::MAXW;
+                if (th > VideoCapture::MAXH) th = VideoCapture::MAXH;
+                if (!vid_tex) glGenTextures(1, &vid_tex);
+                glBindTexture(GL_TEXTURE_2D, vid_tex);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, VideoCapture::MAXW);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, vidcap.fb.data());
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                tex = vid_tex;
+            }
+
+            ImGui::BeginChild("vid", ImVec2(0, 0), true,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            if (tex)
+                ImGui::Image((ImTextureID)(intptr_t)tex,
+                             ImVec2(tw * vid_zoom, th * vid_zoom));
+            // Clicking the picture is the other way to hand over the mouse,
+            // which is what anyone who has used an emulator will try first.
+            if (ImGui::IsItemClicked() && !ps2_grab) {
+                ps2_grab = true;
+                SDL_SetRelativeMouseMode(SDL_TRUE);
+            }
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
         //---------------- Control ----------------
         if (show_control) {
-            tile(0, 0, cw, H * 0.34f);
+            tile(0, H * 0.60f, cw, H * 0.40f);
             ImGui::Begin("Control", &show_control);
-            ImGui::TextWrapped("%s", load_msg.empty() ? "(nothing loaded)" : load_msg.c_str());
-            ImGui::Text("boot PC %08X   RAM %u MB   testdev %s",
-                        boot_pc, ram_mb, testdev ? "yes" : "no");
-            ImGui::Separator();
-            if (ImGui::Button(running ? "Stop (F5)" : "Run (F5)")) running = !running;
-            ImGui::SameLine(); if (ImGui::Button("Step (F11)")) step_once = true;
-            ImGui::SameLine(); if (ImGui::Button("5000 (F6)"))  step_many = true;
-            ImGui::SameLine(); if (ImGui::Button("Reset"))      do_reset = true;
-            ImGui::Text("cycle %llu   %.2f Mcycles/s",
-                        (unsigned long long)cycle, cycles_per_sec / 1e6);
-            ImGui::SetNextItemWidth(-140.0f);
-            ImGui::SliderInt("cycles per frame", &step_batch, 1000, 2000000);
-            ImGui::Separator();
+            if (ImGui::CollapsingHeader("What is loaded",
+                                        sec_ctl_load ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                ImGui::TextWrapped("%s", load_msg.empty() ? "(nothing loaded)" : load_msg.c_str());
+                ImGui::Text("boot PC %08X   RAM %u MB   testdev %s",
+                            boot_pc, ram_mb, testdev ? "yes" : "no");
+            }
+            if (ImGui::CollapsingHeader("Run control",
+                                        sec_ctl_run ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                if (ImGui::Button(running ? "Stop (F5)" : "Run (F5)")) running = !running;
+                ImGui::SameLine(); if (ImGui::Button("Step (F11)")) step_once = true;
+                ImGui::SameLine(); if (ImGui::Button("5000 (F6)"))  step_many = true;
+                ImGui::SameLine(); if (ImGui::Button("Reset"))      do_reset = true;
+                ImGui::Text("cycle %llu   %.2f Mcycles/s",
+                            (unsigned long long)cycle, cycles_per_sec / 1e6);
+                ImGui::SetNextItemWidth(-140.0f);
+                ImGui::SliderInt("cycles per frame", &step_batch, 1000, 2000000);
+            }
             // cpu_error is a set of N64 debugging aids, not faults: the test
             // suite raises most of them on purpose. Counted, never fatal here.
-            ImGui::TextDisabled("cpu_error (informational)");
-            bool any_err = false;
-            for (int b = 0; b < 6; b++)
-                if (err_count[b]) {
-                    ImGui::Text("  %-24s %llu", kErrorNames[b],
-                                (unsigned long long)err_count[b]);
-                    any_err = true;
-                }
-            if (!any_err) ImGui::TextDisabled("  none");
+            if (ImGui::CollapsingHeader("cpu_error (informational)",
+                                        sec_ctl_err ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                bool any_err = false;
+                for (int b = 0; b < 6; b++)
+                    if (err_count[b]) {
+                        ImGui::Text("  %-24s %llu", kErrorNames[b],
+                                    (unsigned long long)err_count[b]);
+                        any_err = true;
+                    }
+                if (!any_err) ImGui::TextDisabled("  none");
+            }
             ImGui::End();
         }
 
         //---------------- Console ----------------
         if (show_console) {
-            tile(0, H * 0.34f, cw, H * 0.66f);
+            tile(cw, H * 0.60f, cw, H * 0.40f);
             ImGui::Begin("Console (SCC channel B / tty1)", &show_console);
             ImGui::TextDisabled("%zu bytes printed   wire bit time %llu clocks",
                                 console.size(), (unsigned long long)urx.bit_time);
-            const float input_h = ImGui::GetFrameHeightWithSpacing() * 2.0f;
+            // Reserve room for the input box only while it is unfolded, so
+            // folding it actually gives the output the screen back.
+            const float input_h = sec_con_input
+                                ? ImGui::GetFrameHeightWithSpacing() * 3.0f
+                                : ImGui::GetFrameHeightWithSpacing() * 1.0f;
             ImGui::BeginChild("con", ImVec2(0, -input_h), true,
                               ImGuiWindowFlags_HorizontalScrollbar);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
@@ -573,30 +705,37 @@ int main(int argc, char **argv)
             if (running) ImGui::SetScrollHereY(1.0f);
             ImGui::EndChild();
             bool can_type = urx.bit_time != 0;
-            if (!can_type)
-                ImGui::TextDisabled("waiting for the machine to transmit, to measure the bit rate");
-            else
-                ImGui::TextDisabled("type and press Enter   (%zu queued)", utx.queue.size());
-            ImGui::BeginDisabled(!can_type);
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::InputText("##type", type_buf, sizeof(type_buf),
-                                 ImGuiInputTextFlags_EnterReturnsTrue)) {
-                for (char *p = type_buf; *p; p++) utx.queue.push_back((uint8_t)*p);
-                utx.queue.push_back('\r');
-                type_buf[0] = 0;
-                ImGui::SetKeyboardFocusHere(-1);
+            sec_con_input = ImGui::CollapsingHeader("Type at the machine",
+                                ImGuiTreeNodeFlags_DefaultOpen);
+            if (sec_con_input) {
+                if (!can_type)
+                    ImGui::TextDisabled("waiting for the machine to transmit, to measure the bit rate");
+                else
+                    ImGui::TextDisabled("type and press Enter   (%zu queued)", utx.queue.size());
+                ImGui::BeginDisabled(!can_type);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::InputText("##type", type_buf, sizeof(type_buf),
+                                     ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    for (char *p = type_buf; *p; p++) utx.queue.push_back((uint8_t)*p);
+                    utx.queue.push_back('\r');
+                    type_buf[0] = 0;
+                    ImGui::SetKeyboardFocusHere(-1);
+                }
+                ImGui::EndDisabled();
             }
-            ImGui::EndDisabled();
             ImGui::End();
         }
 
         //---------------- Bus trace ----------------
         if (show_trace) {
-            tile(cw, 0, cw, H * 0.62f);
+            tile(2 * cw, 0, W - 2 * cw, H * 0.34f);
             ImGui::Begin("Bus trace", &show_trace);
-            ImGui::Checkbox("record", &trace_on);
-            ImGui::SameLine(); if (ImGui::Button("clear")) trace.clear();
-            ImGui::SameLine(); ImGui::TextDisabled("%zu of %zu", trace.size(), trace_cap);
+            if (ImGui::CollapsingHeader("Controls",
+                                        sec_trace_ctl ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                ImGui::Checkbox("record", &trace_on);
+                ImGui::SameLine(); if (ImGui::Button("clear")) trace.clear();
+                ImGui::SameLine(); ImGui::TextDisabled("%zu of %zu", trace.size(), trace_cap);
+            }
             ImGui::BeginChild("tr", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
             ImGuiListClipper clip;
             clip.Begin((int)trace.size());
@@ -614,11 +753,14 @@ int main(int argc, char **argv)
 
         //---------------- Hot addresses ----------------
         if (show_hot) {
-            tile(cw, H * 0.62f, cw, H * 0.38f);
+            tile(2 * cw, H * 0.67f, W - 2 * cw, H * 0.17f);
             ImGui::Begin("Hot addresses", &show_hot);
-            if (ImGui::Button("clear")) hot.clear();
-            ImGui::SameLine();
-            ImGui::TextDisabled("what the CPU is hammering - a hang looks like this");
+            if (ImGui::CollapsingHeader("Controls",
+                                        sec_hot_ctl ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                if (ImGui::Button("clear")) hot.clear();
+                ImGui::SameLine();
+                ImGui::TextDisabled("what the CPU is hammering - a hang looks like this");
+            }
             std::vector<std::pair<uint32_t, uint64_t>> v(hot.begin(), hot.end());
             std::sort(v.begin(), v.end(),
                       [](const auto &a, const auto &b) { return a.second > b.second; });
@@ -632,11 +774,13 @@ int main(int argc, char **argv)
 
         //---------------- Unclaimed addresses ----------------
         if (show_holes) {
-            tile(2 * cw, 0, W - 2 * cw, H * 0.55f);
+            tile(2 * cw, H * 0.34f, W - 2 * cw, H * 0.33f);
             ImGui::Begin("Unclaimed addresses", &show_holes);
-            ImGui::TextWrapped("Bus cycles no device answered - the live map of what is "
-                               "still missing. The next thing to build is usually the "
-                               "address at the top of a poll loop.");
+            if (ImGui::CollapsingHeader("What this is",
+                                        sec_holes_help ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+                ImGui::TextWrapped("Bus cycles no device answered - the live map of what is "
+                                   "still missing. The next thing to build is usually the "
+                                   "address at the top of a poll loop.");
             if (ImGui::Button("clear")) holes.clear();
             ImGui::BeginChild("ho", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
             for (const auto &e : holes)
@@ -652,11 +796,13 @@ int main(int argc, char **argv)
 
         //---------------- PROM patches ----------------
         if (show_patches) {
-            tile(2 * cw, H * 0.55f, W - 2 * cw, H * 0.45f);
+            tile(2 * cw, H * 0.84f, W - 2 * cw, H * 0.16f);
             ImGui::Begin("PROM patches", &show_patches);
-            ImGui::TextWrapped("Word patches applied to the loaded image. 0x00000000 is "
-                               "NOP; 0x03E00008 is `jr $ra`. Answers to \"would it get "
-                               "further without this\" - never a fix.");
+            if (ImGui::CollapsingHeader("What this is",
+                                        sec_patch_help ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+                ImGui::TextWrapped("Word patches applied to the loaded image. 0x00000000 is "
+                                   "NOP; 0x03E00008 is `jr $ra`. Answers to \"would it get "
+                                   "further without this\" - never a fix.");
             if (ImGui::Button("add")) patches.push_back({0x1FC00000, 0x00000000, false, ""});
             ImGui::BeginChild("pa", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
             for (size_t i = 0; i < patches.size(); i++) {

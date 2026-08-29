@@ -25,8 +25,8 @@ at MC + 0x1000 and 0x80 is the GIO64 arbiter. The table below is the spec's.
 | `0x00000000`–`0x07FFFFFF` | GIO64 / EISA low space (Indigo2) | — | absent |
 | **`0x08000000`–`0x0FFFFFFF`** | **Main DRAM (128 MB) — RAM base is `0x08000000`, not 0** | `MAINRAM_CS` | works |
 | `0x10000000`–`0x1EFFFFFF` | GIO64 expansion slot windows | — | absent |
-| `0x1F000000`–`0x1F0EFFFF` | Graphics low window (VC2 / XMAP9 / DAC) | — | absent |
-| `0x1F0F0000`–`0x1F0F1FFF` | **Newport GR2/REX3** rendering engine | `NEWPORT_CS` | stub → `0xFFFFFFFF` |
+| `0x1F000000`–`0x1F0EFFFF` | Graphics low window | `NEWPORT_CS` | reads 0 |
+| `0x1F0F0000`–`0x1F0F1FFF` | **Newport GR2/REX3** rendering engine | `NEWPORT_CS` | built, `rtl/newport/` |
 | `0x1F400000` / `0x1F600000` | GIO expansion slots 1 / 0 | — | absent |
 | **`0x1FA00000`–`0x1FA1FFFF`** | **MC** — memory & GIO64 arbiter controller | `MC_CS` | real model (`sgi_mc.v`) |
 | `0x1FB80000`–`0x1FB8FFFF` | HPC3 PBUS DMA | `PBUSDMA_CS` | reads pass through to RAM data |
@@ -329,22 +329,40 @@ To get the boot tune, implement the ISR busy bit and the PBUS DMA path.
 
 ## Graphics — Newport (GR2 / REX3), `0x1F0F0000`
 
-Not modelled. `sgi_indy.sv` claims `0x1F000000`–`0x1F0FFFFF` and returns
-**zero**, which is not cosmetic: `0x1F0F1338` is REX3's `STATUS` and the PROM
-polls it for the engine to go idle up to 100000 times (`0xBFC17738`), so an
-unclaimed cycle answering `0xFFFFFFFF` means "busy, forever" and every one of
-those waits burns its full timeout. Zero drops each of them straight through to
-the graphics-failed path, which is the right answer for a machine with no
-graphics board. `0x1F0F1330` is `CONFIG`, pinned by a 5.0-PROM diagnostic
-string.
+**Built.** `rtl/newport/` is REX3, VC2, two XMAP9s, two CMAPs and a BT445, and
+`sgi_indy.sv` claims `0x1F000000`–`0x1F0FFFFF` for it. Only REX3 is on the bus:
 
-The sandbox returned `0xFFFFFFFF` here (`NEWPORT_CS`). The
-relevant specs are `rex3.pdf` (rasteriser), `vc2.pdf` (video controller),
-`xmap9.pdf` (colour map / DAC), `rb2.pdf`, `ro1.pdf`, `dmux1.pdf`. This is the
-largest single remaining piece of work for a core anyone would want to use, and
-is *not* on the critical path for reaching the Command Monitor over serial.
+| Address | What | Note |
+|---|---|---|
+| `0x1F000000`–`0x1F0EFFFF` | graphics low window | reads zero; nothing is fitted there |
+| `0x1F0F0000`–`0x1F0F1FFF` | **REX3**, 8 KB | page 0 drawing registers, page 1 config at `+0x1300` |
+| `0x1F0F2000`–`0x1F0FFFFF` | unused | reads zero |
 
----
+**Bit 11 of the offset is the GO bit.** Writing `reg | 0x800` writes the
+register and starts the drawing command; there is no command register.
+
+**Everything except REX3 is behind the Display Control Bus**, driven from
+`DCBMODE` (`0x1F0F0238`) and `DCBDATA0` (`0x0240`). `DCBMODE[10:7]` is the chip
+address: 0 VC2, 1 both CMAPs, 2 and 3 one each, 4 both XMAP9s, 5 and 6 one
+each, 7 the RAMDAC. `DCBMODE[6:4]` is the register within the chip and
+`DCBMODE[1:0]` the transfer width.
+
+**The window must never be left unclaimed.** An unclaimed read answers
+`0xFFFFFFFF`, which makes REX3's `STATUS` at `0x1F0F1338` read busy forever,
+and `Ng1Probe` polls it 100000 times before giving up. Both the fitted and the
+unfitted paths in `sgi_indy.sv` answer zero for the parts they do not model.
+
+**Finding the board moves the console.** ARCS installs a `DisplayController`
+with `ConsoleOut|Output` and the PROM stops printing to the serial port
+entirely - see `docs/16-newport-plan.md`. `sgi_indy.sv` takes a `gfx_present`
+input so a serial-console test can ask for a machine without a graphics board,
+which is what every script in `tests/` except `run-newport.sh` does.
+
+The frame buffer is **not** in this window: it is a private port, eight bytes
+per pixel on a 2048-pixel stride, with the drawing planes in the low 24 bits
+and the auxiliary planes in bits `[55:32]`. Newport's VRAM has a random port
+and a serial port and this core models both, because the rasteriser and the
+display run at the same time.
 
 ## Keyboard / mouse / console
 

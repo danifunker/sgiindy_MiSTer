@@ -31,6 +31,7 @@
 #include "sim_devices.h"
 #include "sim_uart.h"
 #include "sim_ps2.h"
+#include "sim_video_cap.h"
 #include "sim_scsi.h"
 
 #include <cstdio>
@@ -124,6 +125,12 @@ struct Options {
     // a PROM text address a PC watch, and the cheapest way to answer "is this
     // routine reached at all" without a trace of four million transactions.
     std::vector<uint32_t> watch;
+    std::string fbdump;
+    bool        fbindex = false;
+    // Newport fitted. Default on, because a real Indy always has a graphics
+    // board; the serial-console regressions turn it off, because the PROM
+    // moves its console to the graphics head as soon as it finds one.
+    bool        gfx = true;
     // Which cpu_error bits abort the run. See kErrorNames: only the two that
     // mean the core itself is wedged are fatal by default.
     uint32_t fatal_errors = (1u << 1) | (1u << 4);   // stall, fifo
@@ -206,6 +213,12 @@ static void usage()
         "  --trace-from N    start the trace at cycle N\n"
         "  --trace-count N   how many transactions to print (default 2000)\n"
         "  --hot             on exit, list the most-accessed addresses\n"
+        "  --fbdump FILE     on exit, write Newport's frame buffer as a PPM.\n"
+        "                    Once graphics are found the PROM moves its console\n"
+        "                    there and the serial port goes quiet\n"
+        "  --fbindex         dump the colour index as grey, not the colour\n"
+        "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
+        "                    console on the serial port\n"
         "  --watch HEX       report every bus access to HEX (repeatable). PROM\n"
         "                    text is uncached, so this is a PC watch\n"        "  --uart            also decode the SCC's txdb line and compare\n"
         "  --disk ID=PATH    attach a SCSI disk image at target ID (default 1),\n"
@@ -247,6 +260,11 @@ int main(int argc, char **argv)
         else if (a == "--trace")       opt.trace = true;
         else if (a == "--irq")         opt.irq = true;
         else if (a == "--hot")         opt.hot = true;
+        // Once Newport is fitted the PROM moves its console to the graphics
+        // head, so the serial port stops being the whole story.
+        else if (a == "--fbdump")     opt.fbdump = next("--fbdump");
+        else if (a == "--fbindex")    opt.fbindex = true;
+        else if (a == "--no-gfx")     opt.gfx = false;
         else if (a == "--watch")       opt.watch.push_back(
                  static_cast<uint32_t>(strtoul(next("--watch"), nullptr, 16)) & ~7u);
         else if (a == "--uart")        opt.uart = true;
@@ -294,6 +312,7 @@ int main(int argc, char **argv)
 
     g_dev.ram.resize(static_cast<size_t>(opt.ram_mb) * 1024 * 1024);
     g_dev.prom.resize(512 * 1024);
+    g_dev.vram.resize(sgisim::VRAM_BYTES);
     g_dev.testdev.present = opt.testdev;
 
     uint32_t boot_pc = opt.boot_pc;
@@ -348,6 +367,7 @@ int main(int argc, char **argv)
     // The MC's bank decode must agree with the memory actually behind it.
     top->mem_mb      = opt.ram_mb;
     top->gio_present = opt.testdev ? 1 : 0;
+    top->gfx_present = opt.gfx ? 1 : 0;
     top->icache_en   = opt.icache ? 1 : 0;
     top->dcache_en   = opt.dcache ? 1 : 0;
     top->rxdb        = 1;                 // idle mark; nothing types at the console here
@@ -399,6 +419,12 @@ int main(int argc, char **argv)
     uint64_t err_count[6] = {0};
     uint8_t  err_prev = 0;
 
+    // What actually came out of the video pins. Built from the output side
+    // rather than from the frame buffer store on purpose: a picture taken from
+    // the store would look right even if VC2's timing generator were emitting
+    // nonsense. See verilator/sim_video_cap.h.
+    VideoCapture vidcap;
+
     auto tick = [&](int v) { top->clk = v; top->eval(); };
 
     for (; cycle < opt.max_cycles; cycle++) {
@@ -414,6 +440,9 @@ int main(int argc, char **argv)
 
         // Always decode the wire, not just under --uart: the measured bit time
         // is what --type sends at, and it costs a comparison per cycle.
+        vidcap.step(top->vid_ce_pix, top->vid_de, top->vid_hsync, top->vid_vsync,
+                    top->vid_r, top->vid_g, top->vid_b);
+
         uart.sample(cycle, top->txdb);
         utx.step(cycle, uart.bit_time);
         top->rxdb = utx.line;
@@ -709,6 +738,30 @@ int main(int argc, char **argv)
         for (size_t i = 0; i < v.size() && i < 15; i++)
             printf("  %08x %-14s %llu\n", v[i].first, reg_name(v[i].first),
                    static_cast<unsigned long long>(v[i].second));
+    }
+
+    // Newport's own summary. Frames and their measured size come from the
+    // pins, so a non-zero line here is the video timing table having been
+    // walked correctly all the way round a frame; the lit count is REX3
+    // having put something in the frame buffer for the readout to find.
+    if (opt.gfx) {
+        printf("video: %llu frames, best %dx%d, last %dx%d, %llu lit pixels\n",
+               static_cast<unsigned long long>(vidcap.frames),
+               vidcap.best_w, vidcap.best_h, vidcap.seen_w, vidcap.seen_h,
+               static_cast<unsigned long long>(vidcap.lit));
+        printf("video edges: %llu hsync, %llu vsync, %llu display-enable, "
+               "%llu displayed pixels\n",
+               static_cast<unsigned long long>(vidcap.hsyncs),
+               static_cast<unsigned long long>(vidcap.vsyncs),
+               static_cast<unsigned long long>(vidcap.de_rises),
+               static_cast<unsigned long long>(vidcap.de_pixels));
+    }
+
+    if (!opt.fbdump.empty()) {
+        if (dump_framebuffer_ppm(opt.fbdump, 1280, 1024, opt.fbindex))
+            printf("frame buffer written to %s\n", opt.fbdump.c_str());
+        else
+            printf("could not write %s\n", opt.fbdump.c_str());
     }
 
     if (console_f) fclose(console_f);

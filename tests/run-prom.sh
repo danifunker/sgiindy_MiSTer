@@ -89,7 +89,11 @@ echo "booting $(basename "$PROM") ..."
 # The triggers fire in order, so a trigger that never appears blocks every
 # keystroke behind it. There is no "[Press any key to continue.]" here any
 # more: POST passes and the menu comes up on its own.
-"$SIM" --prom "$PROM" --max-cycles 1200000000 --stuck 150000000 \
+# --no-gfx leaves Newport unfitted. A real Indy always has a graphics
+# board, and the PROM moves its console to it the moment it finds one -
+# so a serial-console ratchet has to ask for the machine that talks to a
+# terminal. tests/run-newport.sh is the one that fits the board.
+"$SIM" --prom "$PROM" --no-gfx --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'version\r' \
        --type-on 'PROM Monitor' 'hinv\r' \

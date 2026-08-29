@@ -16,9 +16,9 @@
 //  design is free. Every input is driven from a shift register that Quartus
 //  cannot fold, and every output is reduced into one registered bit that
 //  leaves through a pin, so the logic has to survive. It also keeps the pin
-//  count to single figures, which matters because `sgi_indy` has 39 ports and
-//  the fitter will not place a design asking for more pins than the package
-//  has.
+//  count to single figures, which matters because `sgi_indy` has sixty-odd
+//  ports and the fitter will not place a design asking for more pins than the
+//  package has.
 //
 //  MEM_MB IS TIED TO A CONSTANT HERE, on purpose. It is a runtime input in
 //  simulation so `--ram-mb` can change the machine's size, but on hardware it
@@ -63,6 +63,19 @@ module syn_top (
     logic [31:0] gio_addr;
     logic [63:0] gio_wdata;
     logic  [7:0] gio_be;
+
+    // Newport's two frame buffer ports and its video output. The store itself
+    // is not in this project - 10 MB of it is external memory on hardware -
+    // so the read data comes from the LFSR like every other input here, and
+    // the video pins are folded into OUT_BIT with the rest.
+    logic        fbw_req, fbw_we;
+    logic [31:0] fbw_addr;
+    logic [63:0] fbw_wdata;
+    logic  [7:0] fbw_be;
+    logic        fbr_req;
+    logic [31:0] fbr_addr;
+    logic        vid_ce_pix, vid_hsync, vid_vsync, vid_de;
+    logic  [7:0] vid_r, vid_g, vid_b;
 
     sgi_indy u_core (
         .clk              (CLK_50),
@@ -109,7 +122,29 @@ module syn_top (
         .gio_be           (gio_be),
         .gio_rdata        ({lfsr[31:0], lfsr[63:32]}),
         .gio_ack          (lfsr[5]),
-        .gio_present      (lfsr[6])
+        .gio_present      (lfsr[6]),
+        .gfx_present      (lfsr[7]),
+
+        .fbw_req          (fbw_req),
+        .fbw_we           (fbw_we),
+        .fbw_addr         (fbw_addr),
+        .fbw_wdata        (fbw_wdata),
+        .fbw_be           (fbw_be),
+        .fbw_rdata        ({lfsr[47:16], lfsr[31:0]}),
+        .fbw_ack          (lfsr[8]),
+
+        .fbr_req          (fbr_req),
+        .fbr_addr         (fbr_addr),
+        .fbr_rdata        ({lfsr[15:0], lfsr[63:16]}),
+        .fbr_ack          (lfsr[9]),
+
+        .vid_ce_pix       (vid_ce_pix),
+        .vid_hsync        (vid_hsync),
+        .vid_vsync        (vid_vsync),
+        .vid_de           (vid_de),
+        .vid_r            (vid_r),
+        .vid_g            (vid_g),
+        .vid_b            (vid_b)
     );
 
     // ---- reduce every output to one pin ----------------------------------
@@ -117,7 +152,11 @@ module syn_top (
         OUT_BIT <= ^{scsi_sd_lba, scsi_sd_rd, scsi_sd_wr, scsi_sd_buff_din,
                      ram_req, ram_we, ram_addr, ram_wdata, ram_be,
                      prom_req, prom_addr,
-                     gio_req, gio_we, gio_addr, gio_wdata, gio_be};
+                     gio_req, gio_we, gio_addr, gio_wdata, gio_be,
+                     fbw_req, fbw_we, fbw_addr, fbw_wdata, fbw_be,
+                     fbr_req, fbr_addr,
+                     vid_ce_pix, vid_hsync, vid_vsync, vid_de,
+                     vid_r, vid_g, vid_b};
 
     assign LOCKED = ~reset;
 

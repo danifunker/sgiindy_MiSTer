@@ -96,7 +96,11 @@ fi
 mkdir -p "$(dirname "$OUT")"
 
 echo "booting $(basename "$PROM") with a disk on ID 1 ..."
-"$SIM" --prom "$PROM" --disk "1=$DISK" \
+# --no-gfx leaves Newport unfitted. A real Indy always has a graphics
+# board, and the PROM moves its console to it the moment it finds one -
+# so a serial-console ratchet has to ask for the machine that talks to a
+# terminal. tests/run-newport.sh is the one that fits the board.
+"$SIM" --prom "$PROM" --no-gfx --disk "1=$DISK" \
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \

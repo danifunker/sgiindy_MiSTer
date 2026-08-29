@@ -7,6 +7,7 @@
 // established.
 
 #include "sim_devices.h"
+#include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
@@ -199,6 +200,7 @@ extern "C" uint64_t sgi_dpi_read(uint32_t space, uint32_t addr)
     case SPACE_RAM:  return g_dev.ram.read64(addr);
     case SPACE_PROM: return g_dev.prom.read64(addr);
     case SPACE_GIO:  return g_dev.testdev.read64(addr);
+    case SPACE_VRAM: return g_dev.vram.read64(addr);
     default:         return 0;
     }
 }
@@ -209,9 +211,46 @@ extern "C" void sgi_dpi_write(uint32_t space, uint32_t addr, uint64_t data, uint
     switch (space) {
     case SPACE_RAM: g_dev.ram.write64(addr, data, be); break;
     case SPACE_GIO: g_dev.testdev.write64(addr, data, be); break;
+    case SPACE_VRAM: g_dev.vram.write64(addr, data, be); break;
     default: break;                         // the PROM is read-only
     }
 }
+
+// ---- frame buffer dump ----------------------------------------------------
+
+namespace sgisim {
+
+bool dump_framebuffer_ppm(const std::string &path, int w, int h, bool index)
+{
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    std::vector<uint8_t> row((size_t)w * 3);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            size_t off = ((size_t)y * VRAM_STRIDE + x) * 8;
+            uint8_t r = 0, g = 0, b = 0;
+            if (off + 8 <= g_dev.vram.size()) {
+                // The drawing planes are the low 24 bits of the low word, and
+                // the store is big-endian, so they are bytes 5..7. CMAP holds
+                // colour as 0x00BBGGRR, and so does a 24-bit pixel.
+                uint8_t b2 = g_dev.vram.bytes[off + 5];
+                uint8_t g2 = g_dev.vram.bytes[off + 6];
+                uint8_t r2 = g_dev.vram.bytes[off + 7];
+                if (index) { r = g = b = r2; }
+                else       { r = r2; g = g2; b = b2; }
+            }
+            row[(size_t)x * 3 + 0] = r;
+            row[(size_t)x * 3 + 1] = g;
+            row[(size_t)x * 3 + 2] = b;
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
+    return true;
+}
+
+} // namespace sgisim
 
 // ---- SCSI disks ----------------------------------------------------------
 

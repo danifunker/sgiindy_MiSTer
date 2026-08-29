@@ -43,7 +43,8 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | [11-running-on-hardware.md](11-running-on-hardware.md) | Running the same test binary on a real SGI, and which machines it applies to |
 | **[12-chipset.md](12-chipset.md)** | **The chipset as built** — MC, HPC3, IOC2/INT2, the timers, the RTC, and the order in which each one blocked the next |
 | **[13-scsi-dma-plan.md](13-scsi-dma-plan.md)** | **The HPC3 SCSI DMA engine as built** — the spec-confirmed register map, the bus arbiter, what the plan got wrong, and the one bus phase still between here and a disk in `hinv` |
-| **[14-audio-and-graphics.md](14-audio-and-graphics.md)** | **Work-item prompt** for the two devices `hinv` still does not list: HAL2 audio (probably a register model) and Newport (the rest of the machine) |
+| **[14-audio-and-graphics.md](14-audio-and-graphics.md)** | **Work-item prompt** for the two devices `hinv` used to not list. Audio is reported; Newport is built — see 16 |
+| **[16-newport-plan.md](16-newport-plan.md)** | **Newport as built**: the five chips, VC2's video timing table format, the frame buffer layout and why it is DDR3 on hardware, POST's own graphics diagnostic, and everything building it found — the console moving off the serial port, the Display Control Bus being right-aligned, the monitor type deciding the resolution, and the three rasteriser bugs a picture could not show |
 | **[15-synthesis-prompt.md](15-synthesis-prompt.md)** | **Work-item prompt** for getting `syn/` through Quartus and reading the size and Fmax. Needs a machine that can run Quartus |
 | **[FEATURES_EVALUATE.md](FEATURES_EVALUATE.md)** | **Deliberately not built**, with the evidence: CD audio (the CD-ROM is data-only), the secondary cache, and why "66 Mhz" is a measurement rather than a clock |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |

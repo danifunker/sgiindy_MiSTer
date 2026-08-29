@@ -23,6 +23,9 @@ module sim_top
     input  wire        sclk,
     input  wire [31:0] boot_pc,
     input  wire        gio_present,
+    // Newport fitted. Clearing it puts the console back on the serial port,
+    // which is what every regression in tests/ watches.
+    input  wire        gfx_present,
     // Primary caches, so a failure can be bisected onto one of them from the
     // command line rather than by rebuilding. Both on for a normal run.
     input  wire        icache_en,
@@ -50,6 +53,16 @@ module sim_top
     output wire [15:0] scsi_sd_buff_din,
     input  wire [31:0] mem_mb,
     input  wire        scsi_sd_buff_wr,
+
+    // Video out, from Newport. The GUI turns this into a texture; on
+    // hardware it is what sgiindy.sv hands to the scaler.
+    output wire        vid_ce_pix,
+    output wire        vid_hsync,
+    output wire        vid_vsync,
+    output wire        vid_de,
+    output wire  [7:0] vid_r,
+    output wire  [7:0] vid_g,
+    output wire  [7:0] vid_b,
 
     // Console tap: one pulse per byte handed to the SCC transmitter.
     output wire        tx_valid,
@@ -85,6 +98,17 @@ module sim_top
     wire [31:0] gio_addr;
     wire [63:0] gio_wdata, gio_rdata;
     wire  [7:0] gio_be;
+
+    // Newport's frame buffer. Two ports on one backing store, which is what a
+    // VRAM is: the rasteriser writes through the random port while the
+    // display reads through the serial one.
+    wire        fbw_req, fbw_we, fbw_ack;
+    wire [31:0] fbw_addr;
+    wire [63:0] fbw_wdata, fbw_rdata;
+    wire  [7:0] fbw_be;
+    wire        fbr_req, fbr_ack;
+    wire [31:0] fbr_addr;
+    wire [63:0] fbr_rdata;
 
     // RTC_TICK_DIV: 5000 clocks per centisecond instead of the hardware
     // 500000, so the machine's clock runs a hundred times faster than the
@@ -147,6 +171,27 @@ module sim_top
         .gio_rdata     (gio_rdata),
         .gio_ack       (gio_ack),
         .gio_present   (gio_present),
+        .gfx_present   (gfx_present),
+
+        .fbw_req       (fbw_req),
+        .fbw_we        (fbw_we),
+        .fbw_addr      (fbw_addr),
+        .fbw_wdata     (fbw_wdata),
+        .fbw_be        (fbw_be),
+        .fbw_rdata     (fbw_rdata),
+        .fbw_ack       (fbw_ack),
+        .fbr_req       (fbr_req),
+        .fbr_addr      (fbr_addr),
+        .fbr_rdata     (fbr_rdata),
+        .fbr_ack       (fbr_ack),
+
+        .vid_ce_pix    (vid_ce_pix),
+        .vid_hsync     (vid_hsync),
+        .vid_vsync     (vid_vsync),
+        .vid_de        (vid_de),
+        .vid_r         (vid_r),
+        .vid_g         (vid_g),
+        .vid_b         (vid_b),
 
         .rxda          (1'b1),          // idle mark - nothing plugged in
         .txda          (txda),
@@ -181,5 +226,16 @@ module sim_top
     sim_ram u_gio  (.clk(clk), .space(32'd2), .req(gio_req),  .we(gio_we),
                     .addr(gio_addr),  .wdata(gio_wdata), .be(gio_be),
                     .rdata(gio_rdata), .ack(gio_ack));
+
+    // Both frame buffer ports address the same C++ backing store, so the
+    // harness can dump the screen as one image and the two ports behave the
+    // way a real VRAM's two ports do.
+    sim_ram u_fbw  (.clk(clk), .space(32'd3), .req(fbw_req), .we(fbw_we),
+                    .addr(fbw_addr), .wdata(fbw_wdata), .be(fbw_be),
+                    .rdata(fbw_rdata), .ack(fbw_ack));
+
+    sim_ram u_fbr  (.clk(clk), .space(32'd3), .req(fbr_req), .we(1'b0),
+                    .addr(fbr_addr), .wdata(64'd0), .be(8'd0),
+                    .rdata(fbr_rdata), .ack(fbr_ack));
 
 endmodule

@@ -225,3 +225,58 @@ model**, the way IRIS's `--load-elf` does, so the `cpu-tests` suite can run with
 no PROM involved. Probe both ends of each segment before committing: unmapped
 physical space accepts writes silently and reads back zero, so a
 mis-addressed load shows up as a CPU fetching zeros.
+
+## Graphics
+
+Newport is fitted by default and **that changes where the console goes**: the
+PROM moves it to the graphics head as soon as ARCS finds a DisplayController,
+and the serial port falls silent after the NVRAM line. Three flags follow from
+that:
+
+| Flag | What it does |
+|---|---|
+| `--no-gfx` | leave Newport unfitted. Every serial-console test in `tests/` passes this, because otherwise there is nothing to read |
+| `--fbdump FILE` | write the frame buffer as a binary PPM on exit. `sips -s format png` converts it |
+| `--fbindex` | dump the colour index as grey rather than the 24-bit colour, which is what you want before a palette has been loaded |
+
+The harness prints a video summary on every exit that fits a board:
+
+```
+video: 24 frames, best 1318x1065, last 1318x1065, 1307321 lit pixels
+video edges: 23734 hsync, 24 vsync, 22750 display-enable, 29982852 displayed pixels
+```
+
+Those numbers come from the **output pins**, not from the frame buffer store, so
+a non-zero line means the whole chain worked — VC2 walked its timing table, the
+readout found pixels, and XMAP9 and CMAP turned them into colour. A picture
+taken from the store would look right even if the timing generator were
+emitting nonsense; both are available, and the GUI shows either.
+
+`make -C verilator vc2test` builds a one-second unit test for VC2's timing
+generator alone (`verilator/tb_vc2.cpp`), driving its Display Control Bus port
+directly with a table of a known geometry. When a boot's picture is wrong, that
+test says in one second whether the table walk is the reason.
+
+### REX3's command trace, and replaying it
+
+`make -C verilator cputest-rex3-debug` builds the same simulator with
+`np_rex3.sv`'s `REX3_DEBUG` block enabled, in its own `obj_dir_rex3dbg`. It
+prints one line per accepted drawing command with every register that command
+depends on:
+
+```
+[REX3] 205 dm0=00009106 dm1=30007109 xy=(696,974)-(702,0) sav=696 oct=1 zp=e0000000 ci=00000030 ...
+```
+
+That is the tool for a wrong picture, and it is the *first* tool, not the last:
+`ng1_tp.c` in `~/repos/irix-657m-src` says exactly what the PROM meant to draw,
+so a trace line and the driver source together settle in minutes what a
+screenshot cannot settle at all. Three separate rasteriser defects survived a
+whole session of looking at the picture and none of them survived ten minutes
+of the trace.
+
+`tests/rex3_replay.py` closes the loop: it replays the trace into a model frame
+buffer and compares it against the one the run dumped, pixel for pixel.
+`tests/run-rex3.sh` is that end to end — build, boot, replay, compare — and on
+a current boot it checks all 1,310,720 pixels against 10,412 commands with
+nothing left unchecked.

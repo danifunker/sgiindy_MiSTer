@@ -9,7 +9,14 @@
 namespace sgisim {
 
 // Backing-store selector, matching sim_ram.v's `space` port.
-enum Space { SPACE_RAM = 0, SPACE_PROM = 1, SPACE_GIO = 2 };
+enum Space { SPACE_RAM = 0, SPACE_PROM = 1, SPACE_GIO = 2, SPACE_VRAM = 3 };
+
+// Newport's frame buffer, eight bytes a pixel on a 2048-pixel stride. Both of
+// the core's frame buffer ports address this one store, which is what a VRAM's
+// random and serial ports do.
+constexpr uint32_t VRAM_STRIDE = 2048;
+constexpr uint32_t VRAM_LINES  = 1024;
+constexpr uint32_t VRAM_BYTES  = VRAM_STRIDE * VRAM_LINES * 8;
 
 // Big-endian byte store: byte(a) is the byte at address `a` within the space,
 // which is also how it appears at data[63-8*(a&7) -: 8] on the bus.
@@ -98,11 +105,21 @@ struct ScsiDisk {
 struct Devices {
     Memory     ram;
     Memory     prom;
+    Memory     vram;
     TestDevice testdev;
     ScsiDisk   scsi[7];
 };
 
 extern Devices g_dev;
+
+// Write the frame buffer out as a binary PPM, which every image viewer reads
+// and which needs no library. `index` shows the colour index as grey instead
+// of the 24-bit colour, which is what you want before a palette is loaded.
+//
+// This exists because once Newport is found the PROM moves its console to the
+// graphics head and the serial port goes quiet: the only way to see what the
+// machine is saying is to look at the frame buffer.
+bool dump_framebuffer_ppm(const std::string &path, int w, int h, bool index);
 
 // ---- ELF loading ---------------------------------------------------------
 

@@ -59,7 +59,11 @@ ELF="$CPUTESTS/build/cputest.elf"
 # legitimate, faithful nothing. cpu-tests/harness/console.c:36-50 describes
 # the same behaviour on real hardware.
 echo "== running =="
-"$SIM" --elf "$ELF" --testdev --console "$OUT/r4300.log" \
+# --no-gfx leaves Newport unfitted. A real Indy always has a graphics
+# board, and the PROM moves its console to it the moment it finds one -
+# so a serial-console ratchet has to ask for the machine that talks to a
+# terminal. tests/run-newport.sh is the one that fits the board.
+"$SIM" --elf "$ELF" --testdev --no-gfx --console "$OUT/r4300.log" \
        --stuck 20000000 ${EXTRA[@]+"${EXTRA[@]}"} > "$OUT/r4300.full" 2>&1
 rc=$?
 tail -6 "$OUT/r4300.log"
