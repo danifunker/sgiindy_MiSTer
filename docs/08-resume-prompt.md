@@ -225,6 +225,19 @@ measurement:
   writable register of zero. `REX3WAIT` polls 0x133C, so the PROM was told the
   engine was never busy and never waited for anything. This is the one that
   made the other two possible.
+- **And a sixth, found by looking at the screen: the whole picture was
+  yellow-green, because BLUE WAS IDENTICALLY ZERO.** The Display Control Bus
+  shifts its datum out from the TOP of `DCBDATA0` and the CPU writes to the
+  bottom, so it has to be re-aligned first - `dcb_align` does that from the
+  write's byte enables, which is what IRIS does at its bus layer. Taking the
+  low n bytes instead agrees for a byte, is rescued for a halfword by the
+  SWAPENDIAN bit the PROM happens to set there, and drops the third byte of
+  every three-byte colour write: `cmapSetRGB` sends `0xRRGGBB00` and the
+  machine received `(r, g, 0)`. **A colour is not checkable from the frame
+  buffer** - the store holds an 8-bit index, so `--fbdump`, the geometry and
+  `run-rex3.sh`'s replay of all 1,310,720 pixels were every one of them
+  perfect. `--viddump` shows the PINS instead, the harness prints per-channel
+  pixel counts, and `run-newport.sh` fails if a channel is dead.
 
 **`tests/run-rex3.sh` is the ratchet, and it is the strongest test in this
 repository.** It boots with `np_rex3.sv`'s `REX3_DEBUG` trace on — one line per
@@ -237,6 +250,67 @@ frame size exactly rather than with a threshold, and `make -C verilator
 vc2test` still drives the timing generator on its own in one second.
 `docs/16-newport-plan.md` has the whole scope, the format of the timing tables,
 and all of the above written out.
+
+**THE CORE HAS A REAL MISTER TOP LEVEL AND IT SYNTHESISES.** `sgiindy.sv` was
+the stock template with a noise generator in it; it is now the machine -
+`sgi_indy`, `hps_io`, the PLL, a DDR3 mux, three SCSI virtual drives, the PROM
+off the SD card, PS/2 keyboard and mouse, the SCC's tty1 on the board's UART,
+and Newport's raster on `VGA_*`. `docs/18-mister-integration.md` is the whole
+of it, including what will be wrong on the first hardware run.
+
+**Quartus lives on another machine, and you can drive it.** See the memory
+files: `m900` over SSH, Quartus 17.0.2 Lite, the repo at the same path. **Do
+not change files or git state there** - push to origin and let the user pull;
+running a build is fine. Analysis & Synthesis now SUCCEEDS: 37,773 registers,
+2,236,027 block memory bits, 128 `altsyncram` instances. It took two fixes to
+get there and both are the kind that Verilator can never find:
+
+- **The root project had no `VHDL_INPUT_VERSION`.** `cpu.vhd` uses sized
+  bit-string literals (`40x"0"`), which are VHDL-2008, and the first compile
+  stopped in nineteen seconds with 59 syntax errors on perfectly good VHDL.
+  `syn/sgiindy_syn.qsf` had carried the setting since the CPU first went
+  through Quartus; the root `.qsf` had never been compiled at all.
+- **Three arrays became flip-flops and the design would not fit.** 917,504
+  bits of them, against a device with about 84,000 registers, and the error
+  was `276003: Cannot convert all sets of registers into RAM megafunctions`.
+  **This is the real-time clock's lesson again** - an array only becomes an
+  M10K when its read goes straight into a register with nothing in the way,
+  and a reset on that register is something in the way. `sgi_ds1386.sv` shows
+  the shape that works: the read sits ABOVE the `if (reset)`, unconditional.
+  `np_vc2`'s SRAM and `fb_linecache`'s two line buffers just needed hoisting;
+  `np_cmap`'s palette had two genuinely asynchronous reads and now has two
+  registered ones. `np_xmap9` and `np_bt445` were registered too, so that
+  every chip on the Display Control Bus answers a read on the same schedule
+  and `np_rex3.sv` needs one rule rather than two.
+
+**The memory system is `rtl/mister/`, and both halves have unit tests** -
+`make -C verilator ddr3test` and `linecachetest`, neither of which needs
+Quartus. `ddr3_mux.sv` carves the 256 MB window MiSTer gives a core (main
+memory at 0, the frame buffer at 64 MB, the PROM at 80) and its test found the
+region bases truncating and fixed priority starving the rasteriser 62
+transactions to 3707. `fb_linecache.sv` is a scanline ahead of the display,
+because `newport.sv` does not wait for its frame buffer read - correctly, a
+VRAM serial port cannot stall - and against DDR3 that would be a smear that
+moves with memory load. Its test drives the display's real pattern and checks
+4.0 million pixels.
+
+**The video is correct and the refresh is low, and that is the only thing left
+wrong with it.** The raster is exactly the table's - 1318 x 1065, asserted -
+but VC2 divides the core clock, so a table written for 107.5 MHz comes out at
+50 and the frame rate is about 28 Hz. A faster core cannot fix it and does not
+need to: on real hardware the pixel clock is not the CPU clock either. Sixty
+hertz wants a second clock domain. Two changes got it from a sixth of 60 Hz to
+a half: `PIX_DIV` is 1 now, and **pixel time stops while the generator
+fetches** - walking the table costs clocks belonging to no state run, and
+letting the pixel clock run through them put them in the picture, which is how
+1318 briefly measured 1323.
+
+**Do not move the video to MiSTer's framebuffer-in-DDRAM (`FB_*`).** It was
+the obvious fix for the refresh rate and it is wrong twice over. N64 does NOT
+use it as its primary output - `N64.sv` drives `VGA_*` and enables `FB_*` only
+for the guest's own `VI_DIRECTFBMODE` - and in `sys_top.v` the analog VGA takes
+the scaler's output whenever `vga_fb | vga_scaler`, so making it primary would
+force every user onto the scaler and **break `direct_video` outright**.
 
 **Interrupts are wired and tested.** INT2 is real — three status registers,
 three masks, the two mappable summaries and the timer latches — and drives
@@ -269,13 +343,24 @@ What is *not* done, and is worth knowing before you plan anything:
   blending, dithering and the GIO64 pixel-DMA path are all absent. Nothing the
   PROM does needs any of them; everything IRIX does needs most of them. See
   `docs/16-newport-plan.md`, milestone N4.
+- **The mouse has never been proven.** The keyboard has: two 400-million-cycle
+  boots, identical but for the keys, gave 597,166 keyboard-port accesses and
+  "Unable to boot; press any key" against 388,421 and "Command Monitor. >>
+  5555". Both halves are evidence - the six hundred thousand polls are the
+  PROM in its input loop with nothing to read. The mouse waits for IRIX the
+  way the keyboard waited for graphics: nothing on the PROM's path moves a
+  pointer, `Ng1CursorInit` is a stub in SGI's own driver, and VC2's cursor
+  planes are not built. `--key-at CYCLE STR` types at the graphics head;
+  `--key-on` triggers on console text, which does not exist once the console
+  is a screen.
 - **No audio path.** `HAL2_REV` reports a processor that is not there.
 - **The SCSI data path is tested at width now, and it is correct.**
   `tests/run-scsiwr.sh` is six phases: one block, four blocks, WRITE(10),
   a three-descriptor scatter-gather chain, 16 KB over four descriptors each
   way, and four 2048-byte logical blocks off the CD-ROM over a chain. Every
-  byte compares. What is still untested is *sustained* traffic - the installer
-  copies megabytes, and nothing here runs longer than 16 KB in one command.
+  byte compares, first time. What is still untested is *sustained* traffic -
+  the installer copies megabytes, and nothing here runs longer than 16 KB in
+  one command.
 - **The SCSI message phases are minimal.** MESSAGE OUT receives and rejects
   anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
   COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
@@ -308,6 +393,12 @@ What is *not* done, and is worth knowing before you plan anything:
 7. `docs/06-simulation.md` — both harnesses, headless and interactive.
 8. `docs/03-boot-prom.md` — the PROM's reset flow and the bring-up order.
 9. `docs/07-mister-port-plan.md` — the milestones.
+10. **`docs/18-mister-integration.md`** — the top level as wired, the DDR3
+    map, and a list of what will be wrong on the first hardware run rather
+    than a promise that nothing will be. Read it before touching `sgiindy.sv`
+    or `rtl/mister/`.
+11. `docs/17-nvram-persistence.md` — the plan for making a `setenv` survive a
+    reset, and the M10K constraint that decides its shape.
 
 ## Build and run
 
@@ -325,6 +416,8 @@ tests/run-cputest.sh      # 240-test MIPS suite on the core, ~7 s
 tests/run-prom.sh         # boot the PROM to the Command Monitor, ~56 s
 tests/run-newport.sh      # boot with graphics fitted, and check the picture
 tests/run-rex3.sh         # every pixel REX3 drew against every command it got
+make -C verilator ddr3test      && verilator/obj_dir_ddr3/Vddr3_mux
+make -C verilator linecachetest && verilator/obj_dir_lcache/Vfb_linecache
 make -C verilator vc2test && verilator/obj_dir_vc2/Vnp_vc2   # VC2's VTG, ~1 s
 tests/run-scsi.sh         # the same boot with a disk, and a block read off it
 
@@ -593,26 +686,55 @@ CD-ROM, a writable disk on ID 1, maintenance menu option 2.
 
 ### 3. Everything after that
 
-1. **NVRAM persistence.** `rtl/sgi/sgi_ds1386.sv` powers up blank, so the PROM
-   rebuilds its environment on every boot. Wiring the array to MiSTer's SD save
-   path is the difference between a machine that remembers a `setenv` and one
-   that does not.
+**Finish the hardware bring-up first.** The design synthesises; what it has
+never done is run. The first build is a bring-up exercise and
+`docs/18-mister-integration.md` lists what to expect, but two are worth
+repeating here because they are the ones that will waste a day:
 
-2. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
+* **If it executes garbage from the very first fetch, invert the PROM
+  download's byte swap in `sgiindy.sv`.** That is the one thing in the whole
+  path that is reasoned rather than measured - `hps_io`'s WIDE mode byte order
+  within `ioctl_dout`.
+* **Bring it up with "Graphics board: None".** The console goes to the UART
+  pins and you get the familiar serial boot to the Command Monitor, which is
+  far easier to diagnose than a screen.
+
+Then, in order:
+
+1. **NVRAM persistence**, which now has a plan: `docs/17-nvram-persistence.md`.
+   The environment is in the DS1386's NVRAM and nowhere else - settled by
+   measurement, because IRIS's two save files point at the other one - and the
+   constraint that decides the design is that its two banks have exactly one
+   reader and one writer each. Do not add a third port. The harness half
+   (`--nvram FILE`) is testable today and is the whole feature minus hardware.
+
+2. **A second clock domain for the video**, which is the only thing left wrong
+   with the picture. See the refresh-rate paragraph above; the line cache is
+   already the natural crossing for the pixel side, and **do not reach for
+   `FB_*` instead** - the reasons are written down.
+
+3. **The GIO DMA engine** in the MC, for the boot memory clear. Registers exist
    and a start reports instant completion; no data moves - so the PROM clears
-   nothing and believes it did. See the installer section above: this is now
-   the most suspicious untested thing the installer touches.
-3. **Ethernet**, the last device still answering as an unclaimed cycle
-   (`0x1FBD4000`, SEEQ 8003).
-4. **`sgiindy.sv`'s real top level.** Newport is built and drawing correctly,
-   but the MiSTer wrapper is still the stock template: nothing hands anything
-   to `VGA_*`, and the frame buffer needs the DDR3 mux
-   `N64_MiSTer/rtl/DDR3Mux.vhd` is the precedent for. `syn/` has been through
-   Quartus and the numbers are recorded there.
+   nothing and believes it did. This is the most suspicious untested thing the
+   IRIX installer touches, now that the SCSI path has been widened and cleared.
+
+4. **Ethernet**, the last device still answering as an unclaimed cycle
+   (`0x1FBD4000`, SEEQ 8003). It will want the MAC address out of the HPC3-side
+   93CS56 at `0x1FBB0008`, which is plain storage today - `docs/17` says where
+   that fits.
+
 5. **The rest of Newport** - the cursor, the DID table, 24-bit RGB drawing, the
    line address modes, the colour DDAs, blending and the GIO64 pixel-DMA path.
    Nothing the PROM does needs any of them; most of what IRIX does does. See
    `docs/16-newport-plan.md`, milestone N4.
+
+**Not on the list, and deliberately: SDRAM.** Everything is in DDR3, which is
+what N64 does with its own main memory, and the core needs no SDRAM module at
+all. Moving main memory onto one would be a real win - `hinv`'s "16 Mhz" is a
+measurement of uncached bus round trips and DDR3 through the f2h bridge is both
+slower and more variable than SDRAM - but it needs a controller, and the user
+has chosen a single RAM configuration. `docs/18` has the analysis, including
+what a dual board would have been worth.
 
 ### Things to ask the user for
 
@@ -775,6 +897,34 @@ Do not rediscover these:
   device timing from the console will mislead you - it already did once, and
   the wrong conclusion was written into this file. `--irq` and
   `tests/run-int.sh` are the tools that answer interrupt questions.
+- **AN ARRAY ONLY BECOMES A MEMORY IF ITS READ GOES STRAIGHT INTO A REGISTER,
+  AND A RESET ON THAT REGISTER IS SOMETHING IN THE WAY.** This has now cost
+  two separate compiles. `sgi_ds1386.sv` shows the shape that works: the read
+  sits ABOVE the `if (reset)`, unconditional. Nothing in simulation will ever
+  tell you - Verilator does not care - and Quartus's own diagnosis is one line
+  of Info per array plus one fatal error at the end,
+  `276003: Cannot convert all sets of registers into RAM megafunctions`.
+  **Grep the map log for `Info (276014)` before believing an array became a
+  memory**, and check `Total registers` in the map summary: 37,773 is right
+  for this design and anything in the hundreds of thousands is an array that
+  did not infer.
+- **A test that has never failed is not a test, and a stale binary passes
+  beautifully.** `ddr3test` reported PASS in two suite runs after its port had
+  changed shape, because the runner invoked the binary directly and nothing
+  rebuilt it. Rebuild before believing a unit test, and put a deliberate
+  regression back in to watch it fail at least once.
+- **Sample a model's outputs on the same side of the clock edge the hardware
+  does.** Three testbenches in this repository got this wrong in one session
+  and all three read as something else: a bridge that decided acceptance after
+  the edge made a working mux look completely dead; the same mistake with a
+  handshake made a working cache report zero pixels checked and zero misses,
+  which reads like a pass; and reading a combinational data-valid after the
+  edge lost the last word of every burst so no burst ever completed.
+- **Two unit tests, one on each side of an interface, can both pass while the
+  sides disagree.** The DDR3 mux asserted its burst handshake at burst END and
+  the line cache waited for it to mean burst START. Each test modelled its own
+  side's assumption. If an interface has two implementations, one test has to
+  see both.
 - **A picture is not a test, and three Newport bugs proved it.** The logic op
   read from the wrong bits, a missing graphics FIFO and a status register that
   never reported busy all produced a screen that a human looked at and called
