@@ -190,7 +190,27 @@ module np_vc2 #(
     logic        pix_phase;
     wire         pix_tick = ce_pix && pix_phase;
 
-    assign ce_pix = (PIX_DIV <= 1) ? 1'b1 : (pix_div_ctr == PIX_DIV[15:0] - 16'd1);
+    // PIXEL TIME STOPS WHILE THE GENERATOR IS FETCHING, and that is what makes
+    // the emitted raster exactly the one the table describes.
+    //
+    // Walking the table costs clocks that are not part of any state run: a
+    // word to read for each run, two for a run that carries state B and C, and
+    // the next-line pointer at the end of every line. A real VC2 hides them in
+    // a sixteen-deep state FIFO. Letting the pixel clock run through them
+    // instead adds those clocks to the picture, and how much they add depends
+    // on PIX_DIV: at two clocks per pixel the bubbles were about two pixels a
+    // line and the display enable still measured the table's 1318 exactly, and
+    // at one clock per pixel they became five and it measured 1323.
+    //
+    // So the divider is held instead. The frame takes a fraction of a percent
+    // longer in wall-clock time and the raster is the table's, which is the
+    // right way round: the geometry is what software and a monitor see, and
+    // the extra microseconds are what nothing sees.
+    wire vtg_stalled = vtg_enable && (vt != VT_RUN);
+
+    assign ce_pix = ((PIX_DIV <= 1) ? 1'b1
+                                    : (pix_div_ctr == PIX_DIV[15:0] - 16'd1))
+                    && !vtg_stalled;
 
     // Every timing channel is active low.
     assign hsync  = ~state_c[2];       // HSYNC_ARC_N
@@ -272,7 +292,11 @@ module np_vc2 #(
                 regs[R_RAM_ADDR] <= {1'b0, ram_addr + 15'd1};
 
             // ---- pixel clock ---------------------------------------------
-            if (ce_pix) begin
+            if (vtg_stalled) begin
+                // Hold the divider where it is, so a run resumes on the phase
+                // it was interrupted on rather than restarting mid-pixel.
+                pix_div_ctr <= pix_div_ctr;
+            end else if (ce_pix) begin
                 pix_div_ctr <= 16'h0;
                 pix_phase   <= ~pix_phase;
                 de_d        <= de;

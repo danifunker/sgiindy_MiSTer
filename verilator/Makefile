@@ -198,7 +198,32 @@ cputest-dcb-debug: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
-.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug all clean
+# --- DDR3 mux unit test ----------------------------------------------------
+# The MiSTer memory path is the one part of the top level that has behaviour
+# rather than wiring, and no Quartus is needed to check it. The bridge model in
+# tb_ddr3.cpp is deliberately unhelpful - random BUSY, random read latency,
+# garbage on DOUT except on the ready cycle - because a mux that passes against
+# a bridge that is never busy is a mux that has not been tested.
+#   make ddr3test && ./obj_dir_ddr3/Vddr3_mux
+ddr3test:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3 --top-module ddr3_mux \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vddr3_mux $(RTL)/mister/ddr3_mux.sv tb_ddr3.cpp
+
+# --- frame buffer line cache unit test -------------------------------------
+# Driven with the display's REAL access pattern - n1280_r3's 1318 of 1680
+# pixels and 1024 of 1065 lines, blanking included - against a memory that
+# accepts a burst late and returns it in gaps. A cache tested with random
+# addresses would be a different cache.
+#   make linecachetest && ./obj_dir_lcache/Vfb_linecache
+linecachetest:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_lcache --top-module fb_linecache \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vfb_linecache $(RTL)/mister/fb_linecache.sv tb_linecache.cpp
+
+.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal

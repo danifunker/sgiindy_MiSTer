@@ -28,7 +28,15 @@ module newport #(
     parameter int          FB_LINES       = 1024,
     parameter int          VC2_RAM_WORDS  = 32768,
     // Core clocks per pixel out of the video timing generator.
-    parameter int          PIX_DIV        = 2
+    //
+    // ONE, NOT TWO, AND THAT IS A FREE DOUBLING OF THE FRAME RATE. It was two
+    // so that the frame buffer read port was not asked for a word every single
+    // clock - which mattered when every pixel was a memory transaction, and
+    // stopped mattering when rtl/mister/fb_linecache.sv put a scanline of
+    // block RAM in front of it. The raster's geometry does not change: the
+    // timing table's durations are in units of two pixel clocks either way,
+    // so this changes when the pixels come out and not which ones.
+    parameter int          PIX_DIV        = 1
 ) (
     input  logic        clk,
     input  logic        reset,

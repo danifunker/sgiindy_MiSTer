@@ -181,7 +181,9 @@ way this core will have to for main memory and the frame buffer together.
 Two things that follow from DDR3 rather than from VRAM:
 
 * **The display side must burst a scanline into a line buffer**, not fetch a
-  64-bit word per pixel. DDR3 latency through the HPS bridge is variable and a
+  64-bit word per pixel. *(Built: `rtl/mister/fb_linecache.sv`, with the mux's
+  display port turned into a burst port to feed it. It lives on the MiSTer side
+  rather than in here, so nothing about the board changed.)* DDR3 latency through the HPS bridge is variable and a
   per-pixel round trip would both miss its deadline and starve the rasteriser.
   A 1304-pixel line buffer is one M10K block; the N64's VI does the same thing
   for the same reason.

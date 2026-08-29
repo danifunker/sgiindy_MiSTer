@@ -53,3 +53,6 @@ verilator/obj_dir_vc2/
 verilator/obj_dir_rex3dbg/
 verilator/obj_dir_dcbdbg/
 verilator/obj_dir_cmapdbg/
+# The DDR3 mux and the frame buffer line cache each build their own.
+verilator/obj_dir_ddr3/
+verilator/obj_dir_lcache/
