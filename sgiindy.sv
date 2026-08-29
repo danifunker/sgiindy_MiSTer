@@ -90,7 +90,7 @@ localparam CONF_STR = {
 	"-;",
 	"O[10],Graphics board,Fitted,None;",
 	"O[11],Primary caches,On,Off;",
-	"O[13:12],Memory,64MB,32MB,48MB;",
+	"O[13:12],Memory,48MB,32MB,64MB;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
@@ -231,18 +231,17 @@ end
 // bank that could not answer and its own diagnostic said so. All three boot in
 // simulation and the PROM reports each one back.
 //
-// 64 MB is first so that it is the default, which is what a well-specified
-// Indy shipped with, and it is also the ceiling: this is a SINGLE RAM
-// configuration, and 64 MB is what one MiSTer SDRAM module holds. The MC can
-// express 96 and 128 across more banks and sgi_memmap.sv will build them, but
-// they are not offered, because a size the board cannot be is not a choice -
-// it is a way to get "No usable memory found" out of a machine that looked
-// fine in the menu. If main memory ever moves off DDR3 and onto two SDRAM
-// chips, that is where they come back. See docs/18-mister-integration.md.
+// 48 MB IS FIRST, SO IT IS THE DEFAULT. It is the size sgi_memmap.sv calls
+// "the MiSTer single-SDRAM fit" - three 16 MB banks - and it is a real Indy
+// configuration rather than a compromise. 64 is the ceiling: this is a single
+// RAM configuration. The MC can express 96 and 128 across more banks and
+// sgi_memmap.sv will build them, but they are not offered, because a size the
+// board cannot be is not a choice - it is a way to get "No usable memory
+// found" out of a machine that looked fine in the menu.
 wire [1:0] mem_sel = status[13:12];
 wire [31:0] mem_mb = (mem_sel == 2'd1) ? 32'd32
-                   : (mem_sel == 2'd2) ? 32'd48
-                   :                     32'd64;
+                   : (mem_sel == 2'd2) ? 32'd64
+                   :                     32'd48;
 
 //////////////////////////   RESET   /////////////////////////////
 
