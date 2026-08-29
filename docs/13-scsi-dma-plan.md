@@ -468,9 +468,15 @@ and reported `0x16`, which is what a working command looks like.
   descriptors do not set XIE. Everything the boot proves about this engine, it
   proves about the polled path only. `tests/run-dma.sh` is the only evidence
   the interrupt path works.
-* **DATA OUT is tested but narrow.** One WRITE(6) of one block through
-  Select-and-Transfer and DMA, and nothing else: no multi-block write, no
-  descriptor chain longer than one data descriptor, no WRITE(10).
+* **The data path is tested at width now, and it passed first time.**
+  `tests/run-scsiwr.sh` grew from one WRITE(6) of one block to six phases:
+  four blocks in one command, WRITE(10)/READ(10), a three-descriptor
+  scatter-gather chain read back over two, 16 KB over four descriptors each
+  way, and four 2048-byte logical blocks off the CD-ROM over a chain. Every
+  byte of all six compares. What that retires is the leading theory about the
+  IRIX 5.3 installer's panic - see `docs/08-resume-prompt.md`. What it does
+  *not* cover is sustained traffic: the widest single command tested is 16 KB,
+  and the installer copies megabytes.
 * **The INT2 `intstat` register is wiring, not a tested path.** It is
   implemented per the spec, including the documented read-back bug that splits
   it across `0x1FBB0000` and `0x1FBB000C`, and nothing has ever read it.

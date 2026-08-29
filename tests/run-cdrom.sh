@@ -23,13 +23,15 @@
 # does. So this exact line also appears in tests/run-scsi.sh, which mounts no
 # ISO at all. What is asserted here is that the drive is present, answers
 # INQUIRY as device type 5, and gets the right ARCS node shape built for it -
-# NOT that a disc image was read, because no block has ever come off one.
+# NOT that a disc image was read.
 #
-# The 2048-byte logical block path - four consecutive 512-byte host blocks,
-# scaled x4 at latch time in scsi.v - is therefore completely untested. That is
-# the obvious next thing, and the argument for it is docs/13: DATA IN was off
-# by one for months because everything being read was zeros. The ISO is built
-# with a pattern below so that the test which finally reads it can fail.
+# READING THE DISC IS tests/run-scsiwr.sh's LAST PHASE, which pulls four
+# 2048-byte logical blocks off ID 6 at a non-zero LBA and compares them with
+# what the image actually has there. That is where the x4 scaling from a
+# CD-ROM's logical block to the four 512-byte host blocks behind it is
+# checked. The ISO here is still built with a pattern rather than zeros, for
+# the reason docs/13 gives: DATA IN was off by one for months because
+# everything being read was zeros.
 #
 # THE ISO IS BUILT HERE, not checked in: 8 MB of incompressible pattern is not
 # something to put in git, and a disc full of zeros would hide a scaling bug in
@@ -84,7 +86,11 @@ echo "booting $(basename "$PROM") with a disk on ID 1 and a CD-ROM on ID 6 ..."
 # Stops on the audio line, which the PROM prints AFTER the SCSI ones, so the
 # CD-ROM line is always flushed before the run ends. Stopping on the CD-ROM
 # line itself would race the newline - see tests/run-scsi.sh.
-"$SIM" --prom "$PROM" --disk "1=$DISK" --disk "6=$ISO" \
+# --no-gfx leaves Newport unfitted. A real Indy always has a graphics
+# board, and the PROM moves its console to it the moment it finds one -
+# so a serial-console ratchet has to ask for the machine that talks to a
+# terminal. tests/run-newport.sh is the one that fits the board.
+"$SIM" --prom "$PROM" --no-gfx --disk "1=$DISK" --disk "6=$ISO" \
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \
