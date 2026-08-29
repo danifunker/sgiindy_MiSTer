@@ -44,6 +44,8 @@ static std::mt19937 rng(12345);
 struct Pending { int delay; uint64_t data; };
 static std::deque<Pending> read_pipe;
 static uint64_t clk_count = 0;
+static bool     s_fbr_valid = false;
+static uint64_t s_fbr_dout  = 0;
 
 static uint64_t garbage() { return ((uint64_t)rng() << 32) ^ rng(); }
 
@@ -82,6 +84,16 @@ static void tick()
           dut->DDRAM_DIN, (uint8_t)dut->DDRAM_BE};
     bool busy = dut->DDRAM_BUSY;
 
+    // THE DISPLAY'S DATA-VALID IS COMBINATIONAL, so it has to be sampled the
+    // way a synchronous consumer does - at the edge, from the value that was
+    // there before it. Reading it afterwards loses the last word of every
+    // burst, because the state machine has already moved on by then, and the
+    // burst therefore never completes. That is a testbench mistake and not a
+    // design one, and it is the third time in this file's history that
+    // sampling on the wrong side of the edge made working RTL look broken.
+    s_fbr_valid = dut->fbr_dout_valid;
+    s_fbr_dout  = dut->fbr_dout;
+
     dut->clk = 1; dut->eval();
     dut->clk = 0; dut->eval();
 
@@ -99,8 +111,12 @@ static void tick()
             }
             mem[b.addr] = val;
         } else {
-            read_pipe.push_back({2 + (int)(rng() % 6),
-                                 mem.count(b.addr) ? mem[b.addr] : 0});
+            int n = dut->DDRAM_BURSTCNT ? dut->DDRAM_BURSTCNT : 1;
+            if (getenv("DDR3_DEBUG"))
+                printf("      [bridge] read addr=%08x burst=%d\n", b.addr, n);
+            for (int w = 0; w < n; w++)
+                read_pipe.push_back({(w == 0 ? 2 + (int)(rng() % 6) : 0),
+                                     mem.count(b.addr + w) ? mem[b.addr + w] : 0});
         }
     }
     clk_count++;
@@ -118,6 +134,7 @@ struct Master {
     uint64_t expect = 0;
     uint64_t issued = 0, acked = 0;
     uint64_t wait_cycles = 0, worst_wait = 0;
+    int      burst = 1, got = 0;      // the display's burst, and its progress
 };
 
 static Master m_fbr{"fbr"}, m_ram{"ram"}, m_prom{"prom"}, m_fbw{"fbw"};
@@ -138,6 +155,7 @@ int main(int argc, char **argv)
 
     dut->reset = 1; dut->clk = 0;
     dut->fbr_req = dut->dl_req = dut->ram_req = dut->prom_req = dut->fbw_req = 0;
+    dut->fbr_burst = 1;
     dut->ram_we = dut->fbw_we = 0;
     dut->DDRAM_BUSY = 0; dut->DDRAM_DOUT_READY = 0;
     for (int i = 0; i < 8; i++) tick();
@@ -166,7 +184,7 @@ int main(int argc, char **argv)
     printf("running %d cycles of four-master traffic ...\n", ROUNDS);
 
     auto region_size = [](Master *m) -> uint32_t {
-        if (m == &m_ram)  return 64u * 1024 * 1024;
+        if (m == &m_ram)  return 128u * 1024 * 1024;   // the OSD's largest
         if (m == &m_prom) return 512u * 1024;
         return 8u * 1024 * 1024;               // frame buffer, a slice of it
     };
@@ -185,9 +203,13 @@ int main(int argc, char **argv)
             m->addr = a;
             m->issued++;
             if (m == &m_fbr) {
+                // THE DISPLAY IS A BURST MASTER. It asks for a run of words
+                // and takes them as they stream back, which is the only way a
+                // scanline arrives inside a line time - see ddr3_mux.sv.
                 m->is_write = false;
-                m->expect = fb_shadow.count(a) ? fb_shadow[a] : 0;
-                dut->fbr_addr = a; dut->fbr_req = 1;
+                m->burst = 1 + (int)(rng() % 16);
+                m->got = 0;
+                dut->fbr_addr = a; dut->fbr_burst = m->burst; dut->fbr_req = 1;
             } else if (m == &m_prom) {
                 m->is_write = false;
                 m->expect = prom_shadow.count(a) ? prom_shadow[a] : 0;
@@ -218,23 +240,32 @@ int main(int argc, char **argv)
         }
 
         tick();
+        // The burst request is HELD until the mux takes it; everything else
+        // pulses. Both shapes have to be exercised, because the mux latches
+        // one and streams the other.
+        if (dut->fbr_taken) dut->fbr_req = 0;
         if (getenv("DDR3_DEBUG") && c < 40)
             printf("[%3d] req f=%d r=%d p=%d w=%d | RD=%d WE=%d ADDR=%08x BUSY=%d "
                    "RDY=%d | ack f=%d r=%d p=%d w=%d\n", c,
                    dut->fbr_req, dut->ram_req, dut->prom_req, dut->fbw_req,
                    dut->DDRAM_RD, dut->DDRAM_WE, dut->DDRAM_ADDR, dut->DDRAM_BUSY,
                    dut->DDRAM_DOUT_READY,
-                   dut->fbr_ack, dut->ram_ack, dut->prom_ack, dut->fbw_ack);
+                   dut->fbr_taken * 2 + dut->fbr_dout_valid,
+                   dut->ram_ack, dut->prom_ack, dut->fbw_ack);
 
         // THE REQUEST IS A PULSE. Dropping it here is the whole reason the mux
         // has to latch: this is what sgi_indy.sv's CPU port does.
-        dut->fbr_req = dut->ram_req = dut->prom_req = dut->fbw_req = 0;
+        dut->ram_req = dut->prom_req = dut->fbw_req = 0;
 
-        if (dut->fbr_ack) {
-            if (dut->fbr_rdata != m_fbr.expect)
-                fail("fbr read", m_fbr.addr, m_fbr.expect, dut->fbr_rdata);
-            m_fbr.busy = false; m_fbr.acked++;
-            if (m_fbr.wait_cycles > m_fbr.worst_wait) m_fbr.worst_wait = m_fbr.wait_cycles;
+        if (s_fbr_valid) {
+            uint32_t a = m_fbr.addr + (uint32_t)m_fbr.got * 8;
+            uint64_t want = fb_shadow.count(a) ? fb_shadow[a] : 0;
+            if (s_fbr_dout != want) fail("fbr burst word", a, want, s_fbr_dout);
+            if (++m_fbr.got >= m_fbr.burst) {
+                m_fbr.busy = false; m_fbr.acked++;
+                if (m_fbr.wait_cycles > m_fbr.worst_wait)
+                    m_fbr.worst_wait = m_fbr.wait_cycles;
+            }
         }
         if (dut->ram_ack) {
             if (!m_ram.is_write && dut->ram_rdata != m_ram.expect)

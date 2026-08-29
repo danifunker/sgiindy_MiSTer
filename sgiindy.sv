@@ -90,6 +90,7 @@ localparam CONF_STR = {
 	"-;",
 	"O[10],Graphics board,Fitted,None;",
 	"O[11],Primary caches,On,Off;",
+	"O[14:12],Memory,64MB,32MB,48MB,96MB,128MB;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
@@ -219,6 +220,34 @@ always @(posedge clk_sys) begin
 	if (carry) sclk <= ~sclk;
 end
 
+/////////////////////////   MEMORY SIZE   ///////////////////////
+
+// EVERY ONE OF THESE IS A SIZE THE MC CAN ACTUALLY EXPRESS, which is not the
+// same as any number of megabytes. A bank is four SIMMs and the parts that do
+// not need the BNK bit give banks of 64, 16 and 4 MB, so an installable size
+// is a sum of those across at most four banks - 32 is 16+16, 48 is 16+16+16,
+// 96 is 64+16+16, 128 is 64+64. rtl/sgi/sgi_memmap.sv has the derivation, and
+// asking for 32 as one 32 MB bank is what made `--ram-mb 32` fail once: the
+// PROM probed a bank that could not answer and its own diagnostic said so.
+// All five boot in simulation and the PROM reports each one back.
+//
+// 64 MB is first so that it is the default, which is what a well-specified
+// Indy shipped with.
+//
+// THE SINGLE/DUAL SDRAM SPLIT IS NOT HERE, and deliberately: main memory is in
+// DDR3, so no SDRAM module is required and none of these sizes depends on
+// having one. Gating the larger two behind MISTER_DUAL_SDRAM would deny
+// configurations that work. If main memory ever moves to SDRAM - which is
+// worth doing, the CPU is latency-bound and SDRAM is both lower and more
+// predictable - the split becomes real and belongs here. See
+// docs/18-mister-integration.md.
+wire [2:0] mem_sel = status[14:12];
+wire [31:0] mem_mb = (mem_sel == 3'd1) ? 32'd32
+                   : (mem_sel == 3'd2) ? 32'd48
+                   : (mem_sel == 3'd3) ? 32'd96
+                   : (mem_sel == 3'd4) ? 32'd128
+                   :                     32'd64;
+
 //////////////////////////   RESET   /////////////////////////////
 
 // The core stays in reset while the PROM is being written into DDR3, and for
@@ -230,9 +259,16 @@ end
 // counter is the top level's half of the same rule.
 wire prom_download = ioctl_download && (ioctl_index[5:0] == 6'd0);
 
+// A CHANGE OF MEMORY SIZE RESETS THE MACHINE, because the PROM sizes memory
+// exactly once - `szmem` probes each bank at boot and writes the result into
+// the MC's config registers - and nothing re-reads it. Changing it underneath
+// a running machine would leave the guest addressing memory that had moved.
+reg [2:0] mem_sel_d;
 reg [15:0] rst_cnt = 16'hFFFF;
 always @(posedge clk_sys) begin
-	if (RESET | status[0] | buttons[1] | prom_download | ~pll_locked)
+	mem_sel_d <= mem_sel;
+	if (RESET | status[0] | buttons[1] | prom_download | ~pll_locked
+	    | (mem_sel != mem_sel_d))
 		rst_cnt <= 16'hFFFF;
 	else if (rst_cnt != 0)
 		rst_cnt <= rst_cnt - 1'd1;
@@ -323,10 +359,7 @@ sgi_indy u_core
 	.icache_en        (~status[11]),
 	.dcache_en        (~status[11]),
 
-	// Fixed at 64 MB. The DDR3 map gives main memory 64 and the frame buffer
-	// the next 16; making this a menu option would need the map to move with
-	// it, and 64 MB is what a well-specified Indy shipped with.
-	.mem_mb           (32'd64),
+	.mem_mb           (mem_mb),
 
 	.ram_req          (ram_req),
 	.ram_we           (ram_we),

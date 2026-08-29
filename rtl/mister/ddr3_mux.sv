@@ -55,9 +55,15 @@ module ddr3_mux #(
     // 25'h400_0000 does not fit in 25 bits, truncated to zero, and the frame
     // buffer aliased the whole of RAM. The unit test caught it as a display
     // read returning data the rasteriser had never written.
-    parameter logic [31:0] BASE_RAM  = 32'h0000_0000,  //  64 MB
-    parameter logic [31:0] BASE_FB   = 32'h0400_0000,  //  16 MB
-    parameter logic [31:0] BASE_PROM = 32'h0500_0000   // 512 KB
+    //
+    // MAIN MEMORY GETS 128 MB WHETHER OR NOT IT IS USING IT. The OSD offers up
+    // to 128, and a map that moved with the selection would put the frame
+    // buffer at a different address for each one - which the guest never sees
+    // but every debugging session would. 144.5 MB of the 256 is spoken for and
+    // the rest is spare.
+    parameter logic [31:0] BASE_RAM  = 32'h0000_0000,  // 128 MB
+    parameter logic [31:0] BASE_FB   = 32'h0800_0000,  //  16 MB
+    parameter logic [31:0] BASE_PROM = 32'h0900_0000   // 512 KB
 ) (
     input  logic        clk,
     input  logic        reset,
@@ -237,14 +243,27 @@ module ddr3_mux #(
     // `fbr_taken` says the burst was issued so the requester may stop holding
     // its request; every DOUT_READY while the display owns the bus is one of
     // its words.
+    // `fbr_taken` IS ASSERTED WHEN THE BURST IS ISSUED, NOT WHEN IT FINISHES,
+    // and the difference is the whole handshake. The requester holds its
+    // request until this, then counts words; if it only came at the end, the
+    // requester would still be waiting to be told to start while its data was
+    // streaming past it.
+    //
+    // This was wrong in exactly that way, and the two unit tests did not catch
+    // it between them - tb_ddr3 drove the port and never checked when the
+    // handshake arrived, and tb_linecache modelled a bridge that asserted it
+    // at issue, which is the contract this file did not implement. Two tests,
+    // one on each side, both passing, and the sides disagreeing.
+    logic fbr_taken_q;
     assign fbr_dout       = DDRAM_DOUT;
     assign fbr_dout_valid = DDRAM_DOUT_READY && (tst == T_WAIT) &&
                             (cur == $clog2(NM)'(M_FBR));
-    assign fbr_taken      = ack_q[M_FBR];
+    assign fbr_taken      = fbr_taken_q;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             burst_left     <= 9'd0;
+            fbr_taken_q    <= 1'b0;
             pend           <= '0;
             ack_q          <= '0;
             tst            <= T_IDLE;
@@ -258,7 +277,8 @@ module ddr3_mux #(
             DDRAM_BE       <= 8'h0;
             DDRAM_BURSTCNT <= 8'd1;
         end else begin
-            ack_q <= '0;
+            ack_q       <= '0;
+            fbr_taken_q <= 1'b0;
 
             // Latch every request the cycle it appears. A master whose request
             // is still pending is presenting the same one again at worst; a
@@ -307,6 +327,7 @@ module ddr3_mux #(
                         ack_q[cur] <= 1'b1;
                         tst        <= T_IDLE;
                     end else begin
+                        if (cur == $clog2(NM)'(M_FBR)) fbr_taken_q <= 1'b1;
                         tst <= T_WAIT;
                     end
                 end

@@ -159,6 +159,69 @@ this core reports an audio processor rather than having one. The SEEQ 8003 is
 still an unclaimed address. VC2's cursor planes are not built, and neither is
 the mouse pointer that would use them — see `docs/12-chipset.md`.
 
+## Memory size
+
+The OSD offers 32, 48, 64, 96 and 128 MB, default 64. **Every one of those is a
+size the MC can actually express, which is not the same as any number of
+megabytes.** A bank is four SIMMs, and the parts that do not need the BNK bit
+give banks of 64, 16 and 4 MB, so an installable size is a sum of those across
+at most four banks: 32 is 16+16, 48 is 16+16+16, 96 is 64+16+16, 128 is 64+64.
+`rtl/sgi/sgi_memmap.sv` has the derivation. Asking for 32 as one 32 MB bank is
+what made `--ram-mb 32` fail once — the PROM probed a bank that could not
+answer and its own diagnostic said so. All five boot in simulation and the PROM
+reports each one back.
+
+Changing it resets the machine, because the PROM sizes memory exactly once:
+`szmem` probes the banks at boot and writes the result into the MC's config
+registers, and nothing re-reads it.
+
+**The single/dual SDRAM split is not in the menu**, and that is not an
+oversight. Main memory is in DDR3, so no SDRAM module is required and none of
+these sizes depends on having one; gating the larger two behind
+`MISTER_DUAL_SDRAM` would deny configurations that work. The split becomes real
+only if main memory moves to SDRAM — see below.
+
+## What a dual SDRAM board could be worth, and how to use it
+
+Today it is worth nothing: `SDRAM_*` is tri-stated and a dual board gives
+exactly what a bare DE10-Nano gives. That is a missed opportunity rather than a
+neutral choice, for two reasons specific to this machine.
+
+**The CPU is latency-bound in the most literal way.** `hinv` reports "16 Mhz",
+and that number is not a clock - it is a measurement of how long a fixed loop
+of uncached instructions takes, about nine cycles per bus round trip. DDR3
+through the f2h bridge is worse than SDRAM and, more to the point, variable.
+Main memory on SDRAM should move that number directly.
+
+**The display and the CPU are the two masters you least want sharing a bus.**
+One is a long sequential stream of 10.8 MB a frame; the other is random and
+latency-critical. They are behind the same arbiter now.
+
+Three ways to use two chips, and they are not equally interesting here:
+
+| | what it gives | what it costs |
+|---|---|---|
+| interleave as one 32-bit memory | half the beats per 64-bit word, double the bandwidth | both chips busy for every access, so no parallelism between masters |
+| **split by master** — RAM on one, frame buffer on the other | the CPU and the display never contend at all | the frame buffer's 16 MB and main memory must each fit one chip |
+| split by address | bandwidth to whoever asks | masters still contend |
+
+**Split by master is the one that fits this core's shape**, and it maps onto the
+size list exactly: at 32/48/64 MB main memory fits one chip and the second is
+free for the frame buffer, which is the fastest configuration this board can
+be. At 96 or 128 MB both chips are main memory and the frame buffer goes back
+to DDR3 - which is fine, because a machine with that much memory is being asked
+for capacity rather than for frame rate.
+
+So the memory map would become a function of the build and the selected size,
+which is the one thing this file deliberately avoided when the frame buffer
+base was fixed at 128 MB. That is a fair trade for what it buys, but it is a
+decision rather than a detail.
+
+**It needs an SDRAM controller first**, and that is the honest ordering: main
+memory on a single SDRAM is the bigger win and is independent of the dual
+question. `N64_MiSTer/rtl/sdram.sv` is the precedent, on the same board with
+the same CPU behind it.
+
 ## Using it
 
 The OSD carries:
@@ -176,6 +239,7 @@ The OSD carries:
   "None" is how you get a terminal, and it is a real machine configuration.
 * **Primary caches: On / Off**, for bisecting a hardware fault onto one of them
   without rebuilding.
+* **Memory: 64 / 32 / 48 / 96 / 128 MB** — see above. Changing it resets.
 
 The SCC's channel B is tty1, the SGI console, and it goes to the board's UART
 pins. The keyboard and mouse come from `hps_io` as `ps2_key` and `ps2_mouse`
