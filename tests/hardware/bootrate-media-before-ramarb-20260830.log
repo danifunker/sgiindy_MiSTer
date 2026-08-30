@@ -1,0 +1,16 @@
+=== media: /media/fat/games/SGIIndy/indy1GB.img + /media/fat/games/SGIIndy/IRIX 5.3 XFS.iso ===
+=== 10 launches, 45s each, memory: zeroed ===
+   1/10  PANIC       panel  21.7%  text  3531  indices 168  marker  0.8%  static
+   2/10  PANIC       panel  21.7%  text  3531  indices 168  marker  0.8%  static
+   3/10  NO-PANEL    panel   0.0%  text     0  indices 164  marker  0.8%  static
+   4/10  PANIC       panel  21.7%  text  3536  indices 168  marker  0.8%  static
+   5/10  NO-PANEL    panel   0.0%  text   655  indices 171  marker  0.8%  static
+   6/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   7/10  PANIC       panel  21.7%  text  3536  indices 168  marker  0.8%  static
+   8/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   9/10  NO-PANEL    panel   0.0%  text   655  indices 171  marker  0.8%  static
+  10/10  PANIC       panel  21.7%  text  3536  indices 168  marker  0.8%  static
+=== tally over 10 launches ===
+  NO-PANEL    3
+  PANIC       5
+  healthy     2

@@ -1,0 +1,18 @@
+=== panic rate WITH media, same 10 launches as the baseline ===
+=== media: /media/fat/games/SGIIndy/indy1GB.img + /media/fat/games/SGIIndy/IRIX 5.3 XFS.iso ===
+=== 10 launches, 45s each, memory: zeroed ===
+   1/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   2/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   3/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   4/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   5/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   6/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   7/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   8/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+   9/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+  10/10  healthy     panel  22.2%  text  1658  indices 169  marker  0.8%  static
+=== tally over 10 launches ===
+  healthy     10
+
+=== POST's SCSI device/cable failure mask at 0xa8740d48 (0 = all targets passed) ===
+30740d48  00 00 00 00 00 00 00 00                          |........|
