@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# bootrate.sh [N] [--no-memclear] - launch the core N times and classify how
-# each boot ended.
+# bootrate.sh [N] [--no-memclear] [--poison HH] - launch the core N times and
+# classify how each boot ended.
 #
 # WHY A SCRIPT AND NOT A LOOP IN SOMEBODY'S SHELL. This core's remaining
 # hardware fault is intermittent: with main memory zeroed the machine draws its
@@ -24,7 +24,13 @@
 #     nothing and a boot on inherited memory does not draw at all.
 # --no-memclear exists to demonstrate that second one rather than to be used.
 #
+# --poison HH is the strict form and the one that proves the GIO64 DMA engine:
+# it fills main memory with a byte pattern before EVERY launch instead of
+# clearing it, so the machine has to clear its own memory to get anywhere. On
+# the bitstream before that engine existed, `--poison a5` never drew once.
+#
 #   bash scripts/bootrate.sh 10
+#   bash scripts/bootrate.sh 8 --poison a5
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 if [ -r scripts/local.env ]; then . scripts/local.env; fi
@@ -33,10 +39,11 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 : "${MISTER_HTTP_PORT:=8182}"
 
-N=10; MEMCLEAR=1; WAIT=45
+N=10; MEMCLEAR=1; WAIT=45; POISON=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-memclear) MEMCLEAR=0 ;;
+        --poison)      POISON="$2"; MEMCLEAR=0; shift ;;
         --wait) WAIT="$2"; shift ;;
         [0-9]*) N="$1" ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -85,11 +92,12 @@ print("%-11s panel %5.1f%%  text %5d  indices %3d  marker %4.1f%%  %s"
       % (v, panel, text, len(b), mark, "moving" if a != b else "static"))
 PYEOF
 
-echo "=== $N launches, memclear $([ $MEMCLEAR = 1 ] && echo on || echo OFF), ${WAIT}s each ==="
+echo "=== $N launches, ${WAIT}s each, memory: $([ -n "$POISON" ] && echo "POISONED 0x$POISON"       || { [ $MEMCLEAR = 1 ] && echo zeroed || echo "left as the last boot left it"; }) ==="
 declare -A TALLY
 for i in $(seq 1 "$N"); do
     rsh "python3 $DBG/fb_poke.py fill 0xE7" >/dev/null 2>&1
     [ "$MEMCLEAR" = 1 ] && rsh "python3 $DBG/memclear.py" >/dev/null 2>&1
+    [ -n "$POISON" ]    && rsh "python3 $DBG/memclear.py 0x$POISON" >/dev/null 2>&1
     python tools/misterdeploy/launch_unstable_core.py \
         --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
         --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \

@@ -82,3 +82,7 @@ build_*.err
 
 # Quartus writes this beside the project when it builds the pin model.
 c5_pin_model_dump.txt
+
+# session scratch: build console captures and measurement runs
+*.console
+*.out
