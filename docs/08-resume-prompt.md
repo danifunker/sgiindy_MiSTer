@@ -15,85 +15,92 @@ yourself, keep going through obstacles, and only stop to ask when a decision
 genuinely changes what gets built (or when you need something run on real
 hardware — see below).
 
-## STOP. THERE IS AN UNFIXED REGRESSION AND A KNOWN-GOOD BUILD
+## STOP. READ THIS BEFORE TOUCHING THE DISPLAY
 
-**`releases/SGIIndy_20260829.rbf` WORKS.** It boots on a DE10-Nano, draws the
-whole Indy boot screen in colour, and reaches the System Maintenance Menu. If
-you want a working machine, put that on the board and do not build anything
-first. `releases/SGIIndy_20260829_bootscreen.png` is what it looks like.
+**`releases/SGIIndy_20260829.rbf` IS THE RIGHT FILE AND IT IS VERIFIED.** Three
+ways: the file on disk, `git show HEAD:releases/SGIIndy_20260829.rbf`, and the
+copy on the board all give md5 `214e9fddd29f7322490de25643388446` - and that
+same md5 was confirmed on the board *before* the release was cut, while the
+build that drew the boot screen was running. It is the bitstream that worked.
+`SGIIndy_20260829_bootscreen.png` beside it is what it drew. Settings: **all
+defaults**, a zeroed `config/SGIINDY.CFG` - graphics Fitted, caches On, memory
+48 MB, both debug entries Off.
 
-**HEAD DOES NOT WORK.** Two commits added a hardware mouse cursor to Newport:
+**IT IS ALSO, RIGHT NOW, NOT COMING UP.** Redeployed and md5-verified, the same
+bitstream boots the PROM (exception vectors and szmem's patterns are in DDR3),
+runs REX3 (it wipes a marker off the whole frame buffer), **clears the screen to
+index 0 and stops, with no video signal at all**. So the machine gets to
+`rex3Clear` and no further.
 
-    1fd8968  Newport: build the cursor, and IRIS says where its colours come from
-    2ce0167  VC2: give the cursor fetch its own SRAM read port
+### The suspicion, and it is about the instrumentation rather than the core
 
-The first produced **washed-out colours** on hardware. The second - meant to
-fix it - produced **no picture at all**. Neither symptom is explained. The
-cursor was never seen on screen.
+**Every failing run had the frame buffer PRE-FILLED with 0xE7 and the working
+one did not.** That marker is `scripts/hwcheck.sh --clear`, added late in the
+session to stop stale pictures being mistaken for new ones - a real problem,
+fixed in a way that may have created a bigger one.
 
-**THE FIRST THING TO DO IS DECIDE WHETHER TO REVERT.** `git revert 2ce0167
-1fd8968` returns the tree to the state that produced the working release, and
-that is the right move unless you intend to finish the cursor immediately. Do
-not build on top of a display that does not work.
+| run | frame buffer before launch | result |
+|---|---|---|
+| the one that worked | untouched | full boot screen, video fine |
+| every one after | filled with 0xE7 | cleared only, no video |
 
-### The most useful measurement, and it was the last one taken
+POST runs a graphics diagnostic on Newport *before* the display is brought up.
+If pre-loading the frame buffer changes what that diagnostic sees, the PROM may
+never enable video - which fits "no signal at all" far better than anything
+about the rasteriser. **The decisive test is one relaunch of the verified
+bitstream with the frame buffer untouched.** Do that before believing anything
+else in this section.
 
-With the frame buffer marked with 0xE7 before launch, the two-port build's
-frame buffer came back **100% index 0 and no marker left anywhere**. So:
+### Two conclusions from this session that are probably wrong
 
-* REX3 **did** run this boot - it overwrote the whole marker.
-* All it did was **clear the screen to index 0**. The boot screen was never
-  drawn.
+Both were written down confidently and both need re-testing, because the
+experiment changed underneath them:
 
-That is a far more specific fault than "black screen": the machine gets as far
-as `rex3Clear` and stops before drawing anything. The earlier reading of "171
-colour indices" that suggested the splash was present came from a frame buffer
-that had NOT been marked, and was the previous build's picture still sitting in
-DDR3. **The clear happens; the drawing does not.** Start there.
+1. **"The cursor commits broke the display."** `1fd8968` and `2ce0167` are
+   still the only RTL changes since the working build, and the display did get
+   worse after them - washed-out colours, then nothing. But the *verified
+   working bitstream* now shows the same "clears and stops" symptom, so at
+   least part of what was blamed on the cursor belongs somewhere else.
+2. **"The boot is non-deterministic."** Written after the known-good build
+   failed to come up. Every one of those attempts had the marker in it, so
+   there may be nothing non-deterministic about it at all.
 
-### What is actually known about the regression
+### If you still want to remove the cursor
 
-* **The raster is fine.** With `viddbg=raw` - the OSD's "Video debug: Raw
-  index", which takes CMAP out of the pixel path - the cursor build showed the
-  boot screen correct to the pixel. So VC2's timing generator, the frame
-  buffer, the DDR3 mux and the line cache are all working. What is wrong is
-  between the frame buffer index and the colour on screen.
-* **"Washed out" is the clue and it points at `cmap_index`.** The only thing
-  the cursor commit changed on that path is
-  `newport.sv`'s colour map index, which now becomes
-  `{xmap0_curs_cmap, 5'b0} | {11'b0, cursor_q}` whenever `cursor_q` is
-  non-zero. Washed-out colour is what indexing a different, partly-programmed
-  page of CMAP looks like. **Suspect `cursor_q` is non-zero far more often
-  than intended** - if the PROM enables the cursor with a position or size
-  this code reads wrongly, the override fires where it should not. Print it,
-  or force `cursor_q` to zero and see if the colours come back; that is one
-  build and it settles the question.
-* **`tb_vc2` passes and proves less than it looks.** It checks the cursor's
-  own geometry - position, size, the 64-word plane offset, no row shift, 5120
-  pixels exactly where placed - and nothing about its effect on anything else.
-  It passed against both the shared-read-port version and the two-port one, so
-  it says nothing about interference either.
-* **DDR3 SURVIVES A CORE RELOAD.** Several conclusions during this work were
-  drawn from a frame buffer that turned out to hold the *previous* build's
-  picture. `scripts/hwcheck.sh` now fills it with 0xE7 before every launch and
-  reports how much survives. Do not reason from frame buffer contents you did
-  not watch appear.
+`git revert 2ce0167 1fd8968` restores the RTL that produced the release; those
+two commits are the only ones since it that touch `rtl/` or `sgiindy.sv`.
+Everything between - the release, the docs, `scripts/hwcheck.sh` - is
+untouched by that revert. But **establish first whether the marker explains the
+failures**, or the revert will be judged against the same broken experiment.
 
-### What the cursor work did get right, if you finish it
+### What the cursor work established, if it is finished rather than reverted
 
-IRIS settled two things that are easy to get wrong, and both are already in the
-code. The cursor's colours do **not** come from the BT445's cursor colour
-registers - those belong to that chip's own hardware cursor, which Newport does
-not use - they come from CMAP at `(XMAP9 register 3 << 5) | value`
-(`compositor.rs`). And the vertical position is latched from `CURSOR_Y` into
-`WORKING_CURSOR_Y` at the vertical position pulse, not when software writes it
-(`rex3.rs`, at vblank).
+IRIS settled two things that are easy to get wrong and both are in the code.
+The cursor's colours do **not** come from the BT445's cursor colour registers -
+those belong to that chip's own hardware cursor, which Newport does not use -
+they come from CMAP at `(XMAP9 register 3 << 5) | value` (`compositor.rs`).
+And the vertical position is latched from `CURSOR_Y` into `WORKING_CURSOR_Y` at
+the vertical position pulse, not when software writes it (`rex3.rs`, at
+vblank).
 
-The unit test also caught a real bug worth keeping: the fetch address was a
-live expression on `y_ctr`, which has already advanced by the time the reads
-issue, so every row was one too far. A solid glyph hides that completely - only
-the last row, reading off the end of the plane, gave it away. `tb_vc2` marks
-one row with plane 1 so an offset shows up wherever it happens.
+`tb_vc2` covers the cursor's own geometry - position, size, the 64-word plane
+offset, no row shift, 5120 pixels exactly where placed - and **explicitly not**
+its interference with anything else: it passes against both the shared-SRAM-port
+version and the two-port one. It did catch a real bug worth keeping: the fetch
+address was a live expression on `y_ctr`, which has already advanced by the time
+the reads issue, so every row was one too far. A solid glyph hides that
+completely; only the last row, reading off the end of the plane, gave it away.
+The test now marks one row with plane 1 so an offset shows up wherever it
+happens.
+
+### The rule this whole episode is an argument for
+
+**Do not change the experiment and the thing being measured at the same time.**
+Three separate wrong conclusions tonight came from exactly that: a stale frame
+buffer read as a working display, a corrupted raster inferred from a black
+screen that `viddbg=raw` then showed was fine, and a marker added to fix the
+first that may have caused the third. When a measurement starts disagreeing
+with itself, suspect the instrument before the machine.
 
 ## Where this is
 
