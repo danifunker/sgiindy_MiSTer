@@ -15,6 +15,86 @@ yourself, keep going through obstacles, and only stop to ask when a decision
 genuinely changes what gets built (or when you need something run on real
 hardware — see below).
 
+## STOP. THERE IS AN UNFIXED REGRESSION AND A KNOWN-GOOD BUILD
+
+**`releases/SGIIndy_20260829.rbf` WORKS.** It boots on a DE10-Nano, draws the
+whole Indy boot screen in colour, and reaches the System Maintenance Menu. If
+you want a working machine, put that on the board and do not build anything
+first. `releases/SGIIndy_20260829_bootscreen.png` is what it looks like.
+
+**HEAD DOES NOT WORK.** Two commits added a hardware mouse cursor to Newport:
+
+    1fd8968  Newport: build the cursor, and IRIS says where its colours come from
+    2ce0167  VC2: give the cursor fetch its own SRAM read port
+
+The first produced **washed-out colours** on hardware. The second - meant to
+fix it - produced **no picture at all**. Neither symptom is explained. The
+cursor was never seen on screen.
+
+**THE FIRST THING TO DO IS DECIDE WHETHER TO REVERT.** `git revert 2ce0167
+1fd8968` returns the tree to the state that produced the working release, and
+that is the right move unless you intend to finish the cursor immediately. Do
+not build on top of a display that does not work.
+
+### The most useful measurement, and it was the last one taken
+
+With the frame buffer marked with 0xE7 before launch, the two-port build's
+frame buffer came back **100% index 0 and no marker left anywhere**. So:
+
+* REX3 **did** run this boot - it overwrote the whole marker.
+* All it did was **clear the screen to index 0**. The boot screen was never
+  drawn.
+
+That is a far more specific fault than "black screen": the machine gets as far
+as `rex3Clear` and stops before drawing anything. The earlier reading of "171
+colour indices" that suggested the splash was present came from a frame buffer
+that had NOT been marked, and was the previous build's picture still sitting in
+DDR3. **The clear happens; the drawing does not.** Start there.
+
+### What is actually known about the regression
+
+* **The raster is fine.** With `viddbg=raw` - the OSD's "Video debug: Raw
+  index", which takes CMAP out of the pixel path - the cursor build showed the
+  boot screen correct to the pixel. So VC2's timing generator, the frame
+  buffer, the DDR3 mux and the line cache are all working. What is wrong is
+  between the frame buffer index and the colour on screen.
+* **"Washed out" is the clue and it points at `cmap_index`.** The only thing
+  the cursor commit changed on that path is
+  `newport.sv`'s colour map index, which now becomes
+  `{xmap0_curs_cmap, 5'b0} | {11'b0, cursor_q}` whenever `cursor_q` is
+  non-zero. Washed-out colour is what indexing a different, partly-programmed
+  page of CMAP looks like. **Suspect `cursor_q` is non-zero far more often
+  than intended** - if the PROM enables the cursor with a position or size
+  this code reads wrongly, the override fires where it should not. Print it,
+  or force `cursor_q` to zero and see if the colours come back; that is one
+  build and it settles the question.
+* **`tb_vc2` passes and proves less than it looks.** It checks the cursor's
+  own geometry - position, size, the 64-word plane offset, no row shift, 5120
+  pixels exactly where placed - and nothing about its effect on anything else.
+  It passed against both the shared-read-port version and the two-port one, so
+  it says nothing about interference either.
+* **DDR3 SURVIVES A CORE RELOAD.** Several conclusions during this work were
+  drawn from a frame buffer that turned out to hold the *previous* build's
+  picture. `scripts/hwcheck.sh` now fills it with 0xE7 before every launch and
+  reports how much survives. Do not reason from frame buffer contents you did
+  not watch appear.
+
+### What the cursor work did get right, if you finish it
+
+IRIS settled two things that are easy to get wrong, and both are already in the
+code. The cursor's colours do **not** come from the BT445's cursor colour
+registers - those belong to that chip's own hardware cursor, which Newport does
+not use - they come from CMAP at `(XMAP9 register 3 << 5) | value`
+(`compositor.rs`). And the vertical position is latched from `CURSOR_Y` into
+`WORKING_CURSOR_Y` at the vertical position pulse, not when software writes it
+(`rex3.rs`, at vblank).
+
+The unit test also caught a real bug worth keeping: the fetch address was a
+live expression on `y_ctr`, which has already advanced by the time the reads
+issue, so every row was one too far. A solid glyph hides that completely - only
+the last row, reading off the end of the plane, gave it away. `tb_vc2` marks
+one row with plane 1 so an offset shows up wherever it happens.
+
 ## Where this is
 
 **The machine boots. You can type at it.**
@@ -1123,6 +1203,27 @@ Do not rediscover these:
   it. Read those before reading a register map: `test_rex3` in `rex3.c` is
   where every REX3 register's real width is written down, and it is the reason
   POST's graphics test passes.
+- **DDR3 SURVIVES A CORE RELOAD, SO A FRAME BUFFER FULL OF BOOT SCREEN PROVES
+  NOTHING.** It may be the previous build's. That cost an hour: a stale splash
+  read as a working display over a machine that had actually hung early, and
+  two different wrong conclusions were drawn from it before the possibility
+  came up at all. `scripts/hwcheck.sh` now fills the frame buffer with 0xE7
+  before every launch and reports how much survives, so "did THIS boot draw?"
+  always has an answer. Never reason from frame buffer contents you did not
+  watch appear.
+- **A TEST THAT PASSES AGAINST BOTH VERSIONS IS NOT EVIDENCE FOR EITHER.**
+  `tb_vc2` passes whether the cursor shares VC2's SRAM read port or has its
+  own, so it says nothing about the interference the shared port could cause -
+  and saying so is better than implying coverage. Where a fix is structural
+  rather than behavioural, say which it is: the second read port means the
+  cursor CANNOT disturb the timing generator, which is stronger than any test
+  of the case where it does not.
+- **PROVE A PICTURE IS ABSENT BEFORE EXPLAINING WHY.** A black screen was
+  blamed on a corrupted raster, and a commit message said so; the raw-index
+  debug view of the same bitstream then showed the boot screen, correct to the
+  pixel. The raster had been fine all along. `viddbg=raw` costs one relaunch
+  and separates "nothing is being drawn" from "nothing is being displayed"
+  from "the palette is black" - use it before writing down a cause.
 - **A UNIT TEST WHOSE MEMORY MODEL IS KINDER THAN THE BRIDGE IS NOT A TEST.**
   This has now been the whole bug three times running. `tb_ddr3` drove every
   master as a one-cycle pulse and never reproduced a master that HOLDS its

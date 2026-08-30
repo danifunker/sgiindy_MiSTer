@@ -22,10 +22,11 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_SSH_KEY:?}"; : "${MISTER_SSH_USER:=root}"
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 
-DEPLOY=1; WAIT=180; TAG="hw"; OPTS=()
+DEPLOY=1; WAIT=180; TAG="hw"; CLEAR=1; OPTS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-deploy) DEPLOY=0 ;;
+        --no-clear)  CLEAR=0 ;;
         --wait) WAIT="$2"; shift ;;
         --tag)  TAG="$2";  shift ;;
         *=*)    OPTS+=("$1") ;;
@@ -36,6 +37,17 @@ done
 export MSYS_NO_PATHCONV=1
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 OUT="tests/out/hw"; mkdir -p "$OUT"
+
+# DDR3 SURVIVES A CORE RELOAD, so a frame buffer full of boot screen proves
+# nothing about the build now running - it may be the previous one's. This
+# fills it with a marker first, so "did this boot draw?" always has an answer.
+# Not knowing that cost an hour: a stale splash read as a working display over
+# a machine that had actually hung.
+if [ "$CLEAR" = 1 ]; then
+    log "marking the frame buffer so a stale picture cannot be mistaken for a new one"
+    scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         tools/misterdeploy/fb_poke.py "$MISTER_SSH_USER@$MISTER_HOST:/media/fat/sgidbg/" 2>/dev/null
+    ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$MISTER_SSH_USER@$MISTER_HOST" 'python3 /media/fat/sgidbg/fb_poke.py fill 0xE7' 2>&1 | tail -1
+fi
 
 log "options: ${OPTS[*]:-(all defaults)}"
 bash scripts/setopt.sh "${OPTS[@]}" >/dev/null || exit 1
@@ -70,6 +82,11 @@ for y in range(0,H,4):
     hist.update(m.read_phys(FB+(y*S)*8, W*8)[0::8])
 tot=sum(hist.values())
 print(f"  {len(hist)} distinct colour indices over {tot} sampled pixels")
+mark = hist.get(0xE7, 0)
+if mark:
+    print(f"  !! {100.0*mark/tot:.1f}% is still the 0xE7 marker - that much was NOT drawn this boot")
+else:
+    print("  the marker is gone: everything here was drawn by the build now running")
 for v,c in hist.most_common(10):
     print(f"    index {v:3d} (0x{v:02x}): {c:8d}  {100.0*c/tot:5.1f}%")
 PYEOF'
