@@ -161,6 +161,22 @@ gui: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o ../obj_dir/Vsim_gui $(CPUTEST_V) $(GUI_C)
 
+# --- CPU-only harness -----------------------------------------------------
+# The CPU, r4300_bus and a memory whose latency is a runtime input. Nothing
+# else - and that is the point twice over. It builds where `cputest` does not,
+# because `rtl/scsi/scsi.v` is what Verilator 5.020 dies on (V3Gate.cpp:693),
+# so a machine with only that Verilator can still answer CPU questions. And a
+# settable memory latency is the only way to chase a fault that appears on
+# about one hardware boot in three: on the board, DDR3 refresh, the HPS's own
+# traffic and Newport's frame buffer reads move the answer time around, and
+# nothing in a fixed-latency simulation ever sees the bad one.
+#   make -C verilator cpuonly && ./obj_dir_cpuonly/Vtb_cpuonly
+CPUONLY_V = tb_cpuonly.sv $(RTL)/cpu/r4300_bus.sv $(RTL)/cpu/generated/r4300_wrap.v
+
+cpuonly: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_cpuonly --top-module tb_cpuonly 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vtb_cpuonly $(CPUONLY_V) tb_cpuonly.cpp
+	./obj_dir_cpuonly/Vtb_cpuonly
+
 # --- VC2 video timing generator unit test ---------------------------------
 # The timing generator is an interpreter for a table in VC2's external SRAM.
 # This drives it directly with a table of a known geometry, so a wrong picture
