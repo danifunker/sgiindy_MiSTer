@@ -2298,7 +2298,28 @@ begin
    resultDataMuxed64(63 downto 32) <= (others => resultDataMuxed(31)) when decodeResult32 else resultDataMuxed(63 downto 32);
 
    ---------------------- exceptions ------------------
-   exceptionCode_3  <= decodeExcCode;
+   -- SGI: A memory access can fault for two different reasons and only one of
+   -- them is alignment. EXEExceptionMem below has three arms - the two 64-bit
+   -- sign-extension checks and region_unused - that do NOT test decodeExcType,
+   -- so they fire for ANY load or store, including the ones with no alignment
+   -- rule at all: sb, lb, lbu. Those carry decodeExcCode = 0 from the decoding
+   -- default, and 0 is `Int`.
+   --
+   -- So a byte store through a pointer whose upper word is not the sign
+   -- extension of bit 31 was reported to software as an INTERRUPT rather than
+   -- as an address error, with BadVAddr left untouched (cpu_cop0.vhd only
+   -- writes it for codes 4 and 5). The guest then goes off to poll an
+   -- interrupt controller that has nothing to say while the real fault - a bad
+   -- pointer - is never reported at all. On the Indy PROM that presents as a
+   -- panic with `Local I/O interrupt register 0: 0x2 <SCSI0>` and an exception
+   -- whose code belongs to whatever faulted next, which is three wrong turns
+   -- away from a null pointer. verilator/tb_cpuonly.cpp is the test.
+   --
+   -- The code for a memory fault is the direction of the access, not the
+   -- alignment rule that happened to be attached to the opcode.
+   exceptionCode_3  <= x"4" when (EXEExceptionMem = '1' and decodeMemReadEnable  = '1') else
+                       x"5" when (EXEExceptionMem = '1' and decodeMemWriteEnable = '1') else
+                       decodeExcCode;
    exception_COP    <= decodeExcCOP;
    
    EXEExceptionMem <= '1' when (decodeExcType = EXCTYPE_ADDRH   and calcMemAddr(0) = '1') else
