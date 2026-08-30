@@ -188,16 +188,54 @@ caches off, because the timing that decides *where* the interrupt lands moves.
 pair and checks that the register file survives it**, and that is the test to
 write.
 
+**ONE OF THE TWO BUGS BEHIND THAT PANIC IS FOUND AND FIXED (`40070e8`), and it
+is the reason the SCSI line was there at all.** `EXEExceptionMem`
+(`cpu.vhd:2304`) has three arms - the two 64-bit sign-extension checks and
+`region_unused` - that do not test `decodeExcType`, so they fire for any load
+or store, `sb`, `lb` and `lbu` included. Those carry `decodeExcCode = 0` from
+the decoding default, and **0 is `Int`**. A byte store through a pointer whose
+upper word is not the sign extension of bit 31 was handed to software as an
+INTERRUPT, with `BadVAddr` left unwritten because `cpu_cop0.vhd:983` only
+writes it for codes 4 and 5.
+
+So `Local I/O interrupt register 0: 0x2 <SCSI0>` is not evidence that SCSI was
+involved. It is the PROM answering the question the CPU asked it. A bad pointer
+was being presented as a device interrupt, and every reading of that panic that
+started from the SCSI line started three wrong turns from the fault.
+
+`verilator/tb_cpuonly.cpp` is the proof, both sides generated from the same
+GHDL so the toolchain is not the variable: `sb` through a non-canonical address
+goes from `exc=0 Int, BadVAddr unwritten` to `exc=5 AdES,
+BadVAddr=0x9fc1dc77`. Nothing else in the four cases moves.
+
+**What is still open is what put a non-canonical value in `$t0`.** The fix
+turns a two-stage cascade into one honest report; it does not explain the bad
+pointer, and it has not yet been measured against the panic rate on hardware -
+that needs a Quartus run and a re-measurement of the one-in-three. Judge it
+against `tests/hardware/cputest-de10nano-20260830.log`, which was captured on
+the release bitstream and therefore predates it.
+
 Cheapest next steps, in order:
 
-1. **Write the missing CPU test**: an interrupt asserted at every offset around
-   a load-use pair, checking the loaded register after `eret`. It needs no
-   hardware, and if it fails it explains this without another board run.
-   (Verilator cannot build the full design on the Windows box - see the
-   toolchain notes - but a CPU-only testbench does build.)
-2. **Take SCSI0 out of the picture on hardware** and see whether the panic
-   rate goes to zero. There is no OSD option for it today; one debug bit that
-   holds `L0_STATUS[1]` clear would settle it in one build.
+1. **Build `40070e8` and re-measure, in one trip to the board.** Ten launches
+   with the frame buffer marked and memory zeroed, classified off the frame
+   buffer, tells you whether the phantom interrupt was carrying the whole
+   failure or only disguising it. And `tests/run-cputest-hw.sh` against the
+   same bitstream is the only check on that CPU change the ground rules would
+   accept, because `tests/run-cputest.sh` cannot be built where it was written.
+   The baseline to judge both against is
+   `tests/hardware/cputest-de10nano-20260830.log`.
+2. **Find what puts a non-canonical value in a pointer register.** That is the
+   half the fix does not explain, and it is now the whole bug. The value is the
+   same every time it happens, which rules out noise; a 32-bit result that
+   reached a register without being sign-extended is what it looks like, and
+   `verilator/tb_cpuonly.cpp` is the place to reproduce it - add cases, sweep
+   the latency, and the harness will say which instruction can do it.
+   **An interrupt across the load-use pair was the leading theory and the
+   register dump argues against it**: `Status = 0x30004803` has only IM7 and
+   IM4 set in SGI's numbering, `Cause = 0x8014` has only IP8 pending, and IP8
+   is masked - so nothing should have been taken. Check that reading before
+   spending a build on it.
 3. **Judge the cursor commits.** `1fd8968` and `2ce0167` have still never been
    run on a launch with cleared memory. Two commands, and it closes the last
    open question from the evening that produced this section.
@@ -832,6 +870,50 @@ The user has physical SGI hardware and can run test binaries on it —
 requests**: accumulate a set of questions and ask for one run, not ten. Commit
 any hardware-confirmed result under `tests/hardware/`.
 
+### 4. The DE10-Nano itself — `tests/run-cputest-hw.sh`
+
+**The CPU test suite runs on the board, and this is a different oracle from the
+other three.** Verilator tells you the RTL is self-consistent. The board tells
+you what Quartus actually built: inferred M10K read-during-write behaviour,
+real DDR3 latency, real clock domains. Every one of those has already produced
+a bug on this project that no simulation saw, and two of them are still open
+questions in this file.
+
+    RESULT: 2160 checks passed, 3 failed  (240 tests)
+
+239 of 240 tests pass on real silicon, and the one that fails is
+`fpu/vec_cvt_from_l`, the cvt.s.l truncation `docs/10` already diagnoses.
+Against Verilator's 2161/3 the difference is one check: the suite's `testdev`
+probe finding no test device on GIO slot 0, which is also what it finds on a
+real Indy. `tests/hardware/cputest-de10nano-20260830.log` is the capture, with
+the bitstream's md5 on it.
+
+**The `cache/` group passes on the part**, which is the result worth having and
+which this file has been asking for. With both primary caches on, the only
+oracle those eight tests had was a simulation of RTL written from the R4000
+manual - and the caches are inferred M10Ks whose read-during-write behaviour is
+a property of the chip, not of the source. `geometry`, `index_tag_rt`,
+`cached_uncached`, `hit_inv_discards`, `set_conflict`, `icache_coherency`,
+`kernel_mode_ok` and `miss_is_noop` all pass on hardware.
+
+**It runs where Verilator cannot.** `rtl/scsi/scsi.v` defeats Verilator 5.020
+outright, which takes `tests/` off the table entirely on some machines. The
+board does not care.
+
+How it works, because it is not the route `docs/11` describes: **the suite is
+the boot PROM.** `harness/start.S` already relocates itself out of wherever it
+was loaded - written for sashARCS dropping it in kuseg, and just as true of a
+PROM at `0xBFC01000` - so `tests/hw-cputest/promstub.S` only has to jump to it,
+and to catch anything that faults before the suite installs its own handlers.
+The answer comes back through memory rather than serial, because this machine's
+SCC has never put a start bit on the wire: `console-memlog.patch` adds a third
+sink that writes into RAM and `read_log.py` reads it with `ddr3_peek`.
+
+**Do not confuse this with running the suite on a real Indy**, which is still
+worth asking for and is still listed below. They answer different questions.
+The board checks *this core as built*. An Indy checks *the expectations*, and
+where an expectation and an Indy disagree the Indy is right.
+
 ## Where to pick up
 
 ### The three things that are done, so you do not redo them
@@ -1086,9 +1168,11 @@ capture for the IP22 but not the IP24, so the console output above has never
 been diffed against hardware — the milestone plan's definition of M3 asks for
 exactly that and it cannot currently be met.
 
-**And the `cache/` group of cpu-tests on real iron.** The caches are on now and
-the only oracle they have is the suite running under Verilator against
-expectations written from the R4000 manual. `docs/11-running-on-hardware.md`
+**And the `cache/` group of cpu-tests on real iron.** *Partly answered now* -
+the whole suite runs on the DE10-Nano and the cache group passes there, see
+oracle 4 above. That checks this core as Quartus built it, which was the more
+urgent half. What a real Indy would still settle is the other half: whether the
+expectations themselves are right. The caches are on now and `docs/11-running-on-hardware.md`
 covers how to run the suite on the user's machines, and the eight `cache/`
 tests are the ones worth the trip: they are the only part of this core whose
 correctness argument has never been checked against the part it claims to be.
