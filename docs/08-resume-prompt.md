@@ -132,18 +132,54 @@ are bit-identical to each other: 1340 text pixels, 169 colour indices, every
 time. The boot is not flaky; the boot is deterministic and something occasional
 knocks it over.
 
-**When it panics, with the caches on, it is always exactly the same panic.**
-Two independent occurrences, byte for byte:
+**THE PANIC IS NOT ALWAYS THE SAME ONE, and an earlier version of this section
+said it was.** That claim came from reading two panics that happened to match
+and generalising. Three distinct signatures are now recorded, and the only
+thing they have in common is that something went through a garbage pointer:
 
-```
-Exception: <vector=Normal>
-Status register: 0x30004803<CU1,CU0,IM7,IM4,IPL=???,MODE=KERNEL,EXL,IE>
-Cause register: 0x8014<CE=0,IP8,EXC=WADE>
-Exception PC: 0x9fc1dc84, Exception RA: 0x9fc1dc78
-write address error exception, bad address: 0x9fc1dc77
-Local I/O interrupt register 0: 0x2 <SCSI0>
-HPC3 bus error status register: 0x0
-```
+| build | exception | EPC | bad address |
+|---|---|---|---|
+| release, caches on | `AdES` (WADE) | `0x9fc1dc84` | `0x9fc1dc77` |
+| release, caches off | `RMISS` | `0x0` | `0x0` |
+| + the CPU fix, caches on | `RMISS` | `0x747474` | `0x747474` |
+
+**`0x00747474` is the most informative thing on that list.** It is a repeating
+byte, and it is exactly `0x74747474` shifted right by eight. That is the shape
+of a load returning its doubleword shifted by one byte too many, and
+`r4300_bus.sv` does exactly that shift - `mem_dataRead <= bswap64(bus_rdata) >>
+{aoff, 3'b000}` - over an `aoff` the file's own header calls out as "not the
+obvious one", asymmetric between reads and writes. **That is where to look
+next.** `verilator/tb_cpuonly.cpp` can drive it directly: load every width at
+every byte offset, at every latency, and compare against the value that was
+put there.
+
+**The good boots stay bit-identical while the failures vary**, which is worth
+noting because it narrows what kind of fault this is. Every healthy run lands
+on exactly 1340 text pixels and 169 colour indices - the machine is
+deterministic when it works. Only the failure moves. That is a random
+corruption landing in different places, not a race that always resolves the
+same way.
+
+### The CPU fix is validated and it does NOT fix this
+
+`40070e8` was built and put on the board (`d02fe607…`). Two measurements:
+
+* **The CPU suite: no regression.** 240 tests, 2160 passed / 3 failed, the
+  same as the release bitstream, and `tests/compare.py` reports no regressions.
+  The two logs differ by one character - a CP0 `Count` a single tick apart in
+  `cp0/timer`, which passes either way. This is the check the ground rules ask
+  for in that commit and that `tests/run-cputest.sh` could not provide.
+  `tests/hardware/cputest-de10nano-20260830-cpufix.log`.
+* **The panic rate: unchanged.** Ten launches, memory zeroed and the frame
+  buffer marked before each: **4 panics, 4 healthy**, one run lost to the
+  launcher's own reboot dropping ssh and one that came back with no panel at
+  all. Against four in ten on the release, that is no change.
+
+So the phantom interrupt was disguising this fault rather than causing it. The
+fix is still right - a bad pointer reported as a device interrupt sends anyone
+reading the panic three turns away from the fault - but it buys clarity, not a
+working boot. **Do not expect the next fix in this area to be the last one
+either; measure the rate rather than reading one panic.**
 
 **Where that is, disassembled rather than guessed.** `0x9fc1dc84` is
 `sb $t9, ($t0)` inside the function at `0x9fc1da78`, the WD33C93 command-issue
@@ -157,25 +193,32 @@ WD33C93's address and data ports (`rtl/sgi/sgi_indy.sv:220`). So
 `07 00 bc bf 03 00 bc bf` - the right constant, correct in DDR3. The CPU used
 `0x9fc1dc77`.
 
-Four measured facts, and they point away from every obvious suspect:
+Measured facts about that one, kept because the reasoning around them is what
+led to `40070e8`:
 
-* **`sb` cannot raise an address error in this core.** `cpu.vhd:1960` leaves
-  its `decodeExcType` at `EXCTYPE_NONE`, correctly - a byte store has no
-  alignment to violate and kernel mode may write KSEG0. So the printed
-  `BadVAddr` is not necessarily the store's address: `cpu_cop0.vhd:983`
-  overwrites `BadVAddr` with `exceptionPCStore` when `exceptionNewPC` is set.
-* **The bad value is the same every time, and it is `RA - 1`.** `0x9fc1dc77`
-  is one below the return address the `jal` at `0x9fc1dc70` left in `$ra`.
-  Random corruption does not land on the same value twice; something is
-  handing this instruction a value derived from the return address.
+* **On the release bitstream `sb` could not report an address error at all**,
+  which is what made this panic unreadable. `cpu.vhd:1960` leaves its
+  `decodeExcType` at `EXCTYPE_NONE` - correctly, a byte store has no alignment
+  to violate - so the fault came out as `Int` and something *else* supplied the
+  `AdES` and the `BadVAddr`. `40070e8` fixes that and the panic now means what
+  it says; it did not stop it happening.
+* **`0x9fc1dc77` is `RA - 1`**, one below the return address the `jal` at
+  `0x9fc1dc70` left in `$ra`. That looked like strong evidence of a value
+  derived from the return address, and an earlier version of this bullet said
+  random corruption does not land on the same value twice. **It does** - the
+  same instruction faulted with the same value twice and then the next build
+  faulted somewhere else entirely with `0x747474`. Treat it as one sample of a
+  varying fault, not as a signature.
 * **The caches are innocent.** `cache=off` still draws the whole screen and
-  still dies, with a *different* exception - `EXC=RMISS`, `EPC = 0`, `RA = 0`,
-  a jump to address zero. Turning the caches off moved the symptom, not the
-  outcome, which is what a bad pointer does when the timing around it changes.
-* **A SCSI0 interrupt is pending in every panic and in both variants.**
-  `Local I/O interrupt register 0: 0x2 <SCSI0>`, with `Status.IE` set and
-  `Cause.IP8` raised. The fault is always inside the WD33C93 driver, and it is
-  always at the same instruction pair.
+  still dies, with a different exception - `EXC=RMISS`, `EPC = 0`, `RA = 0`, a
+  jump to address zero. And the cache group of the CPU suite passes on this
+  hardware.
+* **`Local I/O interrupt register 0: 0x2 <SCSI0>` is in every panic and it
+  means nothing.** It is the PROM reading its interrupt controller because the
+  CPU told it there was an interrupt. On the fixed build the same line appears
+  under an `RMISS` at `0x747474`, nowhere near the SCSI driver, with the
+  driver's own port pointers correct in the register dump (`arg[2] =
+  bfbc0003`, `k1 = bfbc0007`). It is not a clue about SCSI.
 
 **The leading hypothesis is an interrupt taken across that instruction pair.**
 It fits everything: intermittent, because it depends on when SCSI0 asserts;
@@ -217,14 +260,12 @@ the release bitstream and therefore predates it.
 
 Cheapest next steps, in order:
 
-1. **Build `40070e8` and re-measure, in one trip to the board.** Ten launches
-   with the frame buffer marked and memory zeroed, classified off the frame
-   buffer, tells you whether the phantom interrupt was carrying the whole
-   failure or only disguising it. And `tests/run-cputest-hw.sh` against the
-   same bitstream is the only check on that CPU change the ground rules would
-   accept, because `tests/run-cputest.sh` cannot be built where it was written.
-   The baseline to judge both against is
-   `tests/hardware/cputest-de10nano-20260830.log`.
+1. **Chase `0x747474` through the load path.** It is a repeating byte and it
+   is `0x74747474 >> 8`, which is what a load shifted one byte too far looks
+   like - and `r4300_bus.sv` performs exactly that shift, over an `aoff` its
+   own header flags as asymmetric between reads and writes. Drive it in
+   `verilator/tb_cpuonly.cpp`: every width, every byte offset, every latency,
+   compared against what was written. It needs no hardware and no build.
 2. **Find what puts a non-canonical value in a pointer register.** That is the
    half the fix does not explain, and it is now the whole bug. The value is the
    same every time it happens, which rules out noise; a 32-bit result that
@@ -545,7 +586,21 @@ On a `5CSEBA6U23I7`:
 
 Every setup, hold, recovery, removal and minimum-pulse-width slack is positive
 and **TNS is 0.000 on every clock in the design**. The tightest path anywhere
-is the HDMI pixel clock at +0.491 ns, which is framework and not ours. Against
+is the HDMI pixel clock at +0.491 ns, which is framework and not ours.
+
+**THE HDMI CLOCK IS MARGINAL AND HAS NOW GONE NEGATIVE, so check it on every
+build rather than trusting the sentence above.** Those numbers are a Standard
+Edition build. The same design through **Quartus 17.0.2 Lite** on the local box
+lands in the same place for logic (30,829 ALMs, 74%; 39,021 registers; 358
+M10K) and has plenty of room on its own clock - `emu|pll` +3.788 ns - but the
+HDMI pixel clock came out at **+0.299 ns on one build and -0.125 ns with
+TNS -2.566 on the next**, off an RTL change that touches neither. That is a
+path sitting on the edge of closure, moving with fitter noise. Two consequences:
+a build with negative slack there is **fine for a measurement read out of DDR3
+and not fit to release**, and `scripts/deploy.sh` will not stop you - it checks
+the Fitter's status and never looks at TimeQuest. Read the STA summary yourself.
+`tests/hardware/cputest-de10nano-20260830-cpufix.log` is a run taken on such a
+build, labelled as one. Against
 the CPU-only measurement in `syn/README.md` (19,137 ALMs, 63.77 MHz), Newport
 plus the memory system plus the top level cost **+11,348 ALMs and about
 0.8 MHz**, and 27% of the device is still free.
