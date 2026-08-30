@@ -50,6 +50,7 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | **[19-hardware-bringup.md](19-hardware-bringup.md)** | **Putting a build on a board**: the three scripts, the two files that have to be on the SD card and the one MiSTer will not create for you, and the three independent ways to watch a bring-up — the screen, the serial console the HPS exposes as `/dev/ttyS1`, and whether the core launched at all |
 | **[15-synthesis-prompt.md](15-synthesis-prompt.md)** | **Work-item prompt** for getting `syn/` through Quartus and reading the size and Fmax. Needs a machine that can run Quartus |
 | **[FEATURES_EVALUATE.md](FEATURES_EVALUATE.md)** | **Deliberately not built**, with the evidence: CD audio (the CD-ROM is data-only), the secondary cache, and why "66 Mhz" is a measurement rather than a clock |
+| **[20-releases.md](20-releases.md)** | **The built bitstreams in `releases/`**, what each one does and does not do, and the one step of the install that fails silently — MiSTer does not create `games/SGIIndy` for you |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
 ## Machines under consideration

@@ -271,16 +271,15 @@ hourglass, "Running power-on diagnostics...", "WELCOME TO INDY" and "Silicon
 Graphics Computer Systems", in colour, stable. The frame buffer holds 171
 distinct colour indices where it used to hold three.
 
-**IT DOES NOT REACH THE SYSTEM MAINTENANCE MENU.** It sits at "Running
-power-on diagnostics..." indefinitely. That is the next thing to chase and it
-is UNDIAGNOSED - do not assume it is graphics because graphics is what was
-just fixed. Under Verilator the same PROM completes POST and reaches the menu
-in about fifty seconds, so the difference is something hardware does and the
-simulator does not, which by now has a very well-established shape: look for
-a device whose model assumes an answer that DDR3 or the framework does not
-give. `tools/misterdeploy/ddr3_peek.py` reads the machine's memory from the
-ARM; `--stuck` in the Verilator harness names the address being hammered, and
-comparing the two is the obvious first move.
+**IT REACHES THE SYSTEM MAINTENANCE MENU**, and an earlier version of this
+paragraph said it did not. It was measured once, sitting at "Running power-on
+diagnostics...", and called stuck; the machine simply had not finished, and a
+restart gets there. **Give it a minute or two before concluding anything**,
+because REX3 now waits for every write to be acknowledged and a pixel costs a
+DDR3 round trip - the boot screen is over a million of them. This is the third
+time in this file's history that something was declared broken before it was
+given time to finish, and it is why `scripts/hwcheck.sh` waits 180 seconds by
+default.
 
 **IT RUNS ON A DE10-NANO.** The machine boots on real hardware: the board
 reports the video mode as **1318x1024, 29.21 kHz, 27.4 Hz**, and every one of

@@ -3,21 +3,31 @@
 An in-progress MiSTer FPGA core for the **SGI Indy (IP24, R4x00)**, using the
 MiSTer N64 project's R4300i CPU.
 
-**Status: the machine boots the real IP24 PROM to its Command Monitor, draws
-its own boot screen through Newport, and fits a DE10-Nano.** Everything below
-is measured under Verilator except the fit, which is Quartus 17.0.2 Lite on a
-`5CSEBA6U23I7`:
+**Status: it runs on a DE10-Nano.** The real IP24 PROM boots, draws the Indy
+boot screen through Newport, and reaches the System Maintenance Menu.
+
+![the boot screen, photographed off a DE10-Nano](releases/SGIIndy_20260829_bootscreen.png)
+
+**This is early.** It draws and it boots; it is not yet a machine you can use.
+No IRIX, no mouse pointer, no sound, no network, and nothing you change
+survives a reset. If you want to try it, read
+[`docs/20-releases.md`](docs/20-releases.md) first — it says what each build
+does and does not do, and the install has one step that fails silently if you
+skip it.
 
 | | |
 |---|---|
-| PROM boot | POST passes, System Maintenance Menu, `hinv`, keystrokes over SCC tty1 |
-| Graphics | Newport REX3/VC2/XMAP9/CMAP/BT445 — 1318 x 1065, the PROM's own timing table |
-| CPU | 240-test MIPS III/IV suite, **2155 checks passed, 9 failed** (IRIS's own R4400: 2101 / 61) |
-| Fit | **30,485 / 41,910 ALMs (73%)**, 284/553 M10K, timing met on every clock, core Fmax 62.98 MHz at 50 MHz |
+| Hardware | Boots to the System Maintenance Menu on a DE10-Nano. Slow to paint the screen — give it a minute |
+| Video | 1318 x 1024, the PROM's own timing table, about 14 Hz |
+| PROM boot | POST passes, `hinv`, keystrokes over SCC tty1 (under Verilator) |
+| Graphics | Newport REX3/VC2/XMAP9/CMAP/BT445. No cursor, no overlays |
+| CPU | 240-test MIPS III/IV suite, **2161 checks passed, 3 failed** (IRIS's own R4400: 2101 / 61) |
+| Fit | **30,611 / 41,910 ALMs (73%)**, 294/553 M10K, timing met on every clock |
 
-**It has never run on real hardware.** The bitstream exists and nothing has
-been programmed with it; [`docs/18-mister-integration.md`](docs/18-mister-integration.md)
-lists what to expect from the first attempt.
+Everything except the first two rows is measured under Verilator. The fit is
+Quartus 17.0.2 Lite on a `5CSEBA6U23I7`.
+[`docs/18-mister-integration.md`](docs/18-mister-integration.md) is the top
+level and what is still wrong with it.
 
 ```sh
 tests/run-prom.sh         # boot the real PROM to the Command Monitor, ~50 s
@@ -28,10 +38,17 @@ tests/run-scc.sh          # the SCC, ~4 s
 
 ## Installing on a MiSTer
 
+Take the newest pair from [`releases/`](releases/) and put them here:
+
 ```
 /media/fat/_Computer/SGIIndy_<date>.rbf     the core
 /media/fat/games/SGIIndy/boot.rom           the PROM
 ```
+
+**You have to create `games/SGIIndy` yourself, and it has to be spelled that
+way.** MiSTer does not create it, and a missing directory is not an error - it
+is a machine with no firmware, which looks like a core that does nothing. The
+name is the one in `CONF_STR`, which is how the framework finds the PROM.
 
 `boot.rom` is in the repository root — it is `ip24prom.070-9101-011.bin`, PROM
 Monitor 5.3, under the name MiSTer's framework looks for. Main uploads any file
@@ -65,7 +82,9 @@ the bugs fixed in the vendored core, and the numbers. If you are picking this wo
 | `verilator/` | headless simulation harness |
 | `tests/` | the CPU and SCC regressions, and their reference logs |
 | `tools/` | VHDL→Verilog lowering, upstream diff, PROM tooling |
-| `docs/` | design notes, address maps, PROM analysis, port plan |
+| `releases/` | built bitstreams by date, and the PROM to go with them |
+| `scripts/` | build, deploy to a MiSTer, screenshot, read its memory |
+| `docs/` | design notes, address maps, PROM analysis, port plan, release history |
 | `roms/` | boot PROM images for IP12/IP20/IP22/IP24 — SGI firmware, see `NOTICE.md` |
 | `reference/` | chip specs, full PROM disassembly, MAME sources (**gitignored**) |
 
