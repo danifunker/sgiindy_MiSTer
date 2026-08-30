@@ -225,6 +225,7 @@ module np_vc2 #(
     wire signed [12:0] curs_y0 =
         $signed({2'b0, regs[R_WORK_CURSOR_Y][10:0]}) - 13'sd31;
 
+    logic [15:0] curs_q;            // the cursor's own read port
     logic [15:0] curs_w [4];        // the row being displayed
     logic  [2:0] curs_step;         // 0 idle, 1..4 issuing a read
     logic        curs_cap;          // a read was issued last cycle
@@ -277,9 +278,7 @@ module np_vc2 #(
         end
     end
 
-    wire [14:0] ram_ra = host_ram_rd ? ram_addr
-                       : curs_rd     ? curs_a
-                                     : fetch_a;
+    wire [14:0] ram_ra = host_ram_rd ? ram_addr : fetch_a;
 
     logic [15:0] pix_div_ctr;
     logic        pix_phase;
@@ -355,6 +354,21 @@ module np_vc2 #(
         // nothing about behaviour - `ram_q` is only ever consumed under the
         // state machine's own control.
         ram_q <= ram[ram_ra[AW-1:0]];
+
+        // A SECOND READ PORT, AND IT HAS TO BE ONE. The cursor fetch cannot
+        // share the generator's: VT_RUN reads a word fetched when the run was
+        // ENTERED and is deliberately outside the fetch stall, so a read
+        // slipped in mid-run replaces `ram_q` with the cursor's word and the
+        // generator walks its timing table off into whatever that was. On
+        // hardware that was a raster that stopped existing - a black screen
+        // over a frame buffer with the whole boot screen still in it.
+        //
+        // Quartus duplicates the array to give the second port, which costs
+        // 512 Kbit of a device with 3.3 spare. That is a real price for a
+        // 128-word glyph and it is still the right trade: the alternative is
+        // interfering with a timing generator whose exactness is asserted, to
+        // the pixel, by tests/run-newport.sh.
+        curs_q <= ram[curs_a[AW-1:0]];
 
         if (reset) begin
             for (i = 0; i < 32; i = i + 1) regs[i] <= 16'h0;
@@ -447,7 +461,7 @@ module np_vc2 #(
             // one behind the issue and both are just counters.
             curs_cap   <= curs_rd;
             curs_cap_i <= curs_i;
-            if (curs_cap) curs_w[curs_cap_i] <= ram_q;
+            if (curs_cap) curs_w[curs_cap_i] <= curs_q;
             if (curs_rd)  curs_step <= (curs_step == 3'd4) ? 3'd0
                                                           : curs_step + 3'd1;
 
@@ -459,7 +473,7 @@ module np_vc2 #(
             // long since landed. Stalling it too would add the fetch latency
             // to every state run and stretch the horizontal total.
             fetch_wait <= 1'b0;
-            if (host_ram_rd || curs_rd) fetch_wait <= 1'b1;
+            if (host_ram_rd) fetch_wait <= 1'b1;
 
             if (!vtg_enable) begin
                 vt      <= VT_OFF;
