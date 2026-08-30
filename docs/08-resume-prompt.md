@@ -739,8 +739,15 @@ What is *not* done, and is worth knowing before you plan anything:
   5555". Both halves are evidence - the six hundred thousand polls are the
   PROM in its input loop with nothing to read. The mouse waits for IRIX the
   way the keyboard waited for graphics: nothing on the PROM's path moves a
-  pointer, `Ng1CursorInit` is a stub in SGI's own driver, and VC2's cursor
-  planes are not built. `--key-at CYCLE STR` types at the graphics head;
+  pointer and `Ng1CursorInit` is a stub in SGI's own driver. **VC2's cursor
+  planes ARE built now** - `1fd8968` and `2ce0167` - and `tb_vc2` checks their
+  geometry, so an earlier version of this bullet saying they are not would send
+  someone off to write RTL that already exists. The input path is present too:
+  `ps2_mouse` reaches the i8042 in IOC2 (`sgi_indy.sv:604`) and `irq_mouse` is
+  wired into INT2 beside the keyboard. Every piece exists and **not one of them
+  is proven end to end** - nothing injects a mouse packet and checks the
+  controller answers, and no software this machine has run would move a pointer
+  if it did. `--key-at CYCLE STR` types at the graphics head;
   `--key-on` triggers on console text, which does not exist once the console
   is a screen.
 - **No audio path.** `HAL2_REV` reports a processor that is not there.
