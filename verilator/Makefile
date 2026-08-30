@@ -99,6 +99,7 @@ CPUTEST_V = \
 	sim_ram.v \
 	$(RTL)/sgi/sgi_indy.sv \
 	$(RTL)/sgi/sgi_mc.sv \
+	$(RTL)/sgi/mc_gio_dma.sv \
 	$(RTL)/sgi/sgi_hpc3.sv \
 	$(RTL)/sgi/hpc3_scsi_dma.sv \
 	$(RTL)/sgi/sgi_ioc.sv \
@@ -176,6 +177,16 @@ CPUONLY_V = tb_cpuonly.sv $(RTL)/cpu/r4300_bus.sv $(RTL)/cpu/generated/r4300_wra
 cpuonly: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_cpuonly --top-module tb_cpuonly 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vtb_cpuonly $(CPUONLY_V) tb_cpuonly.cpp
 	./obj_dir_cpuonly/Vtb_cpuonly
+
+# --- MC GIO64 DMA fill engine unit test ------------------------------------
+# Checks the engine against a C++ transcription of IRIS's own dma_worker loop,
+# at two arbiter ack delays. It is a module test rather than part of cputest
+# because the full design will not build under Verilator 5.020, and this engine
+# is the one that decides whether a boot starts on cleared memory.
+#   make -C verilator mcdmatest
+mcdmatest:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_mcdma --top-module mc_gio_dma 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vmc_gio_dma $(RTL)/sgi/mc_gio_dma.sv tb_mcdma.cpp
+	./obj_dir_mcdma/Vmc_gio_dma
 
 # --- VC2 video timing generator unit test ---------------------------------
 # The timing generator is an interpreter for a table in VC2's external SRAM.

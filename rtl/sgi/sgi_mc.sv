@@ -82,7 +82,17 @@ module sgi_mc #(
     // Bank descriptors, for a memory decoder that follows what the PROM
     // programmed rather than a hardwired map. Nothing consumes these yet.
     output logic [31:0] memcfg0,
-    output logic [31:0] memcfg1
+    output logic [31:0] memcfg1,
+
+    // ---- the GIO64 DMA engine's bus master -------------------------------
+    // Same byte-lane convention as every other master here: `wdata[63-8i -: 8]`
+    // is the byte at `addr+i` and `be[7-i]` guards it. Held until `ack`.
+    output logic        dma_m_req,
+    output logic        dma_m_we,
+    output logic [31:0] dma_m_addr,
+    output logic [63:0] dma_m_wdata,
+    output logic  [7:0] dma_m_be,
+    input  logic        dma_m_ack
 );
 
     // ---- register offsets, verbatim from the MC spec's table -------------
@@ -139,6 +149,39 @@ module sgi_mc #(
     logic [31:0] dma_tlb  [0:7];        // entry n hi at 2n, lo at 2n+1
     logic [31:0] dma_memadr, dma_size, dma_stride, dma_gio_adr;
     logic [31:0] dma_mode, dma_count, dma_stdma, dma_run;
+
+    // START IS DELAYED BY ONE CYCLE ON PURPOSE. All three start registers also
+    // WRITE part of the descriptor - GIO_ADRS carries the fill value, MEMADRDS
+    // rewrites five registers - and those writes land on the same edge the
+    // engine would latch on. Sampling a cycle later is what makes the engine
+    // see the descriptor the CPU just wrote rather than the one before it.
+    logic dma_start_q, dma_busy, dma_done, dma_mode_unsup;
+    wire  dma_start_now = wr_lo && !sem_sel && !tlb_sel
+                       && (addr == REG_DMA_GIO_ADRS
+                           || (addr == REG_DMA_STDMA && wr_word[0])
+                           || addr == REG_DMA_MEMADRDS);
+
+    mc_gio_dma u_gio_dma (
+        .clk              (clk),
+        .reset            (reset),
+        .start            (dma_start_q),
+        .d_memadr         (dma_memadr),
+        .d_size           (dma_size),
+        .d_stride         (dma_stride),
+        .d_gio_adr        (dma_gio_adr),
+        .d_mode           (dma_mode),
+        .d_count          (dma_count),
+        .d_ctl            (dma_ctl),
+        .busy             (dma_busy),
+        .done             (dma_done),
+        .mode_unsupported (dma_mode_unsup),
+        .m_req            (dma_m_req),
+        .m_we             (dma_m_we),
+        .m_addr           (dma_m_addr),
+        .m_wdata          (dma_m_wdata),
+        .m_be             (dma_m_be),
+        .m_ack            (dma_m_ack)
+    );
     logic [31:0] rpss_ctr;
     logic [19:0] dogc;
     logic        sys_semaphore;
@@ -406,38 +449,37 @@ module sgi_mc #(
                         dma_count  <= 32'h0001_000C;
                         dma_mode   <= 32'h0000_0008;   // FILL
                     end
-                    REG_DMA_GIO_ADRS: begin
-                        dma_gio_adr <= wr_word;
-                        dma_run     <= dma_run | DMA_RUN_RUNNING;
-                        dma_cause   <= dma_cause | DMA_CAUSE_COMPLETE;
-                    end
-                    REG_DMA_STDMA: begin
-                        dma_stdma <= wr_word;
-                        if (wr_word[0]) begin
-                            dma_run   <= dma_run | DMA_RUN_RUNNING;
-                            dma_cause <= dma_cause | DMA_CAUSE_COMPLETE;
-                        end
-                    end
+                    // The three start registers only write their own fields
+                    // now. `dma_start_now` above decodes the same three and
+                    // the engine reports completion for itself.
+                    REG_DMA_GIO_ADRS:  dma_gio_adr <= wr_word;
+                    REG_DMA_STDMA:     dma_stdma   <= wr_word;
                     REG_DMA_MEMADRDS: begin
                         dma_memadr <= wr_word;
                         dma_size   <= 32'h0001_000C;
                         dma_stride <= 32'h0001_0000;
                         dma_count  <= 32'h0001_000C;
                         dma_mode   <= 32'h0000_0008;
-                        dma_run    <= dma_run | DMA_RUN_RUNNING;
-                        dma_cause  <= dma_cause | DMA_CAUSE_COMPLETE;
                     end
                     REG_DMA_RUN:       ;                      // read-only
                     default:           ;
                 endcase
             end
 
-            // DMA_RUN latches "running" so the PROM's check immediately after
-            // a start sees it, then clears on the read that observed it. IRIS
-            // does the same thing for the same reason: a model that finishes
-            // instantly is otherwise never seen to have started.
-            if (rd_lo && (addr == REG_DMA_RUN))
-                dma_run <= dma_run & ~DMA_RUN_RUNNING;
+            // DMA_RUN NOW MEANS WHAT IT SAYS. It used to latch "running" on a
+            // start and clear on the read that observed it, because the engine
+            // was a stub that finished instantly and would otherwise never be
+            // seen to have started at all. There is a real engine behind it
+            // now, so the bit is set while it is busy and cleared when it is
+            // done, and the PROM's poll waits for an actual transfer.
+            if (dma_start_q) dma_run <= dma_run | DMA_RUN_RUNNING;
+            if (dma_done) begin
+                dma_run   <= dma_run & ~DMA_RUN_RUNNING;
+                dma_cause <= dma_cause | DMA_CAUSE_COMPLETE;
+            end
+            // A start written while the previous transfer is still finishing
+            // wins, which is why this sits after the two above.
+            dma_start_q <= dma_start_now && !dma_busy;
 
             //---------------- response ----------------
             if (sel) begin

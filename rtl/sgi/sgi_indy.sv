@@ -321,10 +321,35 @@ module sgi_indy #(
     // HPC3's SCSI DMA channel, as a master on the memory port and as a
     // consumer of the WD33C93B's data phases. Declared here because both ends
     // are instantiated further down and the arbiter sits between them.
-    logic        dma_req, dma_we, dma_ack;
-    logic [31:0] dma_addr;
-    logic [63:0] dma_wdata, dma_rdata;
-    logic  [7:0] dma_be;
+    logic        sdma_req, sdma_we, sdma_ack;
+    logic [31:0] sdma_addr;
+    logic [63:0] sdma_wdata;
+    logic  [7:0] sdma_be;
+    logic [63:0] dma_rdata;
+
+    // The MC's GIO64 DMA engine is the second master on this port. It fills
+    // memory - the PROM's boot memory clear runs through it - so it is bulk
+    // work with nothing waiting on the other end of a bus phase.
+    logic        mcd_req, mcd_we, mcd_ack;
+    logic [31:0] mcd_addr;
+    logic [63:0] mcd_wdata;
+    logic  [7:0] mcd_be;
+
+    // TWO MASTERS, ONE PORT, AND SCSI WINS EVERY TIE. The SCSI channel is
+    // servicing a live bus phase with a target waiting on it; the MC's fill
+    // can be held off for any number of cycles and only takes longer. Written
+    // this way round for a second reason as well: when the MC engine is idle -
+    // which is every cycle of every SCSI transfer - `mc_owns` is 0 and every
+    // signal below is exactly the SCSI channel's, unchanged. That property is
+    // what makes this safe to add without being able to run tests/run-dma.sh,
+    // whose 31 checks cover this port and need a Verilator that can build the
+    // whole design.
+    wire        mc_owns   = mcd_req && !sdma_req;
+    wire        dma_req   = sdma_req | mcd_req;
+    wire        dma_we    = mc_owns ? mcd_we    : sdma_we;
+    wire [31:0] dma_addr  = mc_owns ? mcd_addr  : sdma_addr;
+    wire [63:0] dma_wdata = mc_owns ? mcd_wdata : sdma_wdata;
+    wire  [7:0] dma_be    = mc_owns ? mcd_be    : sdma_be;
     logic        scsi_dev_req, scsi_dev_dir_in, scsi_dev_eop, scsi_dev_ack;
     logic        scsi_dev_reset;
     logic  [7:0] scsi_dev_wdata, scsi_dev_rdata;
@@ -439,7 +464,20 @@ module sgi_indy #(
     always_ff @(posedge clk)
         dma_miss_ack <= !reset && dma_req && !dma_hit && !dma_miss_ack;
 
-    assign dma_ack   = (ram_ack && ram_owner_dma) | dma_miss_ack;
+    // `ram_owner_dma` says a DMA owns the answer; this says which one. Without
+    // it the MC's fill acks would land on the SCSI channel as completed
+    // descriptor cycles.
+    logic dma_owner_mc;
+    always_ff @(posedge clk) begin
+        if (reset)        dma_owner_mc <= 1'b0;
+        else if (ram_req) dma_owner_mc <= dma_grant && mc_owns;
+    end
+
+    wire dma_ack_any = (ram_ack && ram_owner_dma) | dma_miss_ack;
+    wire dma_ack_mc  = dma_miss_ack ? mc_owns : dma_owner_mc;
+
+    assign sdma_ack  = dma_ack_any && !dma_ack_mc;
+    assign mcd_ack   = dma_ack_any &&  dma_ack_mc;
     assign dma_rdata = dma_miss_ack ? 64'h0 : ram_rdata;
 
     assign prom_req  = bus_req && sel_prom;
@@ -477,7 +515,14 @@ module sgi_indy #(
         .ee_di   (ee_di),
         .ee_do   (ee_do),
         .memcfg0 (mc_memcfg0),
-        .memcfg1 (mc_memcfg1)
+        .memcfg1 (mc_memcfg1),
+
+        .dma_m_req   (mcd_req),
+        .dma_m_we    (mcd_we),
+        .dma_m_addr  (mcd_addr),
+        .dma_m_wdata (mcd_wdata),
+        .dma_m_be    (mcd_be),
+        .dma_m_ack   (mcd_ack)
     );
 
     // The R4000 configuration EEPROM. On hardware this is a real chip on the
@@ -513,13 +558,13 @@ module sgi_indy #(
         .ack     (hpc3_ack),
         .claimed (hpc3_claimed),
 
-        .dma_req   (dma_req),
-        .dma_we    (dma_we),
-        .dma_addr  (dma_addr),
-        .dma_wdata (dma_wdata),
-        .dma_be    (dma_be),
+        .dma_req   (sdma_req),
+        .dma_we    (sdma_we),
+        .dma_addr  (sdma_addr),
+        .dma_wdata (sdma_wdata),
+        .dma_be    (sdma_be),
         .dma_rdata (dma_rdata),
-        .dma_ack   (dma_ack),
+        .dma_ack   (sdma_ack),
 
         .scsi_dev_req    (scsi_dev_req),
         .scsi_dev_dir_in (scsi_dev_dir_in),
