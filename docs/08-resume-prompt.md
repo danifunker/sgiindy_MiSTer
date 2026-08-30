@@ -264,6 +264,25 @@ checked out at the same path. **Do
 not change files or git state there** - push to origin and let the user pull;
 running a build is fine.
 
+**IT RUNS ON A DE10-NANO.** The machine boots on real hardware: the board
+reports the video mode as **1318x1024, 29.21 kHz, 27.4 Hz**, and every one of
+those numbers is this core's. VC2 emits nothing at all until software sets
+`DC_CONTROL[2]` and `CONFIG[0]` and loads its timing SRAM, so a raster that
+exact is proof the PROM ran, found Newport and programmed it. Two more things
+are measured rather than reasoned now:
+
+* **The PROM download's byte order is RIGHT.** docs/18 called it the one guess
+  in the whole path; the image reads back out of DDR3 byte for byte.
+* **Main memory works and the PROM sized it** - szmem's walking-bit patterns
+  are in place across 48 MB and the region above is clean.
+
+`scripts/deploy.sh` puts a build on a board and `docs/19-hardware-bringup.md`
+is the whole procedure. **The FPGA and the HPS share one DDR3**, so
+`tools/misterdeploy/ddr3_peek.py` reads the machine's memory from the ARM over
+ssh - main memory, the frame buffer and the PROM - which makes hardware as
+inspectable as Verilator and is what found every bug below. Busybox `devmem`
+reads zeroes there and is not a substitute; it is silently wrong.
+
 **THE WHOLE FLOW COMPLETES AND THE DESIGN MEETS TIMING.** 43 minutes, zero
 errors through synthesis, fit, assembler and TimeQuest, `sgiindy.rbf` written.
 On a `5CSEBA6U23I7`:
@@ -336,6 +355,12 @@ VRAM serial port cannot stall - and against DDR3 that would be a smear that
 moves with memory load. Its test drives the display's real pattern and checks
 4.0 million pixels.
 
+**The refresh is low and a second clock domain is NOT the fix - that was
+wrong.** A faster pixel clock makes the display ask for MORE memory per second
+and memory is exactly what it ran out of. Fetching four bytes a pixel instead
+of eight is the fix. The paragraph below is kept because its measurements are
+right and its conclusion is not.
+
 **The video is correct and the refresh is low, and that is the only thing left
 wrong with it.** The raster is exactly the table's - 1318 x 1065, asserted -
 but VC2 divides the core clock, so a table written for 107.5 MHz comes out at
@@ -407,9 +432,19 @@ What is *not* done, and is worth knowing before you plan anything:
   anything that is not an IDENTIFY, and MESSAGE IN carries only COMMAND
   COMPLETE and MESSAGE REJECT. Nothing negotiates, nothing disconnects and
   reselects, and the target's INQUIRY still reports ANSI version 0.
-- **Nothing has run on real hardware.** The bitstream exists, fits in 73% of
-  the device and meets timing on every clock - the numbers are above - and no
-  board has ever been programmed with it.
+- **The screen is not right yet, and the reason is arithmetic.** The display
+  reads a 64-bit word per pixel and uses one byte of it, which at one core
+  clock per pixel is 0.80 words a clock against a DDR3 port whose absolute
+  peak is 1.00. Hardware delivered 0.52 and missed the first 710 pixels of
+  every line, for ever. `PIX_DIV` is 2 again - about 14 Hz - and the real fix
+  is to split the frame buffer into two planes the way IRIS does. See
+  `docs/18` section 0.
+- **The serial console is silent on hardware and the machine is running.**
+  With the graphics board unfitted the PROM demonstrably executes - szmem's
+  patterns are in DDR3 - and `/proc/tty/driver/serial` on the HPS reports
+  `rx:0` on ttyS1. Not garbage, not framing errors: no start bit has ever
+  arrived. `sclk` is the suspect and the next build carries a probe that
+  settles it - see "the UART probe" below.
 
 ## Read first
 
@@ -444,6 +479,20 @@ What is *not* done, and is worth knowing before you plan anything:
     reset, and the M10K constraint that decides its shape.
 
 ## Build and run
+
+Hardware, all configured from a gitignored `scripts/local.env`:
+
+```sh
+bash scripts/build.sh      # the whole Quartus flow, WITH A GATE: it runs
+                           # synthesis, checks Total registers, and REFUSES to
+                           # run the fitter if an array did not infer as memory.
+                           # That has cost three compiles; the dangerous case
+                           # prints no warning at all, only a register count.
+bash scripts/deploy.sh     # games dir + PROM + bitstream + launch
+bash scripts/setopt.sh gfx=none viddbg=raw   # OSD options without the OSD
+bash scripts/console.sh    # the machine's serial console off /dev/ttyS1
+bash scripts/grab.sh out.png                 # a checked-fresh screenshot
+```
 
 ```sh
 brew install verilator ghdl sdl2
@@ -729,7 +778,36 @@ CD-ROM, a writable disk on ID 1, maintenance menu option 2.
 
 ### 3. Everything after that
 
-**Finish the hardware bring-up first.** The design synthesises; what it has
+**Finish the hardware bring-up first, and it is now a picture rather than a
+question of whether it runs.** In order:
+
+1. **Split the frame buffer into two planes.** `docs/18` section 0 has the
+   whole thing, validated against IRIS's `rex3.rs`. It is what gives
+   `PIX_DIV = 1` and the 27 Hz back, and it is the largest single
+   improvement left anywhere in this core.
+2. **Answer the serial console.** The next build carries an OSD entry, "UART
+   debug", that puts two 8N1 transmitters sending 0x55 at 9600 baud on
+   `UART_TXD` - one clocked from `clk_sys`, one from `sclk`. If the first
+   arrives and the second does not, `sclk` is dead and the SCC was never at
+   fault; if neither does, the fault is between the pin and `/dev/ttyS1` and
+   nothing inside the machine is worth looking at. **IRIS cannot help here**
+   and it is worth knowing before you try: `z85c30.rs` has `get_clock()`
+   returning zero and hands bytes to telnet, so it has no bit-level
+   serialiser and no equivalent of this clock domain at all.
+3. **REX3's DR_FILL has no back-pressure.** It asserts a write every cycle
+   and counts them in a 4-bit `wr_outstanding`, which is correct against a
+   memory that accepts one per cycle and wrong against `ddr3_mux`, which
+   takes one transaction at a time. Most fill writes are dropped. Nothing
+   tests it.
+
+**Three bugs in a row here have been the same bug**: RTL written against the
+simulator's one-cycle memory, meeting real DDR3. `ddr3_mux` took a held
+request twice; `fb_linecache` was tested at half the pixel rate the hardware
+runs; `DR_FILL` fires writes nothing accepts. **Before trusting any unit test
+in `rtl/mister/`, check that its memory model is not kinder than the bridge**,
+and check that the parameters it hard-codes still match the RTL.
+
+The design synthesises; what it has
 never done is run. The first build is a bring-up exercise and
 `docs/18-mister-integration.md` lists what to expect, but two are worth
 repeating here because they are the ones that will waste a day:
@@ -1028,6 +1106,38 @@ Do not rediscover these:
   it. Read those before reading a register map: `test_rex3` in `rex3.c` is
   where every REX3 register's real width is written down, and it is the reason
   POST's graphics test passes.
+- **A UNIT TEST WHOSE MEMORY MODEL IS KINDER THAN THE BRIDGE IS NOT A TEST.**
+  This has now been the whole bug three times running. `tb_ddr3` drove every
+  master as a one-cycle pulse and never reproduced a master that HOLDS its
+  request through the acknowledgement, which is what REX3 does - the mux took
+  the same transaction twice and the rasteriser painted the CPU's instruction
+  fetches onto the screen. `tb_linecache` hard-coded `PIX_DIV = 2` long after
+  `newport.sv` moved to 1, handing the fill engine exactly twice the time it
+  had - it reported zero misses while hardware missed 710 pixels of every
+  line. And a testbench that reacts to an acknowledgement within the cycle
+  that carries it is quicker than any state machine can be, so it never
+  presents the stale request at all: model the one-cycle reaction delay or the
+  test passes against broken RTL.
+- **The dangerous RAM-inference failure prints nothing.** `Info (276014)` is
+  the arrays Quartus COULD see. Four line buffers declared inside a `generate`
+  loop produced no message of any kind, 127,000 extra flip-flops and a fit
+  that failed at 291% after twenty-five minutes. `scripts/build.sh` now gates
+  on `Total registers` between synthesis and the fitter for exactly this
+  reason. ~38,000 is right.
+- **Do not touch `sgiindy.qsf` while Quartus is running**, `git checkout`
+  included. It stops with `Error (125085)` and then rewrites the file,
+  inlining the 266 lines `sys/sys.tcl` sources - which is what the warning at
+  the top of that file means by "It will mess this file!".
+- **Busybox `devmem` reads zeroes from the core's DDR3 window** and is
+  silently wrong. Use `tools/misterdeploy/ddr3_peek.py`, which mmaps
+  `/dev/mem`. Note the byte order: the core numbers bytes big-endian within
+  each 64-bit word and the ARM reads little-endian, so **each eight-byte group
+  comes back reversed** - the PROM's `0b f0 00 f0` reads as `00 00 00 00 f0 00
+  f0 0b`, and a pixel's colour index is the FIRST ARM byte of its group.
+- **IRIS is the oracle for what a device holds and not for how it is clocked.**
+  It settled the frame buffer layout in minutes; it has nothing to say about
+  `sclk`, because `z85c30.rs` has no serialiser at all. On this machine it is
+  at `../iris`, not the `~/repos/iris` this file names.
 - **Three clocks run fast in simulation** and are parameterised so hardware
   keeps the real value: `sclk`, `RTC_TICK_DIV` and `PIT_TICK_DIV`. See
   `docs/12-chipset.md` — `calibrate_delay` restarts forever if the 8254 is made
