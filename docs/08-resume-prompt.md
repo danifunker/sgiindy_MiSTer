@@ -733,7 +733,21 @@ What is *not* done, and is worth knowing before you plan anything:
   blending, dithering and the GIO64 pixel-DMA path are all absent. Nothing the
   PROM does needs any of them; everything IRIX does needs most of them. See
   `docs/16-newport-plan.md`, milestone N4.
-- **The mouse has never been proven.** The keyboard has: two 400-million-cycle
+- **THE MOUSE WORKS ON HARDWARE.** Confirmed on the board on 2026-08-30: the
+  arrow tracks a real USB mouse on the PROM's screens, and
+  `tests/hardware/cursor-on-hardware-20260830.png` is it. So this bullet's
+  whole premise - that the mouse waits for IRIX - was wrong, and so was the
+  claim that VC2's cursor planes are not built. `1fd8968` and `2ce0167` built
+  them, `ps2_mouse` reaches the i8042 in IOC2 (`sgi_indy.sv:604`), and the PROM
+  drives the thing. **That also closes "judge the cursor commits"** - they
+  work.
+  **AND THE CURSOR NEVER APPEARS IN THE FRAME BUFFER.** VC2 composites it at
+  scan-out, so `ddr3_peek`, every histogram in this file and every panic read
+  look at the one place it cannot be. The screenshot above is a black frame
+  buffer with a live cursor on it - which is also a useful signal in its own
+  right, because it proves the timing generator and scan-out are alive on a
+  boot that has drawn nothing.
+- The keyboard: two 400-million-cycle
   boots, identical but for the keys, gave 597,166 keyboard-port accesses and
   "Unable to boot; press any key" against 388,421 and "Command Monitor. >>
   5555". Both halves are evidence - the six hundred thousand polls are the
