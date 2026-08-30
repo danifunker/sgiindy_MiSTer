@@ -1,0 +1,75 @@
+--- a/harness/console.c	2026-08-30 13:12:24.236228016 -0400
++++ b/harness/console.c	2026-08-30 13:15:42.379238025 -0400
+@@ -17,6 +17,45 @@
+ 
+ int have_testdev = 0;
+ 
++/* ---- memory sink -------------------------------------------------------
++ *
++ * ADDED FOR THE MiSTer CORE, where neither of the two sinks above can be read.
++ * That machine's SCC transmits nothing anyone can capture - no start bit has
++ * ever reached the HPS's ttyS1 - and its GIO slot 0 answers an unclaimed cycle
++ * rather than a test device, so have_testdev stays 0. What it does have is a
++ * DDR3 shared with an ARM that can mmap /dev/mem, which makes a buffer in main
++ * memory the one sink a host can actually read.
++ *
++ * KSEG1, deliberately: uncached, so a reader outside the CPU sees every byte
++ * without the suite having to flush anything - and the cache tests would make
++ * a cached buffer unreadable at exactly the wrong moment.
++ *
++ * 0xA8100000 is physical 0x08100000, 1 MB into RAM: above the PROM's low
++ * scratch and below _ftext at 0x08200000, so it collides with nothing.
++ */
++#define MEMLOG_BASE  0xA8100000u
++#define MEMLOG_MAGIC 0x494C4F47u        /* 'ILOG' */
++#define MEMLOG_CAP   0x00080000u        /* 512 KB, header included */
++
++static u32 memlog_len   = 0;
++static int memlog_ready = 0;
++
++static void memlog_putc(int c)
++{
++    if (!memlog_ready) {
++        WR32(MEMLOG_BASE + 4, 0);
++        WR32(MEMLOG_BASE + 0, MEMLOG_MAGIC);   /* magic last, so a reader that
++                                                  sees it sees a valid length */
++        memlog_ready = 1;
++    }
++    if (memlog_len + 8 < MEMLOG_CAP) {
++        WR8(MEMLOG_BASE + 8 + memlog_len, c);
++        memlog_len++;
++        WR32(MEMLOG_BASE + 4, memlog_len);
++    }
++}
++
++
+ /* Bounded so a wedged SCC can't hang the whole suite. */
+ #define TX_SPIN_LIMIT 100000
+ 
+@@ -55,7 +94,13 @@
+     if (scc_dead) return;
+     while (!(RD8(SCC_CHB_CMD) & SCC_RR0_TX_EMPTY)) {
+         if (++spins > TX_SPIN_LIMIT) {
+-            if (have_testdev) scc_dead = 1;
++            /* SGI: or when the memory sink is live. The rule this replaces is
++             * "never latch unless something else is capturing output", and the
++             * memory sink is something else capturing output. On a machine whose
++             * SCC never drains, every character after the first otherwise burns
++             * the whole 100000-iteration limit - which the comment above measures
++             * at 78 seconds of a 117-second run. */
++            if (have_testdev || memlog_ready) scc_dead = 1;
+             return;
+         }
+     }
+@@ -116,9 +161,11 @@
+     if (c == '\n') {
+         scc_putc('\r');
+         if (have_testdev) WR32(TESTDEV_PUTC, '\r');
++        memlog_putc('\r');
+     }
+     scc_putc(c);
+     if (have_testdev) WR32(TESTDEV_PUTC, (u32)(u8)c);
++    memlog_putc(c);
+ }
+ 
+ void con_puts(const char *s)

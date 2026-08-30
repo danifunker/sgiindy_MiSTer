@@ -17,7 +17,7 @@
 # neither holds state worth preserving. Anything that IS state (a mounted SCSI
 # image, a saved NVRAM once that exists) is left alone.
 #
-# Usage: bash scripts/deploy.sh [--no-launch] [--rom-only] [--rbf FILE]
+# Usage: bash scripts/deploy.sh [--no-launch] [--rom-only] [--rbf FILE] [--rom FILE]
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 if [ -r scripts/local.env ]; then . scripts/local.env; fi
@@ -38,6 +38,10 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${PROJECT_NAME:=sgiindy}"
 
 RBF="output_files/$RBF_NAME"
+# The PROM is normally the repository's own boot.rom, but it does not have to
+# be: tests/hw-cputest builds a boot.rom that IS the CPU test suite, and the
+# framework will upload anything at index 0 just the same.
+ROM="boot.rom"
 LAUNCH=1
 ROM_ONLY=0
 while [ $# -gt 0 ]; do
@@ -45,6 +49,7 @@ while [ $# -gt 0 ]; do
         --no-launch) LAUNCH=0 ;;
         --rom-only)  ROM_ONLY=1 ;;
         --rbf) RBF="$2"; shift ;;
+        --rom) ROM="$2"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
@@ -82,15 +87,15 @@ CORES="/media/fat/$MISTER_CORE_FOLDER"
     log "ERROR: cannot reach $DEV over ssh"; exit 1; }
 
 log "=== Drop the boot PROM ==="
-[ -f boot.rom ] || { log "ERROR: boot.rom missing from the repository root"; exit 1; }
-"${SCP[@]}" boot.rom "$DEV:$GAMES/boot.rom" || exit 1
-LOCAL_MD5=$(md5sum boot.rom | awk '{print $1}')
+[ -f "$ROM" ] || { log "ERROR: $ROM does not exist"; exit 1; }
+"${SCP[@]}" "$ROM" "$DEV:$GAMES/boot.rom" || exit 1
+LOCAL_MD5=$(md5sum "$ROM" | awk '{print $1}')
 REMOTE_MD5=$("${SSH[@]}" "$DEV" "md5sum '$GAMES/boot.rom'" | awk '{print $1}')
 if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
     log "ERROR: boot.rom md5 mismatch (local $LOCAL_MD5 != remote $REMOTE_MD5)"
     exit 1
 fi
-log "boot.rom -> $GAMES/boot.rom, md5 verified: $LOCAL_MD5"
+log "$ROM -> $GAMES/boot.rom, md5 verified: $LOCAL_MD5"
 
 if [ "$ROM_ONLY" = 1 ]; then
     log "--rom-only: the PROM and its directory are in place, stopping here"
