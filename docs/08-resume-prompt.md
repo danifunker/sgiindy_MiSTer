@@ -264,6 +264,24 @@ checked out at the same path. **Do
 not change files or git state there** - push to origin and let the user pull;
 running a build is fine.
 
+**THE MACHINE DRAWS ITS OWN BOOT SCREEN ON A DE10-NANO, AND THEN STOPS.**
+`releases/SGIIndy_20260830.rbf` is the bitstream and
+`releases/SGIIndy_20260830_bootscreen.png` is the screen: the gradient, the
+hourglass, "Running power-on diagnostics...", "WELCOME TO INDY" and "Silicon
+Graphics Computer Systems", in colour, stable. The frame buffer holds 171
+distinct colour indices where it used to hold three.
+
+**IT DOES NOT REACH THE SYSTEM MAINTENANCE MENU.** It sits at "Running
+power-on diagnostics..." indefinitely. That is the next thing to chase and it
+is UNDIAGNOSED - do not assume it is graphics because graphics is what was
+just fixed. Under Verilator the same PROM completes POST and reaches the menu
+in about fifty seconds, so the difference is something hardware does and the
+simulator does not, which by now has a very well-established shape: look for
+a device whose model assumes an answer that DDR3 or the framework does not
+give. `tools/misterdeploy/ddr3_peek.py` reads the machine's memory from the
+ARM; `--stuck` in the Verilator harness names the address being hammered, and
+comparing the two is the obvious first move.
+
 **IT RUNS ON A DE10-NANO.** The machine boots on real hardware: the board
 reports the video mode as **1318x1024, 29.21 kHz, 27.4 Hz**, and every one of
 those numbers is this core's. VC2 emits nothing at all until software sets
