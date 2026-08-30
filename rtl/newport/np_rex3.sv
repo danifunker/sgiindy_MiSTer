@@ -411,9 +411,16 @@ module np_rex3 #(
     // Writes issued into the frame buffer that have not been acknowledged.
     // The fill path below does not wait for each one, so this is what says the
     // engine is finished.
-    logic  [3:0] wr_outstanding;
 
-    assign gfx_busy = (dr != DR_IDLE) || (dcbst != DCB_IDLE) || (wr_outstanding != 0);
+    // BUSY UNTIL THE LAST WRITE HAS BEEN ACKNOWLEDGED, and `dr` alone now says
+    // so. Both write paths wait for `fb_ack` before leaving the pixel, so the
+    // engine cannot reach DR_IDLE with a write still in the air and the
+    // separate outstanding-write counter this used to carry has nothing left
+    // to count. That matters more than it looks: a driver polls this through
+    // STATUS and USER_STATUS, and an engine that reports idle early is the bug
+    // that let the PROM write registers into running commands for as long as
+    // this core has had graphics.
+    assign gfx_busy = (dr != DR_IDLE) || (dcbst != DCB_IDLE);
 
     // THE FILL PATH. A plain painted block with a byte-clean write mask and a
     // logic op that ignores the destination needs no read and returns no data,
@@ -869,7 +876,7 @@ module np_rex3 #(
             cy_end <= 17'sd0; cx_save <= 17'sd0; zbit <= 5'd31;
             span_left <= 6'd32; span_clamped <= 1'b0; first_pix <= 1'b0;
             src_pix <= 24'h0; dst_word <= 64'h0; host_left <= 3'd0;
-            host_shift <= 64'h0; wr_outstanding <= 4'd0;
+            host_shift <= 64'h0;
             config_r <= 32'h0;
             vrint <= 1'b0; videoint <= 1'b0;
             ack <= 1'b0; rdata <= 32'h0;
@@ -1146,7 +1153,29 @@ module np_rex3 #(
                 // whether or not the previous write has retired, because a
                 // write returns nothing and the frame buffer port takes one
                 // per clock.
-                DR_FILL: begin
+                // ONE PIXEL PER ACKNOWLEDGEMENT, NOT ONE PER CLOCK. This
+                // state used to advance every cycle and fire a write on each
+                // of them, tracking what it had asserted in `wr_outstanding`.
+                // Against a memory that accepts a write per clock that is
+                // right, and sim_top's frame buffer is exactly such a memory.
+                // Against rtl/mister/ddr3_mux.sv it is a disaster: the mux
+                // holds ONE transaction at a time and takes tens of cycles
+                // over it, so every request asserted while one is in flight is
+                // latched by nobody. The pixels are never written, the count
+                // never comes back down, and DR_DRAIN waits for ever.
+                //
+                // On a DE10-Nano that was a rasteriser that drew almost
+                // nothing and then wedged. verilator/tb_rex3.cpp measures it:
+                // at a forty-cycle acknowledgement, 249 of a 256-pixel
+                // rectangle never reached memory and the engine never returned
+                // to idle. At a zero-cycle one - the memory every other test
+                // in this tree uses - none are lost, which is why nothing
+                // caught it.
+                //
+                // Waiting costs nothing that was ever real: the port serves
+                // one transaction at a time whatever this state does, so the
+                // writes it used to throw away were never going to happen.
+                DR_FILL: if (!fb_req || fb_ack) begin
                     first_pix <= 1'b0;
                     if (span_left != 6'd0) span_left <= span_left - 6'd1;
                     if (row_done) begin
@@ -1165,8 +1194,13 @@ module np_rex3 #(
                     end
                 end
 
-                DR_DRAIN: if (wr_outstanding == 4'd0 ||
-                              (wr_outstanding == 4'd1 && fb_ack)) dr <= DR_IDLE;
+                // Nothing left to drain: DR_FILL does not leave a pixel until
+                // its write has been acknowledged, so by the time the walk
+                // ends there is never a write in flight. The state is kept
+                // because every path into "the primitive is over" goes through
+                // it and because a future engine with more than one write
+                // outstanding will want it back.
+                DR_DRAIN: dr <= DR_IDLE;
 
                 DR_SRC_RD: if (fb_ack) begin
                     src_pix <= fb_rdata[23:0];
@@ -1238,15 +1272,6 @@ module np_rex3 #(
                 default: dr <= DR_IDLE;
             endcase
 
-            // One counter for both write paths. The general one issues at
-            // most one write at a time so it never exceeds one; the fill path
-            // can be several deep.
-            case ({(dr == DR_FILL) && fb_req && fb_we,
-                   fb_ack && (dr == DR_FILL || dr == DR_DRAIN)})
-                2'b10:   wr_outstanding <= wr_outstanding + 4'd1;
-                2'b01:   wr_outstanding <= wr_outstanding - 4'd1;
-                default: ;
-            endcase
         end
     end
 

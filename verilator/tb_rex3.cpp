@@ -1,0 +1,234 @@
+//============================================================================
+//  tb_rex3 - does the rasteriser lose writes when memory is slow?
+//
+//  THIS EXISTS BECAUSE HARDWARE DREW NOTHING AND NOTHING IN THE REPOSITORY
+//  COULD HAVE SEEN WHY. tests/run-rex3.sh is the strong test of what REX3
+//  draws - every command replayed against every pixel - but it needs a whole
+//  machine, and the machine's memory answers in one cycle. Against DDR3 it
+//  does not, and the difference is the whole of this file.
+//
+//  DR_FILL, the opaque-fill fast path, asserts a write EVERY CYCLE and counts
+//  what it has asserted in a four-bit `wr_outstanding`, then DR_DRAIN waits
+//  for that count to reach zero. Against a memory that accepts one write per
+//  cycle every count is matched by an acknowledgement and the shape is
+//  correct. Against rtl/mister/ddr3_mux.sv, which holds ONE transaction at a
+//  time and takes tens of cycles over it, the requests REX3 asserts while a
+//  transaction is already in flight are never latched by anybody - so the
+//  pixels are never written, the count never comes back down, and DR_DRAIN
+//  waits for ever.
+//
+//  So the test is: draw a filled rectangle, and check that every pixel of it
+//  reached memory. ACK_DELAY is the knob. At 1 this passes on the broken RTL,
+//  which is exactly why a whole machine full of one-cycle memory never caught
+//  it; at anything realistic it does not.
+//============================================================================
+
+#include "Vnp_rex3.h"
+#include "verilated.h"
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <map>
+#include <set>
+
+static Vnp_rex3 *dut;
+static uint64_t  clks = 0;
+static int       failures = 0;
+
+// ---- the frame buffer, and a bridge as unhelpful as the real one ----------
+// One transaction at a time, ACK_DELAY cycles over it. That is the DDR3 mux's
+// actual contract and it is the only thing this test changes about the world.
+static std::map<uint32_t, uint64_t> fb;
+static std::set<uint32_t>           written;
+static int      ack_delay = 1;
+static int      busy_left = 0;
+static uint32_t busy_addr = 0;
+static uint64_t busy_data = 0;
+static bool     busy_is_write = false;
+static uint8_t  busy_be = 0;
+static uint64_t accepted = 0, presented = 0;
+// Every distinct address REX3 ever asserted a write to. The difference between
+// this and `written` is the set of pixels it believes it drew and did not.
+static std::set<uint32_t> intended;
+
+static void bridge_before_edge()
+{
+    dut->fb_ack   = 0;
+    dut->fb_rdata = 0xDEADBEEFCAFEF00DULL;      // garbage unless acked
+
+    if (dut->fb_req && dut->fb_we) intended.insert(dut->fb_addr);
+
+    auto commit = [&]() {
+        if (busy_is_write) {
+            uint64_t old = fb.count(busy_addr) ? fb[busy_addr] : 0;
+            uint64_t val = 0;
+            for (int i = 0; i < 8; i++) {
+                int shift = 56 - 8 * i;              // byte 0 is the top one
+                bool en = (busy_be >> (7 - i)) & 1;
+                uint64_t by = en ? ((busy_data >> shift) & 0xFF)
+                                 : ((old       >> shift) & 0xFF);
+                val |= by << shift;
+            }
+            fb[busy_addr] = val;
+            written.insert(busy_addr);
+        } else {
+            dut->fb_rdata = fb.count(busy_addr) ? fb[busy_addr] : 0;
+        }
+        dut->fb_ack = 1;
+        accepted++;
+    };
+
+    if (busy_left > 0) {
+        if (--busy_left == 0) commit();
+        return;
+    }
+
+    if (dut->fb_req) {
+        presented++;
+        busy_addr     = dut->fb_addr;
+        busy_data     = dut->fb_wdata;
+        busy_be       = dut->fb_be;
+        busy_is_write = dut->fb_we;
+        // ACK_DELAY 0 IS THE MEMORY EVERY OTHER TEST IN THIS TREE USES: accept
+        // and acknowledge within the same cycle, so a master can start a new
+        // transaction on every clock and nothing is ever refused. It is what
+        // sim_top's frame buffer does, and it is not what DDR3 does.
+        if (ack_delay == 0) commit();
+        else                busy_left = ack_delay;
+    }
+}
+
+static void tick()
+{
+    bridge_before_edge();
+    dut->eval();
+    dut->clk = 1; dut->eval();
+    dut->clk = 0; dut->eval();
+    clks++;
+}
+
+// ---- the register bus -----------------------------------------------------
+static void wr(uint32_t off, uint32_t val)
+{
+    dut->sel = 1; dut->we = 1; dut->off = off; dut->wdata = val; dut->be = 0xF;
+    tick();
+    dut->sel = 0; dut->we = 0;
+    tick();
+}
+
+// Register offsets, from np_rex3.sv.
+enum {
+    R_DRAWMODE1 = 0x0000, R_DRAWMODE0 = 0x0004, R_ZPATTERN = 0x0014,
+    R_XSTARTI   = 0x0148, R_XENDI     = 0x014C,
+    R_XYSTARTI  = 0x0150, R_XYENDI    = 0x0154,
+    R_WRMASK    = 0x0220, R_COLORI    = 0x0224,
+    R_TOPSCAN   = 0x1320, R_XYWIN     = 0x1324, R_CLIPMODE = 0x1328,
+};
+static const uint32_t GO = 0x800;
+
+int main(int argc, char **argv)
+{
+    Verilated::commandArgs(argc, argv);
+    ack_delay = 8;
+    if (const char *e = getenv("REX3_ACK_DELAY")) ack_delay = atoi(e);
+    dut = new Vnp_rex3;
+
+    dut->reset = 1; dut->clk = 0;
+    dut->sel = 0; dut->we = 0; dut->off = 0; dut->wdata = 0; dut->be = 0;
+    dut->fb_ack = 0; dut->fb_rdata = 0; dut->vert_int = 0; dut->dcb_rdata = 0;
+    for (int i = 0; i < 8; i++) tick();
+    dut->reset = 0;
+    tick();
+
+    // A filled rectangle, which is what a screen clear and every box the boot
+    // screen draws actually is. OP_DRAW, block address mode, stop on both
+    // axes - the shape that reaches DR_FILL.
+    // 32 wide because the engine walks a span of 32 at a time; wider is a
+    // rasteriser question and tests/run-rex3.sh is where that belongs. This
+    // test is about back-pressure and nothing else.
+    const int X0 = 4, Y0 = 2, X1 = 35, Y1 = 9;
+    const int W = X1 - X0 + 1, H = Y1 - Y0 + 1;
+
+    // THE IDENTITY WINDOW IS 0x10001000, NOT ZERO. Coordinates carry a 4096
+    // bias that is subtracted when one becomes an address, so a window of zero
+    // puts every column at x - 4096, off the left of the frame buffer, where
+    // clipping drops it and the engine draws nothing at all - which is what
+    // the first run of this test measured.
+    wr(R_XYWIN,     0x10001000);
+    wr(R_CLIPMODE,  0x00000000);       // clipping off
+    // fb_row is (y + win_y - 4096 - topscan - 1) mod FB_LINES, so 1023 makes
+    // it the identity: y - 1024, and 1024 is the number of lines.
+    wr(R_TOPSCAN,   0x000003FF);
+    wr(R_WRMASK,    0x00FFFFFF);       // all drawing planes writable
+    wr(R_COLORI,    0x0000005A);       // an index nothing else would produce
+    wr(R_ZPATTERN,  0xFFFFFFFF);
+    // planes 0 (the DRAWING planes - 4 and 5 are the auxiliary ones, and
+    // picking those sends every write into the top half of the word where the
+    // display never looks), drawdepth 1 (8 bits), compare 7 (disabled),
+    // logicop 3 = SRC, which is at [31:28] and not next to the depth fields.
+    wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 3) | 0u);
+    // opcode 2 (DRAW) | adrmode 1 (block) << 2 | stoponx << 8 | stopony << 9
+    wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));
+    wr(R_XYSTARTI,  ((uint32_t)X0 << 16) | (uint32_t)Y0);
+    wr(R_XYENDI | GO, ((uint32_t)X1 << 16) | (uint32_t)Y1);
+
+    // Let it run. A rectangle this size is a few hundred pixels; give it far
+    // more than it can need, then see whether it ever finished.
+    const uint64_t BUDGET = 400000;
+    uint64_t start = clks;
+    while (clks - start < BUDGET && dut->gfx_busy) tick();
+    for (int i = 0; i < 200; i++) tick();
+    bool finished = !dut->gfx_busy;
+
+    printf("ack delay %d cycle%s%s\n", ack_delay, ack_delay == 1 ? "" : "s",
+           ack_delay == 0 ? " (a one-cycle memory: nothing is ever refused)" : "");
+    printf("  %llu cycles, %llu requests presented, %llu accepted\n",
+           (unsigned long long)(clks - start),
+           (unsigned long long)presented, (unsigned long long)accepted);
+    printf("  engine %s\n", finished ? "returned to idle" : "STILL BUSY - it never drained");
+
+    // Every pixel of the rectangle must have reached memory, and with the
+    // colour it was told to use.
+    uint64_t missing = 0, wrongcolour = 0;
+    for (int y = Y0; y <= Y1; y++)
+        for (int x = X0; x <= X1; x++) {
+            uint32_t a = (uint32_t)(((y << 11) + x) << 3);
+            if (!written.count(a)) { missing++; continue; }
+            if ((fb[a] & 0xFF) != 0x5A) wrongcolour++;
+        }
+    if (getenv("REX3_MAP")) {
+        printf("  coverage map (# written, . missing), rows \n");
+        for (int y = Y0; y <= Y1; y++) {
+            printf("    y=%2d ", y);
+            for (int x = X0; x <= X1; x++) {
+                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
+                putchar(written.count(a) ? '#' : '.');
+            }
+            putchar('\n');
+        }
+    }
+    printf("  %d x %d = %d pixels: %llu never written, %llu written with the wrong colour\n",
+           W, H, W * H, (unsigned long long)missing, (unsigned long long)wrongcolour);
+
+    auto check = [&](const char *what, bool ok) {
+        printf("  %s %s\n", ok ? "ok     " : "FAILED ", what);
+        if (!ok) failures++;
+    };
+    printf("\n");
+    check("the engine finished the primitive", finished);
+    check("every pixel of the rectangle reached memory", missing == 0);
+    check("every pixel carried the colour it was given", wrongcolour == 0);
+    // THE PROPERTY THIS FILE EXISTS FOR. Every address REX3 asserted a write
+    // to must have reached memory. A rasteriser that fires writes at a memory
+    // which is not ready loses exactly the difference, and believes it drew
+    // them.
+    uint64_t lost = 0;
+    for (uint32_t a : intended) if (!written.count(a)) lost++;
+    printf("  %zu addresses asserted, %llu of them never reached memory\n",
+           intended.size(), (unsigned long long)lost);
+    check("every write the engine asserted reached memory", lost == 0);
+
+    printf(failures ? "\nREX3FILL: FAIL\n" : "\nREX3FILL: PASS\n");
+    delete dut;
+    return failures ? 1 : 0;
+}

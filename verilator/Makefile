@@ -223,7 +223,21 @@ linecachetest:
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vfb_linecache $(RTL)/mister/fb_linecache.sv tb_linecache.cpp
 
-.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest all clean
+# --- the rasteriser against a memory that is not always ready ---------------
+# tests/run-rex3.sh is the strong test of WHAT REX3 draws - every command
+# replayed against every pixel - but it runs on sim_top, whose memory accepts a
+# request every single cycle and never refuses one. rtl/mister/ddr3_mux.sv
+# refuses constantly: it holds one transaction at a time and takes tens of
+# cycles over it. This drives np_rex3 on its own against that contract and
+# checks that a filled rectangle actually reaches memory.
+#   make rex3test && ./obj_dir_rex3/Vnp_rex3
+#   REX3_ACK_DELAY=40 ./obj_dir_rex3/Vnp_rex3     # DDR3-ish
+#   REX3_ACK_DELAY=0  ./obj_dir_rex3/Vnp_rex3     # the memory sim_top has
+#   REX3_MAP=1        ./obj_dir_rex3/Vnp_rex3     # print the coverage map
+rex3test:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3 --top-module np_rex3 	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vnp_rex3 $(RTL)/newport/np_rex3.sv tb_rex3.cpp
+
+.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest rex3test all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal

@@ -61,6 +61,8 @@ verilator/obj_dir_cmapdbg/
 # The DDR3 mux and the frame buffer line cache each build their own.
 verilator/obj_dir_ddr3/
 verilator/obj_dir_lcache/
+# And the rasteriser's standalone back-pressure test.
+verilator/obj_dir_rex3/
 
 # Machine-specific deploy configuration: host, ssh key, Quartus path.
 # scripts/local.env.sample is the committed template.
