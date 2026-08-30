@@ -32,22 +32,9 @@ DBG="/media/fat/sgidbg"
 rsh() { ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
             "$MISTER_SSH_USER@$MISTER_HOST" "$@"; }
 
-echo "[$(date +%H:%M:%S)] pushing the contention generator"
-scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
-    tools/misterdeploy/hammer.py "$MISTER_SSH_USER@$MISTER_HOST:$DBG/" || exit 2
-
-# Start it first and let it run past the end of the suite: a generator that
-# stops early would leave the tail of the run uncontended and a failure in that
-# tail unexplained.
-echo "[$(date +%H:%M:%S)] starting the hammer for 400s"
-rsh "nohup python3 $DBG/hammer.py 400 >/tmp/hammer.log 2>&1 &" || exit 2
-
-bash tests/run-cputest-hw.sh "$@"
-rc=$?
-
-echo
-echo "[$(date +%H:%M:%S)] hammer said: $(rsh 'cat /tmp/hammer.log 2>/dev/null | tail -1')"
-echo "Compare against tests/hardware/cputest-de10nano-20260830.log, which is the"
-echo "same suite with the memory quiet. A check that fails only here is the"
-echo "result this test exists for."
-exit $rc
+# The load is started by run-cputest-hw.sh itself, AFTER it launches the core.
+# It has to be: launch_unstable_core.py reboots the MiSTer, so a generator
+# started here would be killed before the suite ever ran - which is exactly
+# what happened the first time, and the run came back a clean pass with no
+# contention on it.
+exec bash tests/run-cputest-hw.sh --load "$@"

@@ -7,6 +7,7 @@
 #   tests/run-cputest-hw.sh --no-build      use the boot.rom already built
 #   tests/run-cputest-hw.sh --keep          leave the suite on the card
 #   tests/run-cputest-hw.sh --wait 240      give it longer
+#   tests/run-cputest-hw.sh --load          run it with the memory busy
 #
 # WHY THIS EXISTS. tests/run-cputest.sh runs the same suite under Verilator, and
 # that is the ratchet - but it only ever proves the RTL is self-consistent with
@@ -33,11 +34,12 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 : "${MISTER_HTTP_PORT:=8182}"
 
-BUILD=1; KEEP=0; WAIT=180
+BUILD=1; KEEP=0; WAIT=180; LOAD=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) BUILD=0 ;;
         --keep)     KEEP=1 ;;
+        --load)     LOAD=1 ;;
         --wait)     WAIT="$2"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -79,6 +81,20 @@ python tools/misterdeploy/launch_unstable_core.py \
     --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
     --ssh-key "$MISTER_SSH_KEY" --ssh-user "$MISTER_SSH_USER" 2>&1 | tail -1
 
+# THE LOAD STARTS HERE AND NOT EARLIER, and the first version of this got it
+# wrong. `launch_unstable_core.py` REBOOTS the MiSTer, so anything started
+# before it is killed by that reboot - the run came back a clean pass with no
+# contention on it at all, which is the most expensive kind of green. Starting
+# it after the launch is the only order that works, and the empty log the first
+# attempt left behind is why this now checks that it is actually running.
+if [ "$LOAD" = 1 ]; then
+    push tools/misterdeploy/hammer.py
+    # Shorter than the wait, so it has finished and written its summary by the
+    # time the log is read. busybox has no pgrep, so the check is the log line
+    # the generator prints on startup.
+    rsh "rm -f /tmp/hammer.log; (setsid python3 $DBG/hammer.py $((WAIT - 20)) >/tmp/hammer.log 2>&1 &); sleep 3; cat /tmp/hammer.log"         | sed 's/^/  /'
+fi
+
 # The suite is thousands of times more work than a PROM boot and every
 # uncached access is a DDR3 round trip. Under Verilator it is 3.5M clocks with
 # the caches on and 17M with them off; at 50 MHz that is well under a second of
@@ -96,6 +112,15 @@ rc=${PIPESTATUS[0]}
 if [ "$KEEP" = 0 ]; then
     log "putting the machine's own PROM back"
     bash scripts/deploy.sh --rom-only 2>&1 | tail -1
+fi
+
+if [ "$LOAD" = 1 ]; then
+    H=$(rsh "cat /tmp/hammer.log 2>/dev/null | tail -1")
+    case "$H" in
+        hammered*) log "contention generator: $H" ;;
+        *)         log "!! NO COMPLETION LINE FROM THE CONTENTION GENERATOR ($H)"
+                   log "!! treat this run as UNLOADED - it proves nothing about contention" ;;
+    esac
 fi
 
 echo

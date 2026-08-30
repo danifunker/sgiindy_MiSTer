@@ -38,6 +38,13 @@ def main():
     finally:
         os.close(fd)
 
+    # Say so IMMEDIATELY, and flush. The caller checks this log to decide
+    # whether the run it just did was actually contended, and a generator that
+    # only speaks when it finishes leaves an empty file for the whole run - so
+    # "no log" reads as "never started" when it means "still going". That
+    # ambiguity turned a null result into a reported pass once.
+    print("hammering %d MB from 0x%08x" % (SPAN >> 20, FB), flush=True)
+
     end = time.time() + seconds
     passes = 0
     try:
