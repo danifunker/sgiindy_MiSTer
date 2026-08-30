@@ -10,7 +10,14 @@ session that changes the answer to "what works" or "what is next".
 ---
 
 You are continuing work on an **SGI Indy (IP24)** core for MiSTer FPGA. The repo
-is `~/repos/sgiindy_MiSTer`. **Work autonomously**: make the routine calls
+is `~/repos/sgiindy_MiSTer`.
+
+**THE JOB THIS SESSION IS SCSI ON REAL HARDWARE**: get `hinv` on the DE10-Nano
+to list the disk and the CD-ROM, and get the IRIX 5.3 installer to load off the
+CD. Jump to "THE JOB: SCSI ON HARDWARE" below - it has the media, the way to
+mount it without the OSD, the way to type at the machine, and what the boot
+actually prints today. The rest of this file is the accumulated ground truth
+behind it; read the STOP section first and the rest as you need it. **Work autonomously**: make the routine calls
 yourself, keep going through obstacles, and only stop to ask when a decision
 genuinely changes what gets built (or when you need something run on real
 hardware — see below).
@@ -80,6 +87,149 @@ bitstream has to say `--rbf releases/SGIIndy_20260829.rbf`, or use
 Every measurement in this section was taken with the release on the board -
 `/media/fat/_Unstable/SGIIndy.rbf`, md5 verified `214e9fdd…` - and `--no-deploy`
 is how it stayed there.
+
+## THE JOB: SCSI ON HARDWARE, AND THE IRIX INSTALLER
+
+**Get `hinv` to list the disk and the CD-ROM on the DE10-Nano, then get the
+IRIX 5.3 installer to load off the CD.** Everything below was measured on the
+board on 2026-08-30 - none of it is inferred - and it is deliberately front
+-loaded with the things that took a while to find out, because two of them
+change how you work rather than what you build.
+
+### The media is already on the card
+
+```
+/media/fat/games/SGIIndy/indy1GB.img        1 GB, blank
+/media/fat/games/SGIIndy/IRIX 5.3 XFS.iso   536 MB, the installer
+```
+
+The core's slots are already right: `S1` and `S2` are disks at SCSI ID1 and
+ID2, `S3` is SCSI ID6 and `CDROM_IDS = 7'b100_0000` elaborates it as a CD-ROM
+rather than a disk. `sgiindy.sv`'s `scsi_img_mounted` maps hps_io slot 3 onto
+SCSI ID6.
+
+### YOU CAN MOUNT IMAGES WITHOUT TOUCHING THE OSD, and you should
+
+An MGL file mounts images and launches the core in one shot, which matters
+because **the screenshot API does not capture the OSD** - blind menu navigation
+cannot be verified, and that is what `scripts/setopt.sh` exists to avoid for
+options. `/media/fat/_Unstable/SGIIndy_SCSI.mgl` is written and working:
+
+```xml
+<mistergamedescription>
+	<rbf>_Unstable/SGIIndy</rbf>
+	<file delay="2" type="s" index="1" path="/media/fat/games/SGIIndy/indy1GB.img"/>
+	<file delay="1" type="s" index="3" path="/media/fat/games/SGIIndy/IRIX 5.3 XFS.iso"/>
+</mistergamedescription>
+```
+
+Load it with `echo "load_core /media/fat/_Unstable/SGIIndy_SCSI.mgl" >
+/dev/MiSTer_cmd` over ssh. **The paths must be ABSOLUTE** - a relative
+`games/SGIIndy/...` silently mounts nothing, which cost a round of confusion
+here. `index` is the hps_io slot: 1 = S1 = SCSI ID1, 3 = S3 = SCSI ID6.
+
+`/tmp/ACTIVEGAME` stays EMPTY for an `type="s"` mount, so do not use it as your
+check - it is not a mount record for disk slots. The screen is the check.
+
+### YOU CAN TYPE AT THE MACHINE
+
+`tools/misterdeploy/ws_send.py` sends keystrokes over the MiSTer Remote ws API,
+and `kbdRaw:<n>` takes raw Linux uinput codes. That is how to drive the PROM's
+menus without a person at the keyboard. The codes that matter:
+
+| key | code | | key | code |
+|---|---|---|---|---|
+| space | 57 | | enter | 28 |
+| `1`..`5` | 2,3,4,5,6 | | h i n v | 35,23,49,47 |
+
+The sequence that gets to a command and runs it, from the "press any key"
+prompt:
+
+```
+python tools/misterdeploy/ws_send.py --host $MISTER_HOST --port 8182 \
+  "kbdRaw:57" "sleep:4" "kbdRaw:6" "sleep:5" \
+  "kbdRaw:35" "kbdRaw:23" "kbdRaw:49" "kbdRaw:47" "sleep:0.5" "kbdRaw:28" "sleep:6"
+```
+
+Read the answer out of the frame buffer rather than off a screenshot: the
+PROM's console is drawn into it, and `tests/out/hw/` has the crop-and-binarise
+recipe - index 7 is the text and index 9 or 10 is the panel behind it.
+
+### WHAT THE MACHINE ACTUALLY DOES TODAY
+
+**With no media**, `hinv` is:
+
+```
+System: IP22            Processor: 50 Mhz R4400, with FPU
+Memory size: 48 Mbytes  Graphics: Indy 24-bit
+SCSI CDROM: scsi(0)cdrom(6)
+Audio: Iris Audio Processor: version A2 revision 4.1.0
+```
+
+**No `SCSI Disk` line, and the CDROM line is there whether or not media is
+mounted** - it is the target elaborating, not the media. So the CDROM line is
+NOT evidence that the ISO mounted, and that is the trap to avoid first.
+
+**With both images mounted**, the boot ends differently, and this is the
+measurement that says the mount worked:
+
+```
+Cannot load /sash.
+No default device and path in environment.
+Unable to load bootfile: invalid argument
+
+Unable to boot; press any key to continue:
+```
+
+A diskless boot prints only the last line. So **the PROM found a bootable
+device and tried to load `/sash` off it** - the standalone shell, IRIX's
+bootloader. Two reasons it failed and both are expected: `indy1GB.img` is
+blank, and **the NVRAM in this core is volatile**, so there is no `bootfile` or
+`root` in the environment and `setenv` will not survive a reset until the array
+is wired to MiSTer's save path (`docs/17-nvram-persistence.md`).
+
+### WHERE TO START
+
+1. **Get `hinv` to list the disk.** The `SCSI Disk` line is the one that is
+   missing, and `docs/13-scsi-dma-plan.md` has the six addresses that settled
+   the last argument about that line - including the discovery that the PROM
+   prints the SCSI lines AFTER `Memory size:`, which is how a whole theory got
+   built on a harness that stopped one line early. `tests/run-scsi.sh` boots
+   with a disk under Verilator and asserts the line, and it passes - so if
+   hardware disagrees with that, the difference is the hardware path and not
+   the model.
+2. **Then the installer.** Maintenance menu option 2, "Install System
+   Software", should offer `a) Local SCSI CD-ROM drive 6`. `docs/08`'s "THE
+   FIRST REAL FAILURE" section is what happened last time it got that far under
+   Verilator: the copy completed and then the installer took a UTLB miss on a
+   load from address zero. That is a null pointer in the guest, the CPU is
+   behaving correctly, and the leading hypothesis - corrupted data from an
+   untested write path - has been TESTED AND IS WRONG. Read that section before
+   re-deriving it.
+3. **Budget retries into every hardware experiment.** About one boot in three
+   panics for reasons that have nothing to do with SCSI (see the panic section
+   below), so a single failed run says nothing. Loop until you get a healthy
+   boot, then act. `scripts/bootrate.sh` is the pattern.
+
+### TWO THINGS THAT WILL BITE
+
+**Typing at the machine with media mounted produced this, once:**
+
+```
+NESTED EXCEPTION #2 at EPC: 10101010; first exception at PC: 0
+```
+
+`0x10101010` is a repeating byte, and it is the same family as the
+`0x00747474` in the open panic below - a garbage pointer built out of one byte
+value. Whether the SCSI path makes that more likely is unknown and worth
+knowing: if the nested exception reproduces with media mounted and not without,
+that is a much sharper handle on the whole class than the boot panic is.
+
+**Clear main memory before any run you intend to draw a conclusion from.** The
+GIO64 DMA engine means the PROM clears its own memory now, so this is no longer
+load-bearing - but a run started from a known state is still the only kind
+worth comparing against another one. `scripts/bootrate.sh` and
+`scripts/hwcheck.sh` both do it.
 
 ### THE MEMORY CLEAR IS FIXED IN RTL, AND `memclear.py` IS NOW A DIAGNOSTIC
 
