@@ -40,16 +40,31 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_HTTP_PORT:=8182}"
 
 N=10; MEMCLEAR=1; WAIT=45; POISON=""
+DISK1=""; DISK2=""; CD=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-memclear) MEMCLEAR=0 ;;
         --poison)      POISON="$2"; MEMCLEAR=0; shift ;;
         --wait) WAIT="$2"; shift ;;
+        --disk1) DISK1="$2"; shift ;;
+        --disk2) DISK2="$2"; shift ;;
+        --cd)    CD="$2";    shift ;;
         [0-9]*) N="$1" ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
 done
+
+# WITH MEDIA MOUNTED THIS IS A DIFFERENT MEASUREMENT, and it has to be taken
+# the same way as the one without or the two cannot be compared: the panic
+# rate roughly doubles once a SCSI target answers, because that is what makes
+# the HPC3 DMA engine a second master on main memory. The launcher cannot
+# mount, so when any media is named the launch goes through an MGL - the same
+# file scripts/mount.sh writes, absolute paths and all, and that script has
+# the reason a relative path silently mounts nothing.
+MGL="/media/fat/$MISTER_CORE_FOLDER/SGIIndy_SCSI.mgl"
+MEDIA=0
+[ -n "$DISK1$DISK2$CD" ] && MEDIA=1
 
 export MSYS_NO_PATHCONV=1
 DBG="/media/fat/sgidbg"
@@ -92,18 +107,41 @@ print("%-11s panel %5.1f%%  text %5d  indices %3d  marker %4.1f%%  %s"
       % (v, panel, text, len(b), mark, "moving" if a != b else "static"))
 PYEOF
 
+if [ "$MEDIA" = 1 ]; then
+    for p in "$DISK1" "$DISK2" "$CD"; do
+        case "$p" in ""|/*) ;; *) echo "ERROR: not an absolute path: $p" >&2; exit 2 ;; esac
+    done
+    {
+        echo "<mistergamedescription>"
+        echo "	<rbf>$MISTER_CORE_FOLDER/${RBF_REMOTE%.rbf}</rbf>"
+        [ -n "$DISK1" ] && echo "	<file delay=\"2\" type=\"s\" index=\"1\" path=\"$DISK1\"/>"
+        [ -n "$DISK2" ] && echo "	<file delay=\"1\" type=\"s\" index=\"2\" path=\"$DISK2\"/>"
+        [ -n "$CD" ] && echo "	<file delay=\"1\" type=\"s\" index=\"3\" path=\"$CD\"/>"
+        echo "</mistergamedescription>"
+    } > /tmp/sgiindy_bootrate.mgl
+    scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
+        /tmp/sgiindy_bootrate.mgl "$MISTER_SSH_USER@$MISTER_HOST:$MGL" || exit 1
+    echo "=== media: ${DISK1:-none} + ${CD:-none} ==="
+fi
+
 echo "=== $N launches, ${WAIT}s each, memory: $([ -n "$POISON" ] && echo "POISONED 0x$POISON"       || { [ $MEMCLEAR = 1 ] && echo zeroed || echo "left as the last boot left it"; }) ==="
 declare -A TALLY
 for i in $(seq 1 "$N"); do
     rsh "python3 $DBG/fb_poke.py fill 0xE7" >/dev/null 2>&1
     [ "$MEMCLEAR" = 1 ] && rsh "python3 $DBG/memclear.py" >/dev/null 2>&1
     [ -n "$POISON" ]    && rsh "python3 $DBG/memclear.py 0x$POISON" >/dev/null 2>&1
-    python tools/misterdeploy/launch_unstable_core.py \
-        --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
-        --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
-        --ssh-key "$MISTER_SSH_KEY" --ssh-user "$MISTER_SSH_USER" >/dev/null 2>&1
-    sleep "$WAIT"
-    LINE=$(rsh "python3 $DBG/classify.py" 2>&1 | tail -1)
+    if [ "$MEDIA" = 1 ]; then
+        rsh "echo 'load_core $MGL' > /dev/MiSTer_cmd" >/dev/null 2>&1
+    else
+        python tools/misterdeploy/launch_unstable_core.py \
+            --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
+            --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
+            --ssh-key "$MISTER_SSH_KEY" --ssh-user "$MISTER_SSH_USER" >/dev/null 2>&1
+    fi
+    # THE SETTLE WAITS ON THE DEVICE. classify.py samples twice 20 s apart,
+    # so this is the rest of WAIT - and a foreground sleep here is refused by
+    # some harnesses, while the ssh call has to be made anyway.
+    LINE=$(rsh "sleep $((WAIT > 20 ? WAIT - 20 : 5)); python3 $DBG/classify.py" 2>&1 | tail -1)
     printf "  %2d/%-2d  %s\n" "$i" "$N" "$LINE"
     K=$(echo "$LINE" | awk '{print $1}')
     TALLY[$K]=$(( ${TALLY[$K]:-0} + 1 ))

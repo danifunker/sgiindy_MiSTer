@@ -12,6 +12,9 @@ Steps:
                 (osd = F12 opens the core OSD; API names case-SENSITIVE)
   kbdRaw:<n>    raw uinput code (F12=88; letters jump the file browser:
                 D=32, S=31, I=23 ...)
+  text:<string> type a string at the guest, one keystroke per character, using
+                the ASCII table below. Unshifted keys only - "hinv\\r" rather
+                than four kbdRaw steps and an enter.
   mouseMove:<dx>,<dy>   RELATIVE mouse move (the guest sees a mouse delta)
   mouseBtn:<name>       mouse button: left / right / middle
   sleep:<sec>   pause between steps (OSD needs ~0.3-0.8 s to redraw)
@@ -34,6 +37,46 @@ import sys
 import websockets
 
 
+# ---- ASCII -> raw Linux uinput key codes ----------------------------------
+# THE PROM'S CONSOLE IS THE ONLY WAY TO DRIVE THIS MACHINE and it wants
+# characters, not key codes. Hand-assembling them works for `hinv` and does not
+# work for an installer, so the table lives here. These are Linux input event
+# codes (include/uapi/linux/input-event-codes.h), which is what the MiSTer
+# Remote ws API forwards to uinput - NOT PS/2 scan codes and not ASCII.
+KEYCODE = {
+    "a": 30, "b": 48, "c": 46, "d": 32, "e": 18, "f": 33, "g": 34, "h": 35,
+    "i": 23, "j": 36, "k": 37, "l": 38, "m": 50, "n": 49, "o": 24, "p": 25,
+    "q": 16, "r": 19, "s": 31, "t": 20, "u": 22, "v": 47, "w": 17, "x": 45,
+    "y": 21, "z": 44,
+    "1": 2, "2": 3, "3": 4, "4": 5, "5": 6,
+    "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
+    "-": 12, "=": 13, "[": 26, "]": 27, ";": 39, "'": 40, "`": 41,
+    "\\": 43, ",": 51, ".": 52, "/": 53, " ": 57,
+    "\n": 28, "\r": 28, "\t": 15,
+}
+
+
+def expand_text(text):
+    """A `text:` step becomes one kbdRaw step per character.
+
+    Unshifted characters only. A capital letter or a symbol that needs SHIFT is
+    refused rather than silently typed as its lowercase twin - a command that
+    quietly loses a character is worse than one that will not run, because the
+    PROM answers both with a syntax error and only one of them is your fault.
+    """
+    # A shell cannot easily hand this an actual carriage return, so the
+    # two-character forms are taken as the real thing - `text:hinv\r` is the
+    # shape every caller actually wants to write.
+    text = (text.replace("\\r", "\r").replace("\\n", "\n").replace("\\t", "\t"))
+    steps = []
+    for ch in text:
+        code = KEYCODE.get(ch.lower() if ch.isalpha() else ch)
+        if code is None or (ch.isalpha() and ch != ch.lower()):
+            raise SystemExit("ws_send: cannot type %r - unshifted keys only" % ch)
+        steps.append("kbdRaw:%d" % code)
+    return steps
+
+
 async def run(host, port, steps):
     url = f"ws://{host}:{port}/api/ws"
     async with websockets.connect(url) as ws:
@@ -43,7 +86,13 @@ async def run(host, port, steps):
                 await asyncio.wait_for(ws.recv(), timeout=0.5)
         except asyncio.TimeoutError:
             pass
+        expanded = []
         for step in steps:
+            if step.startswith("text:"):
+                expanded += expand_text(step[5:])
+            else:
+                expanded.append(step)
+        for step in expanded:
             if step.startswith("sleep:"):
                 await asyncio.sleep(float(step.split(":", 1)[1]))
             elif step.startswith(("kbd:", "kbdRaw:", "kbdRawDown:", "kbdRawUp:",
