@@ -75,7 +75,17 @@ module newport #(
     output logic  [7:0] vid_g,
     output logic  [7:0] vid_b,
 
-    output logic        gfx_irq         // REX3's vertical retrace interrupt
+    output logic        gfx_irq,        // REX3's vertical retrace interrupt
+
+    // ---- bring-up instrument, not a feature ------------------------------
+    // On hardware the screen came up black with a perfect raster, and a black
+    // screen has two causes that look identical from outside: the frame buffer
+    // read returning nothing, or the palette answering black for every index.
+    // Nothing observable distinguishes them, so this takes CMAP out of the
+    // path and shows the frame buffer's own colour index as grey. Then a
+    // pattern written into the frame buffer either appears or does not, and
+    // the two halves of the display path are finally separable.
+    input  logic        dbg_raw_index
 );
 
     // ---- register window ---------------------------------------------------
@@ -302,7 +312,10 @@ module newport #(
 
     logic [23:0] pix_rgb;
     always_comb begin
-        if (pix_mode == 2'd0) begin
+        if (dbg_raw_index) begin
+            // The index itself, as grey. See the port comment.
+            pix_rgb = {3{fb_rgb[7:0]}};
+        end else if (pix_mode == 2'd0) begin
             // Colour index: 0x00BBGGRR out of the map.
             pix_rgb = cmap0_rgb;
         end else begin

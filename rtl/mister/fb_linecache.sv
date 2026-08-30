@@ -70,7 +70,15 @@ module fb_linecache #(
     input  logic [63:0] fbr_dout,
     input  logic        fbr_dout_valid,
 
-    output logic        miss           // a pixel was asked for and not resident
+    output logic        miss,          // a pixel was asked for and not resident
+
+    // ---- bring-up instrument, not a feature ------------------------------
+    // A miss serves black, which is indistinguishable from a frame buffer that
+    // really is black - and on the first hardware run those were the two
+    // candidates. With this set a miss serves index 0x80 instead, so a display
+    // that is never being fed shows as mid-grey under newport's
+    // dbg_raw_index rather than as nothing at all.
+    input  logic        dbg_miss_mark
 );
 
     localparam int AW = $clog2(LINE_WORDS);
@@ -130,7 +138,8 @@ module fb_linecache #(
     logic [63:0] q0, q1;
     logic        sel_q, ack_q, miss_q;
 
-    assign px_rdata = miss_q ? 64'h0 : (sel_q ? q1 : q0);
+    assign px_rdata = miss_q ? (dbg_miss_mark ? 64'h80 : 64'h0)
+                             : (sel_q ? q1 : q0);
     assign px_ack   = ack_q;
     assign miss     = miss_q;
 

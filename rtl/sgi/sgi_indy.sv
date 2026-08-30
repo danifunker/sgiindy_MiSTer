@@ -118,6 +118,10 @@ module sgi_indy #(
     // repository before now was showing.
     input  logic        gfx_present,
 
+    // Takes CMAP out of the pixel path so the frame buffer's index shows
+    // directly. A bring-up instrument; see rtl/newport/newport.sv.
+    input  logic        dbg_raw_index,
+
     // ---- Newport's frame buffer -----------------------------------------
     // Two ports, because the frame buffer is VRAM: the rasteriser owns the
     // random port and the display owns the serial one, and they run at the
@@ -744,7 +748,8 @@ module sgi_indy #(
         .vid_r     (vid_r),
         .vid_g     (vid_g),
         .vid_b     (vid_b),
-        .gfx_irq   ()
+        .gfx_irq   (),
+        .dbg_raw_index (dbg_raw_index)
     );
 
     //------------------------------------------------------------------

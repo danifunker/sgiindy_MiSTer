@@ -95,6 +95,14 @@ localparam CONF_STR = {
 	"O[10],Graphics board,Fitted,None;",
 	"O[11],Primary caches,On,Off;",
 	"O[13:12],Memory,48MB,32MB,64MB;",
+	// A BRING-UP INSTRUMENT, NOT A FEATURE. The first hardware run drew a
+	// perfect 1318x1024 raster and a black screen, and black has two causes
+	// that look the same from outside: the frame buffer read returning
+	// nothing, or the palette answering black for every index. This shows the
+	// frame buffer's own colour index as grey with CMAP taken out of the path,
+	// and serves index 0x80 for a line-cache miss instead of black - so the
+	// three cases finally look different from each other.
+	"O[14],Video debug,Off,Raw index;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
@@ -373,6 +381,7 @@ sgi_indy u_core
 	.dcache_en        (~status[11]),
 
 	.mem_mb           (mem_mb),
+	.dbg_raw_index    (status[14]),
 
 	.ram_req          (ram_req),
 	.ram_we           (ram_we),
@@ -490,7 +499,8 @@ fb_linecache u_linecache
 	.fbr_dout      (lc_dout),
 	.fbr_dout_valid(lc_valid),
 
-	.miss      (lc_miss)
+	.miss      (lc_miss),
+	.dbg_miss_mark (status[14])
 );
 
 ddr3_mux u_mem

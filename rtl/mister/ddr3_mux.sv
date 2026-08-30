@@ -132,6 +132,11 @@ module ddr3_mux #(
 
     // ---- one latched request per master ----------------------------------
     logic          [NM-1:0] pend;
+    // Whether the request currently asserted by each master has already been
+    // taken. Cleared when its request line goes low, so a master that pulses
+    // is always caught and one that holds is never taken twice. See the latch
+    // loop below, which is where the whole of this file's difficulty lives.
+    logic          [NM-1:0] rq_seen;
     logic          [NM-1:0] p_we;
     logic [24:0]            p_addr [NM];   // already a DDR3 word address
     logic [63:0]            p_wdata[NM];
@@ -265,6 +270,7 @@ module ddr3_mux #(
             burst_left     <= 9'd0;
             fbr_taken_q    <= 1'b0;
             pend           <= '0;
+            rq_seen        <= '0;
             ack_q          <= '0;
             tst            <= T_IDLE;
             cur            <= '0;
@@ -280,12 +286,50 @@ module ddr3_mux #(
             ack_q       <= '0;
             fbr_taken_q <= 1'b0;
 
-            // Latch every request the cycle it appears. A master whose request
-            // is still pending is presenting the same one again at worst; a
-            // master that pulses and walks away is why this exists at all.
+            // Latch every request the cycle it appears. A master that pulses
+            // and walks away is why this exists at all.
+            //
+            // BUT "APPEARS" IS NOT THE SAME AS "IS ASSERTED", AND TELLING THEM
+            // APART IS WHAT MAKES THE RASTERISER WORK. Two shapes of master
+            // share this port. sgi_indy.sv's CPU PULSES: one cycle, gone,
+            // catch it or lose it. REX3 HOLDS: `fb_req` is combinational from
+            // its state machine, so in the cycle it is acknowledged it is
+            // still presenting the request that ack belongs to - it cannot
+            // have reacted yet - and it goes from a destination read straight
+            // into the write with the line never dropping at all.
+            //
+            // Reading that held line as a new request takes the same
+            // transaction twice. For memory a duplicate is invisible: the same
+            // word read, or the same word written with the same data. For REX3
+            // it is fatal, because REX3 alternates reads and writes on one
+            // port and counts acknowledgements to know which is which. One
+            // duplicate puts it permanently one behind - it takes the
+            // duplicate's ack as its write's, then takes the write's ack as
+            // its next destination READ's, latching `rdata_q` while that
+            // register holds whatever the last read by ANY master returned.
+            // Measured on hardware: a frame buffer written entirely with the
+            // CPU's own instruction fetches, the words of the REX3WAIT poll
+            // loop the PROM was spinning in, and a black screen.
+            //
+            // So a request is new if the line has just RISEN, or if what it is
+            // presenting has CHANGED since the transaction taken from it. The
+            // first half serves the pulsing masters and the second serves the
+            // read-then-write transition that never drops the line. Guarding
+            // on the acknowledgement instead is the obvious fix and it is
+            // wrong: a pulse that lands in its own ack cycle is then dropped
+            // and its master waits for an answer forever. tb_ddr3 fails that
+            // way in seconds, which is the only reason this comment is right.
+            //
+            // NO SIMULATION SAW THE ORIGINAL. The headless harness has its own
+            // one-cycle memory and never instantiates this file, and tb_ddr3
+            // drove every master as a pulse. Its phase 3 is REX3's shape now.
             for (int i = 0; i < NM; i++) begin
-                if (rq[i] && !pend[i]) begin
+                if (!rq[i]) rq_seen[i] <= 1'b0;
+                else if (!pend[i] && (!rq_seen[i]
+                                      || rq_we[i]   != p_we[i]
+                                      || rq_addr[i] != p_addr[i])) begin
                     pend[i]    <= 1'b1;
+                    rq_seen[i] <= 1'b1;
                     if (i == M_FBR) p_burst <= fbr_burst;
                     p_we[i]    <= rq_we[i];
                     p_addr[i]  <= rq_addr[i];

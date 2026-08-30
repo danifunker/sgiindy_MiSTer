@@ -66,8 +66,9 @@ verilator/obj_dir_lcache/
 # scripts/local.env.sample is the committed template.
 scripts/local.env
 
-# The full-flow Quartus log written by scripts/build.sh.
-build_full.err
+# The full-flow Quartus logs written by scripts/build.sh (*.log is already
+# ignored above; stderr is not).
+build_*.err
 
 # Quartus writes this beside the project when it builds the pin model.
 c5_pin_model_dump.txt

@@ -23,6 +23,19 @@
 //  every request is acknowledged exactly once, the three regions do not
 //  overlap - a write to RAM offset X must not be visible at frame buffer
 //  offset X - and the display port is not starved behind the rasteriser.
+//
+//  AND, SINCE HARDWARE FOUND WHAT ALL OF THAT MISSED: a master that HOLDS its
+//  request until it is acknowledged, rather than pulsing it. Everything above
+//  pulses - the comment at the drop site says so proudly, because pulsing is
+//  what sgi_indy.sv's CPU port does and latching it is why the mux exists.
+//  But REX3 does not pulse. `fb_req` is combinational from its state machine,
+//  so it is STILL asserted in the cycle it is acknowledged, and it goes
+//  straight from a destination read to a write with the line never dropping.
+//  The mux read that stale line as a new request and took the transaction
+//  twice, which for memory is invisible and for REX3 puts it permanently one
+//  acknowledgement behind - so it latched the shared read register while it
+//  held another master's data and drew the CPU's instruction fetches onto the
+//  screen. Phase 3 below is that shape, and it fails without the fix.
 //============================================================================
 
 #include "Vddr3_mux.h"
@@ -110,8 +123,14 @@ static void tick()
                 val |= by << shift;
             }
             mem[b.addr] = val;
+            if (getenv("DDR3_DEBUG3"))
+                printf("      [bridge] WRITE word=%08x din=%016llx be=%02x\n",
+                       b.addr, (unsigned long long)b.din, b.be);
         } else {
             int n = dut->DDRAM_BURSTCNT ? dut->DDRAM_BURSTCNT : 1;
+            if (getenv("DDR3_DEBUG3"))
+                printf("      [bridge] READ  word=%08x burst=%d -> %016llx\n",
+                       b.addr, n, (unsigned long long)(mem.count(b.addr) ? mem[b.addr] : 0));
             if (getenv("DDR3_DEBUG"))
                 printf("      [bridge] read addr=%08x burst=%d\n", b.addr, n);
             for (int w = 0; w < n; w++)
@@ -287,6 +306,83 @@ int main(int argc, char **argv)
         }
     }
 
+    // ---- phase 3: a HOLDING master that alternates read and write ---------
+    // This is REX3's shape and nothing above it exercises it. Every pixel of a
+    // logic-op draw is: read the destination, then write the merged value back
+    // to the same address - and `fb_req` never drops between the two, nor in
+    // the cycle each one is acknowledged. Main memory is kept busy underneath
+    // so that the shared read register holds somebody else's data whenever the
+    // mux gets an acknowledgement wrong; without that this passes even broken,
+    // because the stale value would be REX3's own.
+    // DRAIN PHASE 2 FIRST. It leaves a transaction in flight, and one stray
+    // acknowledgement at the start of this phase puts the whole of it
+    // permanently one ack out of step - which reads exactly like the bug it is
+    // meant to catch. It cost an hour of blaming the fix for the harness.
+    dut->fbw_req = 0; dut->ram_req = 0; dut->prom_req = 0; dut->fbr_req = 0;
+    for (int i = 0; i < 512; i++) tick();
+
+    printf("\nphase 3: a read-modify-write master that holds its request ...\n");
+    const int RMW_PIXELS = getenv("DDR3_DEBUG3") ? 4 : 4000;
+    uint64_t rmw_bad = 0, rmw_done = 0;
+    uint32_t ram_probe = 0;
+    auto keep_ram_busy = [&]() {
+        if (!dut->ram_req) {
+            ram_probe = (ram_probe + 8) % (1u << 20);
+            dut->ram_addr = ram_probe; dut->ram_we = 0; dut->ram_req = 1;
+        }
+        tick();
+        if (dut->ram_ack) dut->ram_req = 0;
+    };
+    for (int px = 0; px < RMW_PIXELS; px++) {
+        uint32_t a = (uint32_t)(px % 2048) * 8;
+        uint64_t want = fb_shadow.count(a) ? fb_shadow[a] : 0;
+        if (getenv("DDR3_DEBUG3")) printf("  -- pixel %d addr=%08x want=%016llx\n",
+                                          px, a, (unsigned long long)want);
+
+        // -- the destination read. Hold fbw_req until fbw_ack, as REX3 does.
+        dut->fbw_addr = a; dut->fbw_we = 0; dut->fbw_req = 1;
+        int spins = 0;
+        while (!dut->fbw_ack && ++spins < 4000) keep_ram_busy();
+        if (!dut->fbw_ack) { fail("rmw read never acked", a, want, 0); break; }
+        uint64_t got = dut->fbw_rdata;
+        if (getenv("DDR3_DEBUG3"))
+            printf("     read acked after %d ticks (clk=%llu) got=%016llx\n",
+                   spins, (unsigned long long)clk_count, (unsigned long long)got);
+
+        // THE ONE CYCLE THAT MATTERS. REX3 is a state machine: it cannot react
+        // to an acknowledgement within the cycle that carries it, so the mux
+        // samples the SAME request one more time with `pend` already cleared.
+        // Reacting instantly here is what made an earlier version of this
+        // phase pass against the broken mux - the testbench was quicker than
+        // any hardware can be, and so never presented the stale line at all.
+        keep_ram_busy();
+
+        // -- straight into the write, WITHOUT dropping the request, and with a
+        // value that depends on what was read - exactly as fb_word_new does.
+        uint64_t merged = (got & 0xFFFFFFFFFF000000ull) | (uint64_t)(px & 0xFFFFFF);
+        dut->fbw_we = 1; dut->fbw_wdata = merged; dut->fbw_be = 0xFF; dut->fbw_req = 1;
+        spins = 0;
+        while (!dut->fbw_ack && ++spins < 4000) keep_ram_busy();
+        if (!dut->fbw_ack) { fail("rmw write never acked", a, merged, 0); break; }
+        if (getenv("DDR3_DEBUG3"))
+            printf("     write acked after %d ticks (clk=%llu) din=%016llx\n",
+                   spins, (unsigned long long)clk_count, (unsigned long long)merged);
+        keep_ram_busy();                  // the same one-cycle reaction delay
+
+        // Only now is the pixel finished, so only now does the shadow move.
+        // Checking the read AFTER the write has landed is deliberate: a mux
+        // that is one acknowledgement behind writes the right value to the
+        // wrong pixel as readily as the wrong value to the right one.
+        if (got != want && rmw_bad++ < 4) fail("rmw destination read", a, want, got);
+        fb_shadow[a] = merged;
+
+        dut->fbw_req = 0; dut->fbw_we = 0;
+        tick();
+        rmw_done++;
+    }
+    printf("  %llu read-modify-write pixels, %llu with a wrong destination\n",
+           (unsigned long long)rmw_done, (unsigned long long)rmw_bad);
+
     printf("\n%-6s %10s %10s %12s\n", "master", "issued", "acked", "worst wait");
     for (Master *m : all)
         printf("%-6s %10llu %10llu %12llu\n", m->name,
@@ -318,6 +414,9 @@ int main(int argc, char **argv)
     // buffer at a 64 MB offset aliases at once if the base is dropped.
     check("main memory and the frame buffer did not alias",
           m_ram.acked > 100 && failures == 0);
+    // THE ONE HARDWARE FOUND. A held request must not be taken twice.
+    check("a held read-modify-write master read back its own writes",
+          rmw_done == (uint64_t)RMW_PIXELS && rmw_bad == 0);
 
     printf(failures ? "\nDDR3MUX: FAIL\n" : "\nDDR3MUX: PASS\n");
     delete dut;
