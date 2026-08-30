@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# hwcheck.sh [--no-deploy] [--wait N] [--tag NAME] [opt=value ...]
+# hwcheck.sh [--no-deploy] [--no-clear] [--no-memclear] [--wait N] [--tag NAME]
+#            [opt=value ...]
 #
 # One command for the bring-up loop: set the OSD options, put the build on the
 # board, wait for the machine to boot and draw, then take BOTH views of the
@@ -15,6 +16,14 @@
 #   bash scripts/hwcheck.sh --tag splash
 #   bash scripts/hwcheck.sh --tag raw viddbg=raw
 #   bash scripts/hwcheck.sh --no-deploy --tag again      # relaunch only
+#
+# TWO THINGS ARE RESET BEFORE EVERY LAUNCH AND BOTH ARE THERE FOR THE SAME
+# REASON: DDR3 survives a core reload, so anything left in it belongs to the
+# previous run. The frame buffer marker stops a stale picture being read as a
+# new one. The main-memory clear stops the guest INHERITING the previous run's
+# memory - the MC's GIO DMA memory clear is a stub, so the PROM's own clear
+# moves nothing and whatever is there is what it boots on. That one cost an
+# evening: see tools/misterdeploy/memclear.py.
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 if [ -r scripts/local.env ]; then . scripts/local.env; fi
@@ -22,11 +31,12 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_SSH_KEY:?}"; : "${MISTER_SSH_USER:=root}"
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 
-DEPLOY=1; WAIT=180; TAG="hw"; CLEAR=1; OPTS=()
+DEPLOY=1; WAIT=180; TAG="hw"; CLEAR=1; MEMCLEAR=1; OPTS=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --no-deploy) DEPLOY=0 ;;
-        --no-clear)  CLEAR=0 ;;
+        --no-deploy)   DEPLOY=0 ;;
+        --no-clear)    CLEAR=0 ;;
+        --no-memclear) MEMCLEAR=0 ;;
         --wait) WAIT="$2"; shift ;;
         --tag)  TAG="$2";  shift ;;
         *=*)    OPTS+=("$1") ;;
@@ -43,10 +53,25 @@ OUT="tests/out/hw"; mkdir -p "$OUT"
 # fills it with a marker first, so "did this boot draw?" always has an answer.
 # Not knowing that cost an hour: a stale splash read as a working display over
 # a machine that had actually hung.
+DBG="/media/fat/sgidbg"
+push() {
+    ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$MISTER_SSH_USER@$MISTER_HOST" "mkdir -p $DBG" 2>/dev/null
+    scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$1" "$MISTER_SSH_USER@$MISTER_HOST:$DBG/" 2>/dev/null
+}
 if [ "$CLEAR" = 1 ]; then
     log "marking the frame buffer so a stale picture cannot be mistaken for a new one"
-    scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         tools/misterdeploy/fb_poke.py "$MISTER_SSH_USER@$MISTER_HOST:/media/fat/sgidbg/" 2>/dev/null
-    ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$MISTER_SSH_USER@$MISTER_HOST" 'python3 /media/fat/sgidbg/fb_poke.py fill 0xE7' 2>&1 | tail -1
+    push tools/misterdeploy/fb_poke.py
+    ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$MISTER_SSH_USER@$MISTER_HOST" "python3 $DBG/fb_poke.py fill 0xE7" 2>&1 | tail -1
+fi
+
+# AND THE SAME AGAIN FOR MAIN MEMORY, which matters more. The guest's memory
+# clear does not clear anything (memclear.py has the story), so without this the
+# machine boots on the last run's leftovers and the run measures those as much
+# as it measures the build.
+if [ "$MEMCLEAR" = 1 ]; then
+    log "zeroing the guest's main memory - its own clear is a stub and moves nothing"
+    push tools/misterdeploy/memclear.py
+    ssh -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY"         "$MISTER_SSH_USER@$MISTER_HOST" "python3 $DBG/memclear.py" 2>&1 | tail -1
 fi
 
 log "options: ${OPTS[*]:-(all defaults)}"

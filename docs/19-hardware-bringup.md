@@ -14,10 +14,30 @@ watch what it does.
 
 ```sh
 bash scripts/build.sh                 # the whole Quartus flow, ~45 minutes
+bash scripts/hwcheck.sh --tag splash  # reset state, deploy, launch, look
 bash scripts/deploy.sh                # games dir + PROM + bitstream + launch
 bash scripts/console.sh --seconds 90  # the machine's serial console, live
 bash scripts/grab.sh out.png          # what is on the screen right now
 ```
+
+`scripts/hwcheck.sh` is the one to reach for during bring-up: it resets the
+board's hidden state, sets the OSD options, launches, waits, and then takes
+both views of the result.
+
+**RESETTING THAT HIDDEN STATE IS NOT OPTIONAL AND IT IS WHY hwcheck EXISTS.**
+DDR3 survives a core reload and a warm reboot of the HPS, so two things carry
+over from the last run and both have already caused a wrong conclusion:
+
+* the **frame buffer**, which makes a stale picture look like a working
+  display — `fb_poke.py fill 0xE7` marks it;
+* the **guest's main memory**, which is worse, because the machine boots on it.
+  The MC's GIO DMA engine is a stub, so the PROM's own memory clear moves
+  nothing. A machine that had drawn its whole boot screen sat dead at
+  `rex3Clear` for an evening on a bitstream that was md5-verified three ways;
+  zeroing memory brought it straight back. `memclear.py` does that, and
+  `hwcheck.sh` runs it before every launch.
+
+A launch that skips either of those is not measuring the build.
 
 All machine configuration — host, ssh key, Quartus path, which `_` folder the
 core goes in — lives in `scripts/local.env`, which is **gitignored**.
