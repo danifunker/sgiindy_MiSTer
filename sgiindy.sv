@@ -103,6 +103,14 @@ localparam CONF_STR = {
 	// and serves index 0x80 for a line-cache miss instead of black - so the
 	// three cases finally look different from each other.
 	"O[14],Video debug,Off,Raw index;",
+	// THE OTHER BRING-UP INSTRUMENT. With the graphics board unfitted the
+	// machine demonstrably runs - main memory carries szmem's walking-bit
+	// patterns - and the ARM's /dev/ttyS1 has counted rx:0 bytes, ever. So the
+	// console is absent, and two very different things would look identical
+	// from outside: the SCC not transmitting, or nothing between UART_TXD and
+	// the HPS UART working at all. This puts a transmitter of the core's own
+	// on the pin, in one clock domain or the other.
+	"O[16:15],UART debug,Off,0x55 from clk_sys,0x55 from sclk;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
@@ -475,7 +483,50 @@ sgi_indy u_core
 	.int2_state_o     ()
 );
 
-assign UART_TXD = txdb;
+// ---- the UART bring-up probe ------------------------------------------
+// Two 8N1 transmitters sending 0x55 forever at 9600 baud, one in each clock
+// domain, because which of the two arrives is the whole question. 0x55 is one
+// transition per bit time, so a rate that is merely wrong shows up as framing
+// errors and a climbing rx count rather than as more silence - and silence is
+// the thing that has to be told apart from silence here.
+//
+//   status[16:15] = 0   the SCC, as normal
+//                 = 1   the pattern, timed from clk_sys
+//                 = 2   the pattern, timed from sclk
+//
+// If 1 arrives and 2 does not, `sclk` is dead and the SCC was never at fault.
+// If neither arrives, the fault is between this pin and /dev/ttyS1 and nothing
+// inside the machine is worth looking at yet.
+localparam int DBG_DIV_SYS = CLK_SYS_HZ / 9600;      // 50 MHz  -> 5208
+localparam int DBG_DIV_SER = 3686400 / 9600;         // 3.6864 MHz -> 384
+
+reg [12:0] dbg_div_a; reg [3:0] dbg_bit_a;
+always @(posedge clk_sys) begin
+	if (dbg_div_a >= 13'(DBG_DIV_SYS - 1)) begin
+		dbg_div_a <= 13'd0;
+		dbg_bit_a <= (dbg_bit_a == 4'd9) ? 4'd0 : dbg_bit_a + 4'd1;
+	end else dbg_div_a <= dbg_div_a + 13'd1;
+end
+
+reg [8:0] dbg_div_b; reg [3:0] dbg_bit_b;
+always @(posedge sclk) begin
+	if (dbg_div_b >= 9'(DBG_DIV_SER - 1)) begin
+		dbg_div_b <= 9'd0;
+		dbg_bit_b <= (dbg_bit_b == 4'd9) ? 4'd0 : dbg_bit_b + 4'd1;
+	end else dbg_div_b <= dbg_div_b + 9'd1;
+end
+
+// Bit 0 is the start bit, 9 is the stop bit, and 1..8 carry 0x55 least
+// significant bit first - which is exactly the low bit of the counter.
+function automatic logic dbg_serial(input logic [3:0] b);
+	if (b == 4'd0)      dbg_serial = 1'b0;
+	else if (b == 4'd9) dbg_serial = 1'b1;
+	else                dbg_serial = b[0];
+endfunction
+
+assign UART_TXD = (status[16:15] == 2'd1) ? dbg_serial(dbg_bit_a)
+                : (status[16:15] == 2'd2) ? dbg_serial(dbg_bit_b)
+                :                           txdb;
 
 ////////////////////////////   MEMORY   //////////////////////////
 

@@ -9,6 +9,18 @@
 #  * Total registers in the map summary. ~39k is right for this design; a
 #    number in the hundreds of thousands is an array that did not infer.
 #
+# DO NOT TOUCH sgiindy.qsf WHILE THIS IS RUNNING, and that includes `git
+# checkout`. Quartus watches the settings file; if it changes underneath it the
+# compile stops with "Error (125085): The Quartus Prime Settings File changed
+# outside of the Quartus Prime software" and then REWRITES IT - inlining
+# everything sys/sys.tcl sources, 266 lines of pin assignments, which is exactly
+# what the warning at the top of that file means by "It will mess this file!".
+# The compile dies in synthesis and the diff looks like the project exploded.
+# Restore it with `git checkout -- sgiindy.qsf` and start again from a clean db/.
+#
+# Quartus also rewrites LAST_QUARTUS_VERSION to "Lite Edition" on every run of
+# this build, which is a one-line diff to discard rather than commit.
+#
 # Usage: bash scripts/build.sh [--log FILE]
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
