@@ -69,6 +69,89 @@ presents has to be settled before the edge. The first time it made a working
 mux look completely broken; the second it made a working cache report zero
 pixels checked and zero misses, which reads like success.
 
+### The one arbiter, and the bug only real memory could show
+
+Main memory has **one** port on the mux and **two** masters behind it: the CPU,
+and the DMA engines — the HPC3's SCSI channel and the MC's GIO64 fill engine,
+muxed into one first. `rtl/sgi/ram_arb.sv` is that arbiter and it is the only
+one in the core. It is its own file because for as long as it was twenty lines
+inside `sgi_indy.sv` it could not be tested, and it was wrong.
+
+**The two masters have different shapes, and that is the whole difficulty.**
+The CPU *pulses*: `rtl/cpu/r4300_bus.sv` raises `bus_req` for exactly one cycle
+and then waits in `S_BUSY`, holding its address and write data but not its
+request. The DMA engines *hold*, because a master that dropped its request into
+a variable-latency memory would wait forever for an answer nobody had heard.
+
+The old version gated the DMA on a transaction being in flight and did not gate
+the CPU:
+
+```systemverilog
+wire cpu_ram_req = bus_req && sel_ram && mem_hit;
+wire dma_grant   = dma_req && !ram_inflight && !cpu_ram_req && dma_hit;
+assign ram_req   = cpu_ram_req | dma_grant;
+... else if (ram_req) begin
+        ram_inflight  <= 1'b1;
+        ram_owner_dma <= dma_grant;      // <-- clobbered mid-flight
+```
+
+So a CPU access landing anywhere inside a DMA transaction's round trip
+asserted `ram_req` again and rewrote `ram_owner_dma` to 0 while the DMA's
+answer was still coming. Three separate faults came out of that one line, and
+all three were seen on the DE10-Nano before the cause was:
+
+* **The CPU took the DMA's acknowledgement as its own, with the DMA's data on
+  it.** That is the PROM's intermittent panic: `lbu $v0, ($t6)` two
+  instructions after `lw $t6, 0x148($a0)` — the WD33C93 AUX STATUS poll — dying
+  with bad addresses of `0xf103`, `0x747474` and `0x9fc1dc77` on three
+  different boots. None of those values appears anywhere in the 512 KB PROM
+  image, because none of them was ever loaded from where the CPU asked.
+* **The DMA never got an acknowledgement at all**, so the SCSI command behind
+  it hung. That is why POST's device/cable diagnostic reported the disk on ID 1
+  as failed while the CD-ROM on ID 6 beside it passed, and why the machine
+  wedged afterwards.
+* **`ddr3_mux` drops a request for a master that already has one pending**, so
+  the CPU's access was silently lost as well. Whichever way it fell, the
+  machine panicked or stopped.
+
+**It was invisible in simulation and the reason is the point of this section.**
+The window is exactly as wide as memory is slow. `verilator/sim_ram.v` answers
+in one cycle, so the DMA is in flight for a single cycle — and in the cycle it
+is granted the CPU is by definition not asking, because `dma_grant` requires
+`!cpu_ram_req`. Against DDR3 the window is tens of cycles wide and is hit
+constantly. Nothing was wrong with the whole-machine tests; they were asking a
+memory that could not answer the question.
+
+`verilator/tb_ramarb.cpp` is the test that can. It drives both masters in their
+real shapes against a port modelled one-deep the way the mux actually is, and
+the latency sweep is the whole story:
+
+| latency | cpu | dma | overlap | misroute | |
+|---:|---:|---:|---:|---:|---|
+| 0 | 14125 | 13483 | 0 | 0 | ok — what every whole-machine sim here uses |
+| 1 | 12773 | 11416 | 1610 | 1610 | FAIL |
+| 2 | 11819 | 9428 | 2791 | 2791 | FAIL |
+| 5 | 9867 | 5463 | 4730 | 4730 | FAIL |
+| 20 | 5454 | **0** | 5454 | 5453 | DEADLOCK |
+| 60 | 1935 | **0** | 1935 | 1934 | DEADLOCK |
+
+At DDR3's latency the DMA engine completes **zero** transactions and the CPU
+takes five thousand wrong answers. With the fix every row is clean.
+
+The fix gates both masters on the same thing — one transaction on this port at
+a time, which is all the mux can hold — and remembers the CPU's pulse in
+`cpu_wait` rather than stalling it, because stalling a pulse drops it. The
+payload needs no latch: `r4300_bus.sv` holds `bus_addr`, `bus_we`, `bus_wdata`
+and `bus_be` from the cycle it raises `bus_req` until the cycle it is
+acknowledged, which is exactly the interval that has to be bridged.
+
+**This is the fourth time on this project that a unit test whose memory model
+was kinder than the bridge hid the whole bug**, after `ddr3_mux` taking a held
+request twice, `fb_linecache` being tested at half the pixel rate, and REX3's
+`DR_FILL` firing writes nothing accepts. When a master and a memory meet for
+the first time, the question to ask is not whether the logic is right but
+whether the model is as unhelpful as the bridge.
+
 ## What will be wrong on the first build
 
 ### 0. The frame buffer stores eight bytes a pixel to display one of them

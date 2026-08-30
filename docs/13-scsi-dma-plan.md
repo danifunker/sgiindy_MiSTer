@@ -166,6 +166,24 @@ that had to be right:
 * **`ram_owner_dma` remembers whose answer is coming.** `bus_ack` is an OR of
   every device's ack. Without this, a DMA read's `ram_ack` completes the CPU's
   cycle, with the DMA's data on it.
+
+  **THOSE TWO BULLETS WERE RIGHT AND THE CODE ONLY DID HALF OF EACH, WHICH IS
+  WHY THIS PARAGRAPH IS HERE.** `ram_inflight` gated the DMA and did not gate
+  the CPU, so a CPU access landing inside a DMA transaction re-asserted
+  `ram_req` and rewrote `ram_owner_dma` to 0 while the DMA's answer was still
+  coming — the CPU then took the DMA's acknowledgement with the DMA's data on
+  it, and the DMA got none at all. On hardware that is a PROM panic on a
+  freshly loaded pointer, a SCSI command that hangs, and POST's device/cable
+  diagnostic failing the disk while the CD-ROM beside it passes.
+
+  It survived because the window is exactly as wide as memory is slow:
+  `verilator/sim_ram.v` answers in one cycle and DDR3 takes tens, so it is
+  effectively unreachable in simulation and constant on a board. The arbiter is
+  `rtl/sgi/ram_arb.sv` now, on its own so it can be driven against a slow
+  memory, and `verilator/tb_ramarb.cpp` is that test. **`tests/run-dma.sh`
+  passes either way and always did** — it is a test of the engine, not of the
+  port, and nothing in it makes the CPU ask for memory while a descriptor fetch
+  is outstanding. `docs/18-mister-integration.md` has the whole diagnosis.
 * **A second `sgi_memmap` instance**, not a mux on the existing one. The DMA
   address has to go through the same MEMCFG decode, but the CPU's `mem_hit`
   feeds the grant, and feeding the grant back into the address input closes a
