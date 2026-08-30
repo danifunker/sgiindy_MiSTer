@@ -86,6 +86,8 @@ struct Case {
     std::vector<uint32_t> body;   // $k0 is already 0xa0000000 on entry
     bool  expect_exception;
     uint32_t expect_value;        // checked only when no exception is expected
+    bool  check_hi;               // also check the upper 32 bits of OUT_VAL
+    uint32_t expect_hi;
 };
 
 static const std::vector<Case> CASES = {
@@ -99,7 +101,7 @@ static const std::vector<Case> CASES = {
             0x24190011,  // addiu $t9, $zero, 0x11      (the PROM's next insn)
             0xaf481000,  // sw    $t0, 0x1000($k0)      publish what it gave
         },
-        false, PTR_VAL
+        false, PTR_VAL, false, 0
     },
     {
         "sb via sign-extended KSEG0",
@@ -111,7 +113,7 @@ static const std::vector<Case> CASES = {
             0xa1190000,  // sb    $t9, ($t0)
             0xaf481000,  // sw    $t0, 0x1000($k0)
         },
-        false, 0x9fc1dc77
+        false, 0x9fc1dc77, false, 0
     },
     {
         "sb via ZERO-extended KSEG0",
@@ -124,7 +126,7 @@ static const std::vector<Case> CASES = {
             0xa1190000,  // sb    $t9, ($t0)            <-- the panic's insn
             0xaf481000,  // sw    $t0, 0x1000($k0)
         },
-        true, 0
+        true, 0, false, 0
     },
     {
         "sw misaligned",
@@ -134,7 +136,19 @@ static const std::vector<Case> CASES = {
             0x3508dc77,  // ori   $t0, $t0, 0xdc77      -> odd address
             0xad090000,  // sw    $t1, ($t0)
         },
-        true, 0
+        true, 0, false, 0
+    },
+    {
+        "load-use from PROM, ALL 64 BITS",
+        "the constant has bit 31 set - is it sign-extended into the register?",
+        {
+            0x3c119fc7,  // lui   $s1, 0x9fc7
+            0x3631b2c8,  // ori   $s1, $s1, 0xb2c8
+            0x8e280148,  // lw    $t0, 0x148($s1)   -> must be FFFFFFFF_BFBC0003
+            0x24190011,  // addiu $t9, $zero, 0x11
+            0xff481000,  // sd    $t0, 0x1000($k0)  publish the whole register
+        },
+        false, PTR_VAL, true, 0xFFFFFFFFu
     },
 };
 
@@ -163,7 +177,7 @@ public:
 
 struct Result {
     bool done, exception;
-    uint32_t value, cause, epc, badv;
+    uint32_t value, hi, cause, epc, badv;
 };
 
 static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, long budget)
@@ -206,7 +220,10 @@ static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, long
     }
     Result r{};
     r.done      = (h.peek32(OUT_DONE) == 0x5a5a);
-    r.value     = h.peek32(OUT_VAL);
+    // A doubleword's first word is its high half in this core's byte order, so
+    // a 32-bit `sw` lands there and a 64-bit `sd` fills both.
+    r.value     = c.check_hi ? h.peek32(OUT_VAL + 4) : h.peek32(OUT_VAL);
+    r.hi        = h.peek32(OUT_VAL);
     r.cause     = h.peek32(OUT_CAUSE);
     r.epc       = h.peek32(OUT_EPC);
     r.badv      = h.peek32(OUT_BADV);
@@ -249,7 +266,7 @@ int main(int argc, char **argv)
         printf("\n== %s\n   %s\n", c.name, c.asks);
         // Collapse the sweep: report the distinct outcomes, not 52 identical
         // lines. A latency-sensitive bug shows up as more than one outcome.
-        struct Seen { uint32_t value, cause, epc, badv; bool done; int count;
+        struct Seen { uint32_t value, hi, cause, epc, badv; bool done; int count;
                       int first_lat; const char *mode; };
         std::vector<Seen> seen;
         for (int mode = 0; mode < 4; mode++) {
@@ -259,16 +276,18 @@ int main(int argc, char **argv)
             for (int lat = 0; lat <= maxlat; lat++) {
                 Result r = run_one(h, c, lat, ic, dc, budget);
                 runs++;
-                bool ok = c.expect_exception ? r.exception
-                                             : (r.done && !r.exception && r.value == c.expect_value);
+                bool ok = c.expect_exception
+                        ? r.exception
+                        : (r.done && !r.exception && r.value == c.expect_value
+                           && (!c.check_hi || r.hi == c.expect_hi));
                 if (!ok) fails++;
                 bool merged = false;
                 for (Seen &s : seen)
-                    if (s.value == r.value && s.cause == r.cause && s.epc == r.epc
+                    if (s.value == r.value && s.hi == r.hi && s.cause == r.cause && s.epc == r.epc
                         && s.badv == r.badv && s.done == r.done
                         && !strcmp(s.mode, names[mode])) { s.count++; merged = true; break; }
                 if (!merged)
-                    seen.push_back({ r.value, r.cause, r.epc, r.badv, r.done, 1, lat, names[mode] });
+                    seen.push_back({ r.value, r.hi, r.cause, r.epc, r.badv, r.done, 1, lat, names[mode] });
                 if (verbose)
                     printf("     %s lat=%-3d value=0x%08x cause=0x%08x epc=0x%08x badv=0x%08x %s\n",
                            names[mode], lat, r.value, r.cause, r.epc, r.badv, ok ? "" : "MISMATCH");
@@ -279,6 +298,12 @@ int main(int argc, char **argv)
                 printf("   %s  x%-3d  EXCEPTION exc=%u %-28s epc=0x%08x badvaddr=0x%08x\n",
                        s.mode, s.count, (s.cause >> 2) & 0x1f,
                        exc_name((s.cause >> 2) & 0x1f), s.epc, s.badv);
+            else if (c.check_hi)
+                printf("   %s  x%-3d  no exception, register = 0x%08x_%08x%s%s\n",
+                       s.mode, s.count, s.hi, s.value,
+                       s.hi == c.expect_hi ? "  sign-extended"
+                                           : "  <-- NOT SIGN-EXTENDED",
+                       s.done ? "" : "  (NEVER FINISHED)");
             else
                 printf("   %s  x%-3d  no exception, value=0x%08x%s\n",
                        s.mode, s.count, s.value, s.done ? "" : "  (NEVER FINISHED)");

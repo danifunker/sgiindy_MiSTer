@@ -550,9 +550,29 @@ the CPU-only measurement in `syn/README.md` (19,137 ALMs, 63.77 MHz), Newport
 plus the memory system plus the top level cost **+11,348 ALMs and about
 0.8 MHz**, and 27% of the device is still free.
 
-**There is no diet to go on, and one specific thing not to do.** `np_cmap`'s
-`u_cmap1|palette` still reports uninferred, but the entire design spends 960
-ALMs on memory, so it is costing nothing worth chasing. **Do not "fix" it by
+**There is no diet to go on, and one specific thing not to do.** Quartus
+reports **seven** uninferred RAMs, not one - an earlier version of this
+paragraph named only `np_cmap`'s `u_cmap1|palette`. The full list, identical
+across builds:
+
+| instance | why |
+|---|---|
+| `np_cmap:u_cmap1\|palette` | asynchronous read |
+| `z8530_scc\|scc_async_fifo` x4 (rx/tx, a/b) | inappropriate RAM size |
+| `eeprom_93c56:u_eeprom\|mem` | asynchronous read |
+| `cpu_datacache\|dpram:itagram\|mem` | asynchronous read |
+
+None of them costs anything worth chasing - the whole design spends 960 ALMs
+on memory - but **the last one is worth knowing about for a different reason**.
+The data cache's tag RAM is a `dpram` whose two ports both write and both read
+one shared variable, and Cyclone V's M10K cannot do write-first on both ports
+of a true dual port. So Quartus takes one direction as a Simple Dual Port
+M10K (`sgiindy.fit.rpt`: 512 x 22, `altsyncram_31q1`) and builds the other
+read out of logic. That is a real difference between what `dpram.vhd` models
+and what runs, in the one structure whose read-during-write behaviour
+`r4300_bus.sv:50-72` says the design depends on. It is not the intermittent
+panic - `cache=off` does not fix that, and the cache group passes on hardware -
+but it is the kind of thing that only ever shows up on a board. **Do not "fix" it by
 wiring `cmap1_rgb` into the pixel path** - IRIS displays from `cmap0` alone
 (`rex3.rs:4062`) and `cmap1` exists only to answer Display Control Bus reads
 at address 3 (`rex3.rs:3168`); `cmap.rs` has no parity notion at all. Making
