@@ -393,46 +393,49 @@ module sgi_indy #(
     //------------------------------------------------------------------
     // The main memory port, and the two masters on it
     //------------------------------------------------------------------
-    // THIS IS THE ONLY ARBITER IN THE CORE, and it is deliberately not a bus
-    // arbiter: it covers this one port, because the descriptors and buffers
-    // the HPC3's SCSI DMA channel touches are in main memory and nothing else
-    // in this design masters anything. The Ethernet channels will want the
-    // same port when they arrive and the same arbiter will serve; a general
-    // crossbar is work nobody has asked for.
+    // THE ONE ARBITER IN THE CORE IS rtl/sgi/ram_arb.sv, and it is its own
+    // file rather than twenty lines here because the twenty lines had a bug
+    // that no simulation in this repository could reach: the window it opens
+    // is exactly as wide as memory is slow, and verilator/sim_ram.v answers in
+    // one cycle where DDR3 takes tens. A module can be driven against a slow
+    // memory on its own; an inline `always_ff` cannot. Read that file before
+    // touching this instantiation - it has the whole diagnosis, including the
+    // three different hardware symptoms that came out of the one line.
     //
-    // The CPU wins every tie. Its bus is a one-cycle request followed by a
-    // wait for `ack` (rtl/cpu/r4300_bus.sv), so there is exactly one
-    // transaction in flight and `ram_inflight` is what keeps the DMA out of
-    // the gap between a request and its answer. `ram_owner_dma` remembers
-    // whose answer is coming: without it a DMA read's `ram_ack` would land on
-    // the CPU as a completed cycle, with the DMA's data on it.
-    logic ram_inflight, ram_owner_dma;
-
     // A memory cycle only reaches the RAM model when MEMCFG has a valid bank
     // covering it. Everything else in the two memory windows is answered here
     // as zero - see sgi_memmap.sv on why that matters to POST.
     wire cpu_ram_req = bus_req && sel_ram && mem_hit;
-    wire dma_grant   = dma_req && !ram_inflight && !cpu_ram_req && dma_hit;
+    wire cpu_ram_ack;
+    wire dma_port_ack;
+    wire dma_grant;
 
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            ram_inflight  <= 1'b0;
-            ram_owner_dma <= 1'b0;
-        end else if (ram_req) begin
-            // A fill re-requests in the same cycle it takes its ack, so a new
-            // request always wins over the clear below.
-            ram_inflight  <= 1'b1;
-            ram_owner_dma <= dma_grant;
-        end else if (ram_ack) begin
-            ram_inflight  <= 1'b0;
-        end
-    end
+    ram_arb u_ram_arb (
+        .clk        (clk),
+        .reset      (reset),
 
-    assign ram_req   = cpu_ram_req | dma_grant;
-    assign ram_we    = dma_grant ? dma_we    : bus_we;
-    assign ram_addr  = dma_grant ? dma_off   : mem_off;
-    assign ram_wdata = dma_grant ? dma_wdata : bus_wdata;
-    assign ram_be    = dma_grant ? dma_be    : bus_be;
+        .cpu_req    (cpu_ram_req),
+        .cpu_we     (bus_we),
+        .cpu_addr   (mem_off),
+        .cpu_wdata  (bus_wdata),
+        .cpu_be     (bus_be),
+        .cpu_ack    (cpu_ram_ack),
+
+        .dma_req    (dma_req && dma_hit),
+        .dma_we     (dma_we),
+        .dma_addr   (dma_off),
+        .dma_wdata  (dma_wdata),
+        .dma_be     (dma_be),
+        .dma_ack    (dma_port_ack),
+        .dma_granted(dma_grant),
+
+        .ram_req    (ram_req),
+        .ram_we     (ram_we),
+        .ram_addr   (ram_addr),
+        .ram_wdata  (ram_wdata),
+        .ram_be     (ram_be),
+        .ram_ack    (ram_ack)
+    );
 
     // The engine's addresses are physical, so they go through the same MEMCFG
     // decode the CPU's do. A second instance rather than a mux on one: the
@@ -473,7 +476,7 @@ module sgi_indy #(
         else if (ram_req) dma_owner_mc <= dma_grant && mc_owns;
     end
 
-    wire dma_ack_any = (ram_ack && ram_owner_dma) | dma_miss_ack;
+    wire dma_ack_any = dma_port_ack | dma_miss_ack;
     wire dma_ack_mc  = dma_miss_ack ? mc_owns : dma_owner_mc;
 
     assign sdma_ack  = dma_ack_any && !dma_ack_mc;
@@ -822,11 +825,9 @@ module sgi_indy #(
         end
     end
 
-    // `ram_ack` belongs to whichever master asked for it - see the arbiter
-    // above. Letting a DMA cycle's ack through here would finish a CPU cycle
-    // that is still waiting, with the DMA's data on it.
-    wire cpu_ram_ack = ram_ack && !ram_owner_dma;
-
+    // `cpu_ram_ack` comes from ram_arb, which is the only thing that knows
+    // whose answer `ram_ack` is. Letting a DMA cycle's ack through here would
+    // finish a CPU cycle that is still waiting, with the DMA's data on it.
     assign bus_ack   = cpu_ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
                      | ioc_ack | rtc_ack | scc_ack | kbd_ack | scsi_ack | none_ack | gio_absent_ack
                      | mem_hole_ack | gfx_ack | gfx_absent_ack;

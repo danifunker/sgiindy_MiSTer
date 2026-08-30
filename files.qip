@@ -13,6 +13,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE sgiindy.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_indy.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_mc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/mc_gio_dma.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/ram_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_memmap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/eeprom_93c56.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/sgi_hpc3.sv

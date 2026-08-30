@@ -110,6 +110,7 @@ CPUTEST_V = \
 	$(RTL)/scsi/scsi.v \
 	$(RTL)/scsi/cd_audio.sv \
 	$(RTL)/sgi/pit8254.sv \
+	$(RTL)/sgi/ram_arb.sv \
 	$(RTL)/sgi/sgi_memmap.sv \
 	$(RTL)/sgi/sgi_ds1386.sv \
 	$(RTL)/sgi/eeprom_93c56.sv \
@@ -242,6 +243,20 @@ cputest-dcb-debug: $(RTL)/cpu/generated/r4300_wrap.v
 # garbage on DOUT except on the ready cycle - because a mux that passes against
 # a bridge that is never busy is a mux that has not been tested.
 #   make ddr3test && ./obj_dir_ddr3/Vddr3_mux
+# --- the CPU/DMA memory arbiter against a SLOW memory ----------------------
+# The one piece of this design that could not be tested until it was its own
+# file. Every whole-machine simulation here answers memory in one cycle, and
+# the fault it hid opens a window as wide as memory is slow. See the header
+# of verilator/tb_ramarb.cpp and of rtl/sgi/ram_arb.sv.
+#   make ramarbtest && ./obj_dir_ramarb/Vram_arb
+#   RAMARB_LAT=60 ./obj_dir_ramarb/Vram_arb    # DDR3-ish
+#   RAMARB_LAT=1  ./obj_dir_ramarb/Vram_arb    # what sim_ram.v offers
+ramarbtest:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ramarb --top-module ram_arb \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vram_arb $(RTL)/sgi/ram_arb.sv tb_ramarb.cpp
+
 ddr3test:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3 --top-module ddr3_mux \
 	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
