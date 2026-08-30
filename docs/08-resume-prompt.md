@@ -15,32 +15,76 @@ yourself, keep going through obstacles, and only stop to ask when a decision
 genuinely changes what gets built (or when you need something run on real
 hardware — see below).
 
-## STOP. READ THIS BEFORE TOUCHING THE DISPLAY
+## STOP. THE BITSTREAM WAS NEVER THE PROBLEM
 
-**`releases/SGIIndy_20260829.rbf` IS THE RIGHT FILE AND IT IS VERIFIED.** Three
-ways: the file on disk, `git show HEAD:releases/SGIIndy_20260829.rbf`, and the
-copy on the board all give md5 `214e9fddd29f7322490de25643388446` - and that
-same md5 was confirmed on the board *before* the release was cut, while the
-build that drew the boot screen was running. It is the bitstream that worked.
-`SGIIndy_20260829_bootscreen.png` beside it is what it drew. Settings: **all
-defaults**, a zeroed `config/SGIINDY.CFG` - graphics Fitted, caches On, memory
-48 MB, both debug entries Off.
+**`releases/SGIIndy_20260829.rbf` IS THE RIGHT FILE, IT IS VERIFIED, AND AN
+EVENING WAS SPENT PROVING THAT INSTEAD OF FINDING THE BUG.** md5
+`214e9fddd29f7322490de25643388446`, on disk, in `git show HEAD:`, and on the
+board. It is the only `.rbf` that has ever been committed - `SGIIndy_20260830`
+was renamed to `_20260829` at `cb433d5`, R100, same bytes. If a session ever
+again starts by suspecting the release, read this paragraph and stop.
 
-**IT IS ALSO, RIGHT NOW, NOT COMING UP.** Redeployed and md5-verified, the same
-bitstream boots the PROM (exception vectors and szmem's patterns are in DDR3),
-runs REX3 (it wipes a marker off the whole frame buffer), **clears the screen to
-index 0, and stops.** The machine gets to `rex3Clear` and no further.
+**THE MACHINE WAS BOOTING ON THE PREVIOUS RUN'S MEMORY.** That is the whole
+fault. DDR3 survives a core reload *and* a warm reboot of the HPS, and the
+guest's own memory clear moves nothing: the MC's GIO DMA engine is a stub that
+reports instant completion, so `docs/12`'s "the PROM believes it worked" is
+literally true. Whatever is in DDR3 when the core starts is what the PROM boots
+on, and one particular pattern of leftovers stops it dead at `rex3Clear`.
 
-**The video signal is FINE - an earlier version of this paragraph said there was
-none, and that was wrong.** One capture failed and was written up as "no video
-at all"; the next relaunch captured a screenshot normally. The raster comes up.
-The screen is black because the frame buffer is black, which is a different
-fault entirely and points somewhere else. Do not go looking at VC2.
+**The measurement, four launches of one bitstream, frame buffer marked with
+0xE7 before each so a stale picture cannot be read as a new one:**
 
-### What was measured, after four wrong explanations
+| main memory before launch | frame buffer after | |
+|---|---|---|
+| inherited from a good boot | 73 indices, marker gone | drew |
+| inherited again | 72 indices, marker gone | drew |
+| **filled with 0xa5** | **1 index, marker 100% intact** | **never drew** |
+| zeroed | 73 indices, marker gone | drew |
 
-Every hypothesis below was written down confidently and then killed by a
-measurement. They are kept because the measurements are the useful part.
+Those counts sample every sixteenth row; over the whole frame the good boots
+hold **168** distinct colour indices against the release screenshot's 171, and
+the failing one holds **one**. The good boots finish in under thirty seconds -
+the 180 second wait in `hwcheck.sh` is for a much slower machine than this.
+
+Nothing else changed between those rows. Not the bitstream, not `boot.rom`
+(`11bb4acd64fb7c79c985d3d09390668b` everywhere), not `config/SGIINDY.CFG`
+(sixteen zero bytes), not the OSD options.
+
+**`tools/misterdeploy/memclear.py` is the workaround and `scripts/hwcheck.sh`
+now runs it before every launch**, next to the frame buffer marker and for the
+same reason. **The fix is to make the GIO DMA engine real.** It was already
+listed below as "the most suspicious thing in the core that the installer
+touches and nothing tests"; it is no longer suspicious, it is the reason a boot
+is not reproducible, and it should be built before anything else on hardware.
+
+### The working tree has an uncommitted build in it, and `deploy.sh` will push it
+
+Two things are uncommitted as this is written, and both are deliberate rather
+than lost work:
+
+* **`sgiindy.qsf`** carries 265 uncommitted lines - the full set of DE10-Nano
+  pin assignments and `LAST_QUARTUS_VERSION "17.0.2 Lite Edition"` - because
+  the build moved onto the local **Quartus Lite** box. The `syn/` projects
+  never needed them; the root project does.
+* **`output_files/sgiindy.rbf`**, md5 `df46413931e6dbb4b5eaad3a8108d084`, is the
+  Lite build of HEAD - the release's RTL *plus* the two cursor commits. It
+  fits (30,829 ALMs, 74%; 358 M10K) and it meets timing (worst core-clock
+  setup slack +3.043 ns, TNS 0.000 on every clock). **It has never been run on
+  hardware.**
+
+**`bash scripts/deploy.sh` with no arguments pushes `output_files/sgiindy.rbf`,
+not the release.** So a bring-up run that means to test the known-good
+bitstream has to say `--rbf releases/SGIIndy_20260829.rbf`, or use
+`scripts/hwcheck.sh --no-deploy` to relaunch whatever is already on the board.
+Every measurement in this section was taken with the release on the board -
+`/media/fat/_Unstable/SGIIndy.rbf`, md5 verified `214e9fdd…` - and `--no-deploy`
+is how it stayed there.
+
+### What that episode cost, and the rule it argues for
+
+Five confident explanations were written down and killed by measurement. They
+are kept because the measurements are the useful part, and because every one of
+them was a way of blaming the instrument or the build:
 
 | explanation | how it died |
 |---|---|
@@ -48,98 +92,115 @@ measurement. They are kept because the measurements are the useful part.
 | the frame buffer marker caused it | fails with the marker absent too |
 | it is merely slow | frame buffer flat at zero non-black pixels for 4.5 minutes |
 | it is intermittent | three identical relaunches, three identical failures |
+| the video signal is gone | `viddbg=raw` showed the raster was fine all along |
 
-**Where it stops, precisely.** With the verified release running right now:
+**Do not change the experiment and the thing being measured at the same time**,
+and its corollary, which is the one that actually cost the evening: **when a
+machine is not reproducible, suspect its hidden state before its build.** A
+bitstream is checkable with `md5sum`; 64 MB of DDR3 that nothing resets is not,
+and it was the only thing in the loop that nobody had accounted for.
 
-* the PROM image is in DDR3 and correct - `00 00 00 00 f0 00 f0 0b` at
-  `0x35000000`, which is the right bytes in the right order;
-* the PROM RUNS - its exception vectors are at `0x30000000` and szmem's
-  walking-bit patterns are across all 48 MB;
-* REX3 RUNS - it clears the frame buffer to index 0;
-* **and then nothing happens, ever.** No drawing, no further memory movement.
+**The cursor commits are un-judged, not exonerated.** `1fd8968` and `2ce0167`
+are still the only RTL changes since the release, and every run that condemned
+them ran on inherited memory. `git revert 2ce0167 1fd8968` still restores the
+release's RTL if you want it, but judge them again first, with memory zeroed,
+or you will be judging the same broken experiment.
 
-**Nothing persistent on the card explains it.** `config/SGIINDY.CFG` is
-sixteen zero bytes - all defaults. There is no `SGIIndy` section in
-`MiSTer.ini`, and no other per-core config.
+### THE MACHINE BOOTS. IT PANICS ABOUT ONE BOOT IN THREE, AND THAT IS THE BUG NOW
 
-**THE SAME FILE DREW THE WHOLE BOOT SCREEN AT 05:00 AND REACHED THE
-MAINTENANCE MENU.** So something about that board's state changed, and it is
-not the bitstream, the PROM or the settings. **The obvious untried reset is a
-COLD POWER CYCLE** - every reset in this session was a soft reboot through the
-mrext API, which does not clear DDR3 or re-initialise the HPS. Do that before
-concluding anything about the core.
+With main memory zeroed before launch, the machine draws its whole boot screen
+in **under thirty seconds**, every time, and then ends one of two ways. Six
+consecutive launches of the release bitstream, frame buffer marked and main
+memory zeroed before each:
 
-### The instrumentation suspicion, now dead but worth knowing about
-
-### The suspicion, and it is about the instrumentation rather than the core
-
-**Every failing run had the frame buffer PRE-FILLED with 0xE7 and the working
-one did not.** That marker is `scripts/hwcheck.sh --clear`, added late in the
-session to stop stale pictures being mistaken for new ones - a real problem,
-fixed in a way that may have created a bigger one.
-
-| run | frame buffer before launch | result |
+| outcome | count | what the screen says |
 |---|---|---|
-| the one that worked | untouched | full boot screen, video fine |
-| every one after | filled with 0xE7 | cleared only, no video |
+| **healthy** | 4 | `Unable to boot; press any key to continue:` |
+| **panic** | 2 | a PROM exception box |
 
-POST runs a graphics diagnostic on Newport *before* the display is brought up.
-If pre-loading the frame buffer changes what that diagnostic sees, the PROM may
-never enable video - which fits "no signal at all" far better than anything
-about the rasteriser. **The decisive test is one relaunch of the verified
-bitstream with the frame buffer untouched.** Do that before believing anything
-else in this section.
+Counting every caches-on launch whose screen was actually read, it is **four
+panics in ten**. Call it one in three and do not read more precision into it
+than that - but do read the classification off the frame buffer rather than a
+photograph: a panic box holds several thousand text pixels and the healthy
+prompt holds a few hundred, so `ddr3_peek.py` tells the two apart with no
+ambiguity at all.
 
-### Two conclusions from this session that are probably wrong
+`Unable to boot; press any key` is **the correct end state for a machine with
+no disk attached** - it is one keypress from the System Maintenance Menu, and it
+is the same string the keyboard was proven with under Verilator. Those four runs
+are bit-identical to each other: 1340 text pixels, 169 colour indices, every
+time. The boot is not flaky; the boot is deterministic and something occasional
+knocks it over.
 
-Both were written down confidently and both need re-testing, because the
-experiment changed underneath them:
+**When it panics, with the caches on, it is always exactly the same panic.**
+Two independent occurrences, byte for byte:
 
-1. **"The cursor commits broke the display."** `1fd8968` and `2ce0167` are
-   still the only RTL changes since the working build, and the display did get
-   worse after them - washed-out colours, then nothing. But the *verified
-   working bitstream* now shows the same "clears and stops" symptom, so at
-   least part of what was blamed on the cursor belongs somewhere else.
-2. **"The boot is non-deterministic."** Written after the known-good build
-   failed to come up. Every one of those attempts had the marker in it, so
-   there may be nothing non-deterministic about it at all.
+```
+Exception: <vector=Normal>
+Status register: 0x30004803<CU1,CU0,IM7,IM4,IPL=???,MODE=KERNEL,EXL,IE>
+Cause register: 0x8014<CE=0,IP8,EXC=WADE>
+Exception PC: 0x9fc1dc84, Exception RA: 0x9fc1dc78
+write address error exception, bad address: 0x9fc1dc77
+Local I/O interrupt register 0: 0x2 <SCSI0>
+HPC3 bus error status register: 0x0
+```
 
-### If you still want to remove the cursor
+**Where that is, disassembled rather than guessed.** `0x9fc1dc84` is
+`sb $t9, ($t0)` inside the function at `0x9fc1da78`, the WD33C93 command-issue
+path: the loop below it writes register 3 and then up to twelve CDB bytes to a
+data port, and the stores around it select registers 0x10, 0x11 and 0x12 -
+Command Phase, Synchronous Transfer, Transfer Count. `$t0` is loaded two
+instructions earlier by `lw $t0, 0x148($s1)`, and that word is a **constant in
+the PROM**: `0xbfbc0003` at `0x9fc7b410` and `0xbfbc0007` at `0x9fc7b414`, the
+WD33C93's address and data ports (`rtl/sgi/sgi_indy.sv:220`). So
+`$s1 = 0x9fc7b2c8`, and `ddr3_peek.py 0x3507b410` reads
+`07 00 bc bf 03 00 bc bf` - the right constant, correct in DDR3. The CPU used
+`0x9fc1dc77`.
 
-`git revert 2ce0167 1fd8968` restores the RTL that produced the release; those
-two commits are the only ones since it that touch `rtl/` or `sgiindy.sv`.
-Everything between - the release, the docs, `scripts/hwcheck.sh` - is
-untouched by that revert. But **establish first whether the marker explains the
-failures**, or the revert will be judged against the same broken experiment.
+Four measured facts, and they point away from every obvious suspect:
 
-### What the cursor work established, if it is finished rather than reverted
+* **`sb` cannot raise an address error in this core.** `cpu.vhd:1960` leaves
+  its `decodeExcType` at `EXCTYPE_NONE`, correctly - a byte store has no
+  alignment to violate and kernel mode may write KSEG0. So the printed
+  `BadVAddr` is not necessarily the store's address: `cpu_cop0.vhd:983`
+  overwrites `BadVAddr` with `exceptionPCStore` when `exceptionNewPC` is set.
+* **The bad value is the same every time, and it is `RA - 1`.** `0x9fc1dc77`
+  is one below the return address the `jal` at `0x9fc1dc70` left in `$ra`.
+  Random corruption does not land on the same value twice; something is
+  handing this instruction a value derived from the return address.
+* **The caches are innocent.** `cache=off` still draws the whole screen and
+  still dies, with a *different* exception - `EXC=RMISS`, `EPC = 0`, `RA = 0`,
+  a jump to address zero. Turning the caches off moved the symptom, not the
+  outcome, which is what a bad pointer does when the timing around it changes.
+* **A SCSI0 interrupt is pending in every panic and in both variants.**
+  `Local I/O interrupt register 0: 0x2 <SCSI0>`, with `Status.IE` set and
+  `Cause.IP8` raised. The fault is always inside the WD33C93 driver, and it is
+  always at the same instruction pair.
 
-IRIS settled two things that are easy to get wrong and both are in the code.
-The cursor's colours do **not** come from the BT445's cursor colour registers -
-those belong to that chip's own hardware cursor, which Newport does not use -
-they come from CMAP at `(XMAP9 register 3 << 5) | value` (`compositor.rs`).
-And the vertical position is latched from `CURSOR_Y` into `WORKING_CURSOR_Y` at
-the vertical position pulse, not when software writes it (`rex3.rs`, at
-vblank).
+**The leading hypothesis is an interrupt taken across that instruction pair.**
+It fits everything: intermittent, because it depends on when SCSI0 asserts;
+always the same instruction when it fires, because the window is two
+instructions wide; the same wrong value, because that value comes from a
+register save area rather than from noise; and a different failure with the
+caches off, because the timing that decides *where* the interrupt lands moves.
+`tests/run-int.sh` proves INT2 reaches `Cause.IP`, and the cpu-tests suite is
+2161/3 - but **neither of them takes an interrupt in the middle of a load-use
+pair and checks that the register file survives it**, and that is the test to
+write.
 
-`tb_vc2` covers the cursor's own geometry - position, size, the 64-word plane
-offset, no row shift, 5120 pixels exactly where placed - and **explicitly not**
-its interference with anything else: it passes against both the shared-SRAM-port
-version and the two-port one. It did catch a real bug worth keeping: the fetch
-address was a live expression on `y_ctr`, which has already advanced by the time
-the reads issue, so every row was one too far. A solid glyph hides that
-completely; only the last row, reading off the end of the plane, gave it away.
-The test now marks one row with plane 1 so an offset shows up wherever it
-happens.
+Cheapest next steps, in order:
 
-### The rule this whole episode is an argument for
-
-**Do not change the experiment and the thing being measured at the same time.**
-Three separate wrong conclusions tonight came from exactly that: a stale frame
-buffer read as a working display, a corrupted raster inferred from a black
-screen that `viddbg=raw` then showed was fine, and a marker added to fix the
-first that may have caused the third. When a measurement starts disagreeing
-with itself, suspect the instrument before the machine.
+1. **Write the missing CPU test**: an interrupt asserted at every offset around
+   a load-use pair, checking the loaded register after `eret`. It needs no
+   hardware, and if it fails it explains this without another board run.
+   (Verilator cannot build the full design on the Windows box - see the
+   toolchain notes - but a CPU-only testbench does build.)
+2. **Take SCSI0 out of the picture on hardware** and see whether the panic
+   rate goes to zero. There is no OSD option for it today; one debug bit that
+   holds `L0_STATUS[1]` clear would settle it in one build.
+3. **Judge the cursor commits.** `1fd8968` and `2ce0167` have still never been
+   run on a launch with cleared memory. Two commands, and it closes the last
+   open question from the evening that produced this section.
 
 ## Where this is
 
@@ -391,14 +452,20 @@ not change files or git state there** - push to origin and let the user pull;
 running a build is fine.
 
 **THE MACHINE DRAWS ITS OWN BOOT SCREEN ON A DE10-NANO, AND THEN STOPS.**
-`releases/SGIIndy_20260830.rbf` is the bitstream and
-`releases/SGIIndy_20260830_bootscreen.png` is the screen: the gradient, the
+`releases/SGIIndy_20260829.rbf` is the bitstream and
+`releases/SGIIndy_20260829_bootscreen.png` is the screen (both were committed
+under the `_20260830` name and renamed at `cb433d5`; the bytes are the same): the gradient, the
 hourglass, "Running power-on diagnostics...", "WELCOME TO INDY" and "Silicon
 Graphics Computer Systems", in colour, stable. The frame buffer holds 171
 distinct colour indices where it used to hold three.
 
-**IT REACHES THE SYSTEM MAINTENANCE MENU**, and an earlier version of this
-paragraph said it did not. It was measured once, sitting at "Running power-on
+**IT GETS TO `Unable to boot; press any key to continue:`, WHICH IS THE RIGHT
+ANSWER FOR A MACHINE WITH NO DISK** - one keypress short of the menu - on about
+two boots in three. The other one in three panics in the WD33C93 driver. See
+"THE MACHINE BOOTS. IT PANICS ABOUT ONE BOOT IN THREE" at the top of this file,
+which has both outcomes, the exception, the disassembly and what to do next. The rest of this paragraph is kept because its
+caution is still right for any run with the caches off, which is several times
+slower. An earlier version of it said the menu was never reached. It was measured once, sitting at "Running power-on
 diagnostics...", and called stuck; the machine simply had not finished, and a
 restart gets there. **Give it a minute or two before concluding anything**,
 because REX3 now waits for every write to be acknowledged and a pixel costs a
