@@ -52,6 +52,9 @@ static const int V_TOTAL = V_FRONT + V_SYNC + V_BACK + V_VIS;
 
 static const uint16_t VC2_RAM_ADDR_REG = 0x07;
 static const uint16_t VC2_VIDEO_ENTRY  = 0x00;
+static const uint16_t VC2_CURSOR_ENTRY = 0x01;
+static const uint16_t VC2_CURSOR_X     = 0x02;
+static const uint16_t VC2_CURSOR_Y     = 0x03;
 static const uint16_t VC2_DC_CONTROL   = 0x10;
 static const uint16_t VC2_CONFIG       = 0x1F;
 
@@ -181,9 +184,39 @@ int main(int argc, char **argv)
     load_ram(a_ftab, {a_front, V_FRONT, a_sync, V_SYNC,
                       a_back,  V_BACK,  a_vis,  V_VIS, 0, 0});
 
+    // ---- the cursor ------------------------------------------------------
+    // A solid 32x32 block in plane 0 and nothing in plane 1, so every pixel it
+    // covers reads as value 1 and the shape is trivially checkable. Plane 1
+    // lives sixty-four words after plane 0 whatever the row - that offset is
+    // the part of the format most likely to be got wrong, so leaving it empty
+    // and asserting the value is 1 rather than 3 is a test of it.
+    const uint16_t CURS_AT = 0x2000;
+    const int CURS_X = 100, CURS_Y = 40, CURS_SZ = 32, MARK_ROW = 7;
+    {
+        std::vector<uint16_t> plane0(CURS_SZ * 2, 0xFFFF);
+        std::vector<uint16_t> plane1(CURS_SZ * 2, 0x0000);
+        // ONE MARKED ROW, so that a row offset shows up wherever it happens.
+        // A solid glyph hides one completely: every row looks like every other
+        // and only the last one, reading off the end of the plane, goes blank.
+        // With plane 1 set on exactly one row, that row reads 3 and the rest
+        // read 1, and an off-by-one moves the mark.
+        plane1[MARK_ROW * 2] = 0xFFFF;
+        plane1[MARK_ROW * 2 + 1] = 0xFFFF;
+        load_ram(CURS_AT, plane0);
+        load_ram(CURS_AT + 64, plane1);
+    }
+    // The registers hold the hot spot plus 31, and CURSOR_X is latched into the
+    // working copy by the write to CURSOR_Y - so the order of these two
+    // matters and getting it backwards leaves the cursor at x = -31.
+    set_reg(VC2_CURSOR_ENTRY, CURS_AT);
+    set_reg(VC2_CURSOR_X, CURS_X + 31);
+    set_reg(VC2_CURSOR_Y, CURS_Y + 31);
+
     set_reg(VC2_VIDEO_ENTRY, a_ftab);
     set_reg(VC2_CONFIG, 0x0001);          // release soft reset
-    set_reg(VC2_DC_CONTROL, 0x0004);      // video timing enable
+    // Video timing enable, and the cursor on at 32x32: bit 7 enables, bit 9
+    // would select 64x64.
+    set_reg(VC2_DC_CONTROL, 0x0004 | 0x0080);
 
     // Run for four frames' worth of pixel clocks plus slack.
     const int PIX_DIV = 2;
@@ -194,6 +227,12 @@ int main(int argc, char **argv)
     int  x = 0, y = 0;
     int  seen_w = 0, seen_h = 0, frames = 0;
     int  hs_width = 0, hs_run = 0, hs_width_seen = 0;
+    // Where the cursor was seen, and with what value. Sampled on the last
+    // frame only, so the first frame's start-up has no say in it.
+    uint64_t curs_pixels = 0, curs_wrong_value = 0, curs_outside = 0;
+    int curs_x_min = 1 << 20, curs_x_max = -1;
+    int curs_y_min = 1 << 20, curs_y_max = -1;
+    uint64_t curs_row_hits[40] = {0};
 
     for (uint64_t i = 0; i < budget; i++) {
         tick();
@@ -205,6 +244,22 @@ int main(int argc, char **argv)
         if (ce && hs)    hs_run++;
         if (!hs && hs_d) { hs_width = hs_run; if (hs_width) hs_width_seen = hs_width; }
         if (ce && de)    { x++; if (x > seen_w) seen_w = x; }
+        // THE CURSOR IS SAMPLED AGAINST VC2'S OWN COORDINATES, not the
+        // testbench's x/y - those count emitted pixels and the cursor is
+        // placed in frame buffer coordinates, which is what pix_x/pix_y are.
+        if (ce && de && frames >= 2 && dut->cursor_pix) {
+            int px = dut->pix_x, py = dut->pix_y;
+            curs_pixels++;
+            int want = (py - CURS_Y == MARK_ROW) ? 3 : 1;
+            if (dut->cursor_pix != want) curs_wrong_value++;
+            if (px < CURS_X || px >= CURS_X + CURS_SZ ||
+                py < CURS_Y || py >= CURS_Y + CURS_SZ) curs_outside++;
+            if (px < curs_x_min) curs_x_min = px;
+            if (px > curs_x_max) curs_x_max = px;
+            if (py < curs_y_min) curs_y_min = py;
+            if (py > curs_y_max) curs_y_max = py;
+            { int r = py - CURS_Y; if (r >= 0 && r < 40) curs_row_hits[r]++; }
+        }
         hs_d = hs; vs_d = vs; de_d = de;
     }
 
@@ -233,6 +288,29 @@ int main(int argc, char **argv)
           hs_width_seen == want_hswide);
     check("one display-enable pulse per visible line",
           de_rises >= (uint64_t)V_VIS * (uint64_t)(frames - 1) && de_rises > 0);
+
+    printf("     cursor: %llu pixels, x %d..%d, y %d..%d (want %d..%d, %d..%d)\n",
+           (unsigned long long)curs_pixels, curs_x_min, curs_x_max,
+           curs_y_min, curs_y_max, CURS_X, CURS_X + CURS_SZ - 1,
+           CURS_Y, CURS_Y + CURS_SZ - 1);
+    if (getenv("VC2_CURSOR_ROWS")) {
+        printf("     per-row pixel counts:\n");
+        for (int r = 0; r < 34; r++)
+            printf("       row %2d: %llu\n", r,
+                   (unsigned long long)curs_row_hits[r]);
+    }
+    check("the cursor is drawn at all", curs_pixels > 0);
+    check("every cursor pixel is inside the square it was placed at",
+          curs_outside == 0);
+    check("the cursor lands exactly where it was put",
+          curs_x_min == CURS_X && curs_x_max == CURS_X + CURS_SZ - 1 &&
+          curs_y_min == CURS_Y && curs_y_max == CURS_Y + CURS_SZ - 1);
+    // A solid plane 0 over an empty plane 1 is value 1 everywhere. Value 3
+    // would mean the second plane was read from the wrong place - the
+    // sixty-four word offset is the easiest part of the format to get wrong.
+    check("the marked row reads 3 and every other reads 1, so plane 1 is "
+          "where the format says and no row is offset",
+          curs_wrong_value == 0);
 
     printf(fail ? "VC2: FAIL\n" : "VC2: PASS\n");
     delete dut;

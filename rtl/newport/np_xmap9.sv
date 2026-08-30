@@ -30,7 +30,13 @@ module np_xmap9 #(
 
     // ---- read port for the display ---------------------------------------
     input  logic  [4:0] look_did,
-    output logic [23:0] look_mode
+    output logic [23:0] look_mode,
+
+    // The colour map page the CURSOR's two bits index, register 3. The cursor
+    // does not take its colours from the RAMDAC's cursor registers - those are
+    // the BT445's own hardware cursor, which Newport does not use - it indexes
+    // CMAP at (this << 5) | value. See np_vc2.sv and IRIS's compositor.rs.
+    output logic  [7:0] curs_cmap
 );
 
     logic  [7:0] config_reg;
@@ -71,6 +77,7 @@ module np_xmap9 #(
     end
 
     assign look_mode = mode_table[look_did];
+    assign curs_cmap = curs_cmap_msb;
 
     integer i;
     always_ff @(posedge clk) begin

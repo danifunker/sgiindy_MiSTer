@@ -37,11 +37,22 @@
 //  shift register this core does not have, because its frame buffer is
 //  addressed rather than clocked out.
 //
-//  THE CURSOR IS NOT BUILT. The position registers exist and the PROM's
-//  Ng1TpMovec writes them, and the glyph would come out of this same SRAM,
-//  but nothing generates cursor planes yet. The PROM's own Ng1CursorInit is a
-//  stub ("XXX Set the cursor colors !"), so nothing on the boot path notices.
-//  See docs/16-newport-plan.md, milestone N4.
+//  THE CURSOR IS BUILT, and it comes out of this same SRAM. `CURSOR_ENTRY`
+//  points at the glyph; DC_CONTROL[7] enables it and [9] picks 64x64 one-plane
+//  or 32x32 two-plane, the second plane sixty-four words further on. The
+//  position registers are working copies the chip latches for itself - X when
+//  software writes CURSOR_Y, Y at the vertical position pulse - and the hot
+//  spot is 31 pixels up and to the left of what they hold.
+//
+//  A ROW IS FETCHED PER LINE, DURING BLANKING, and that is what keeps it out
+//  of the way. Four words cover any row in either size, the line advance
+//  happens on the falling edge of display enable, and there are hundreds of
+//  blank pixel times after it - so the fetch never competes with the timing
+//  generator for anything that matters, and it takes the read port on the same
+//  terms the host does, by re-arming `fetch_wait`.
+//
+//  Its colours are NOT the BT445's cursor colour registers. See the port
+//  comment on `cursor_pix`. See also docs/16-newport-plan.md, milestone N4.
 //
 //  ONE READ PORT, SHARED. The SRAM is a write port plus a single read port so
 //  it infers as one simple dual-port memory rather than two copies. The host
@@ -84,7 +95,17 @@ module np_vc2 #(
     output logic [10:0] pix_x,
     output logic [10:0] pix_y,
     // VERT_INT_REX_N as a one-clock pulse on its assertion.
-    output logic        vert_int
+    output logic        vert_int,
+
+    // ---- the cursor ------------------------------------------------------
+    // Two bits per pixel, valid with `pix_x`/`pix_y`, zero where the cursor is
+    // not. Non-zero selects one of three colours - and NOT from the BT445's
+    // cursor colour registers, which is where this was going to read them
+    // from. IRIS's compositor takes them from CMAP at
+    // (xmap cursor_cmap_msb << 5) | value (rex3.rs, compositor.rs); the DAC's
+    // own cursor registers belong to its hardware cursor, which Newport does
+    // not use. Checking the reference before building saved a wrong feature.
+    output logic  [1:0] cursor_pix
 );
 
     localparam logic [4:0] R_VIDEO_ENTRY   = 5'h00;
@@ -99,6 +120,8 @@ module np_vc2 #(
     localparam logic [4:0] R_VT_LINE_SEQ   = 5'h09;
     localparam logic [4:0] R_VT_LINES_RUN  = 5'h0A;
     localparam logic [4:0] R_VERT_LINE_CTR = 5'h0B;
+    localparam logic [4:0] R_CURS_TABLE_PTR = 5'h0C;
+    localparam logic [4:0] R_WORK_CURSOR_Y  = 5'h0D;
     localparam logic [4:0] R_DC_CONTROL    = 5'h10;
     localparam logic [4:0] R_CONFIG        = 5'h1F;
 
@@ -184,7 +207,79 @@ module np_vc2 #(
 
     // The read port. The host wins the cycle it asks for; the generator's
     // fetch address is held, so re-arming `fetch_wait` is the whole recovery.
-    wire [14:0] ram_ra = host_ram_rd ? ram_addr : fetch_a;
+    // ---- the cursor ------------------------------------------------------
+    // The glyph is in this SRAM. A row is four words in either size: 64x64 is
+    // one plane of four, 32x32 is two planes of two, the second sixty-four
+    // words on. Word 0 holds the leftmost sixteen pixels with bit 15 leftmost,
+    // which is the order the part shifts them out in.
+    wire        curs_en     = regs[R_DC_CONTROL][7];
+    wire        curs_size64 = regs[R_DC_CONTROL][9];
+    wire [14:0] curs_base   = regs[R_CURSOR_ENTRY][14:0];
+
+    // Both position registers are the chip's own working copies, not the ones
+    // software writes: X is latched when software writes CURSOR_Y (below) and
+    // Y at the vertical position pulse, which is what stops a cursor tearing
+    // when it moves mid-frame. The hot spot is 31 up and 31 left.
+    wire signed [12:0] curs_x0 =
+        $signed({2'b0, regs[R_CUR_CURSOR_X][10:0]}) - 13'sd31;
+    wire signed [12:0] curs_y0 =
+        $signed({2'b0, regs[R_WORK_CURSOR_Y][10:0]}) - 13'sd31;
+
+    logic [15:0] curs_w [4];        // the row being displayed
+    logic  [2:0] curs_step;         // 0 idle, 1..4 issuing a read
+    logic        curs_cap;          // a read was issued last cycle
+    logic  [1:0] curs_cap_i;
+    logic        curs_row_ok;       // the cursor covers the line being drawn
+    // THE ROW BEING FETCHED, LATCHED. It cannot be derived from `y_ctr` while
+    // the fetch runs: the fetch starts on the line advance and `y_ctr` has
+    // ALREADY moved on by the time the reads issue a cycle later, so a live
+    // expression reads the row after the one wanted. Every row came out one
+    // too far, which a solid cursor hides completely - the only symptom was
+    // the last row of the glyph reading off the end into the plane above it
+    // and vanishing. tb_vc2 now puts a mark on one row so an offset shows up
+    // wherever it happens rather than only at the edge.
+    logic  [5:0] curs_row_i;
+`ifdef VC2_CURSOR_DEBUG
+    logic [15:0] dbg_line_pix;
+`endif
+
+    wire curs_rd = (curs_step != 3'd0);
+    wire [1:0] curs_i = curs_step[1:0] - 2'd1;
+
+    // The row wanted is the one for the line AFTER this one, because the fetch
+    // runs in the blanking that follows the line advance.
+    wire signed [12:0] curs_cy = $signed({2'b0, y_ctr}) + 13'sd1 - curs_y0;
+    wire curs_next_ok = curs_en && (curs_cy >= 13'sd0)
+                     && (curs_cy < (curs_size64 ? 13'sd64 : 13'sd32));
+    wire [5:0] curs_cy6 = curs_cy[5:0];
+
+    wire [14:0] curs_a = curs_size64
+        ? curs_base + {7'b0, curs_row_i, 2'b0} + {13'b0, curs_i}
+        : (curs_i[1] ? curs_base + 15'd64 + {8'b0, curs_row_i, 1'b0} + {14'b0, curs_i[0]}
+                     : curs_base           + {8'b0, curs_row_i, 1'b0} + {14'b0, curs_i[0]});
+
+    // ---- and the pixel it produces ---------------------------------------
+    wire signed [12:0] curs_cx = $signed({2'b0, x_ctr}) - curs_x0;
+    wire curs_in_x = (curs_cx >= 13'sd0)
+                  && (curs_cx < (curs_size64 ? 13'sd64 : 13'sd32));
+    wire  [5:0] curs_cx6 = curs_cx[5:0];
+    wire  [5:0] curs_b64 = 6'd63 - curs_cx6;
+    wire  [4:0] curs_b32 = 5'd31 - curs_cx6[4:0];
+    wire [63:0] curs_one = {curs_w[0], curs_w[1], curs_w[2], curs_w[3]};
+    wire [31:0] curs_pl0 = {curs_w[0], curs_w[1]};
+    wire [31:0] curs_pl1 = {curs_w[2], curs_w[3]};
+
+    always_comb begin
+        cursor_pix = 2'd0;
+        if (curs_en && curs_row_ok && curs_in_x) begin
+            if (curs_size64) cursor_pix = {1'b0, curs_one[curs_b64]};
+            else             cursor_pix = {curs_pl1[curs_b32], curs_pl0[curs_b32]};
+        end
+    end
+
+    wire [14:0] ram_ra = host_ram_rd ? ram_addr
+                       : curs_rd     ? curs_a
+                                     : fetch_a;
 
     logic [15:0] pix_div_ctr;
     logic        pix_phase;
@@ -282,6 +377,11 @@ module np_vc2 #(
             y_ctr        <= 11'h0;
             de_d         <= 1'b0;
             vert_int_n_d <= 1'b1;
+            curs_step    <= 3'd0;
+            curs_cap     <= 1'b0;
+            curs_cap_i   <= 2'd0;
+            curs_row_ok  <= 1'b0;
+            curs_row_i   <= 6'd0;
         end else begin
             // ---- host access ---------------------------------------------
             if (host_idx_wr) index <= host_idx;
@@ -318,11 +418,38 @@ module np_vc2 #(
                 // The end of a visible span is the line advance. Blanking
                 // lines do not move the frame buffer row, so this counts
                 // displayed lines rather than total lines.
-                if (de_d && !de) y_ctr <= y_ctr + 11'd1;
+                if (de_d && !de) begin
+                    y_ctr <= y_ctr + 11'd1;
+                    // THE LINE HAS JUST ENDED, so there are hundreds of blank
+                    // pixel times before the next one needs its cursor row.
+                    // Four reads is all it takes and nothing else wants the
+                    // port badly enough to notice.
+                    curs_step   <= curs_next_ok ? 3'd1 : 3'd0;
+                    curs_row_ok <= curs_next_ok;
+                    curs_row_i  <= curs_cy6;
+`ifdef VC2_CURSOR_DEBUG
+                    dbg_line_pix <= 16'd0;
+                    if (y_ctr > 11'd35 && y_ctr < 11'd75)
+                        $display("[VC2] end of line %0d: row_ok_during=%0d pixels=%0d | next cy=%0d ok=%0d",
+                                 y_ctr, curs_row_ok, dbg_line_pix, curs_cy, curs_next_ok);
+`endif
+                end
             end else begin
                 pix_div_ctr <= pix_div_ctr + 16'd1;
             end
             vert_int_n_d <= state_c[0];
+
+`ifdef VC2_CURSOR_DEBUG
+            if (ce_pix && de && cursor_pix != 2'd0) dbg_line_pix <= dbg_line_pix + 16'd1;
+`endif
+            // ---- the cursor row fetch -------------------------------------
+            // `ram_q` lands the cycle after its address, so the capture runs
+            // one behind the issue and both are just counters.
+            curs_cap   <= curs_rd;
+            curs_cap_i <= curs_i;
+            if (curs_cap) curs_w[curs_cap_i] <= ram_q;
+            if (curs_rd)  curs_step <= (curs_step == 3'd4) ? 3'd0
+                                                          : curs_step + 3'd1;
 
             // ---- the generator -------------------------------------------
             // `fetch_wait` covers the one cycle between presenting an address
@@ -332,7 +459,7 @@ module np_vc2 #(
             // long since landed. Stalling it too would add the fetch latency
             // to every state run and stretch the horizontal total.
             fetch_wait <= 1'b0;
-            if (host_ram_rd) fetch_wait <= 1'b1;
+            if (host_ram_rd || curs_rd) fetch_wait <= 1'b1;
 
             if (!vtg_enable) begin
                 vt      <= VT_OFF;
@@ -348,6 +475,10 @@ module np_vc2 #(
                         fetch_a    <= regs[R_VIDEO_ENTRY][14:0];
                         fetch_wait <= 1'b1;
                         y_ctr      <= 11'h0;
+                        // The vertical position pulse also positions the
+                        // cursor vertically - VT_VPOS_VC_N - which is what
+                        // makes CURSOR_Y safe to write at any time.
+                        regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
                         vt         <= VT_FRAME_PTR0;
                     end
 
@@ -366,6 +497,10 @@ module np_vc2 #(
                             fetch_a    <= regs[R_VIDEO_ENTRY][14:0];
                             fetch_wait <= 1'b1;
                             y_ctr      <= 11'h0;
+                        // The vertical position pulse also positions the
+                        // cursor vertically - VT_VPOS_VC_N - which is what
+                        // makes CURSOR_Y safe to write at any time.
+                        regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
                             vt         <= VT_FRAME_PTR0;
                         end else begin
                             lines_left <= ram_q;

@@ -198,7 +198,8 @@ module newport #(
         .vblank (vc2_vblank),
         .pix_x  (vc2_x),
         .pix_y  (vc2_y),
-        .vert_int (vc2_vint)
+        .vert_int (vc2_vint),
+        .cursor_pix (vc2_cursor)
     );
 
     // ---- the rasteriser --------------------------------------------------------
@@ -236,6 +237,8 @@ module newport #(
 
     // ---- the display chain -----------------------------------------------------
     logic  [4:0] did;
+    logic  [1:0] vc2_cursor, cursor_q;
+    logic  [7:0] xmap0_curs_cmap;
     logic [23:0] xmap0_mode, xmap1_mode;
     logic [12:0] cmap_index;
     logic [23:0] cmap0_rgb, cmap1_rgb;
@@ -249,13 +252,13 @@ module newport #(
         .clk (clk), .reset (reset),
         .sel (xmap0_sel), .we (dcb_we), .crs (dcb_crs),
         .wdata (dcb_wdata), .rdata (xmap0_rdata),
-        .look_did (did), .look_mode (xmap0_mode)
+        .look_did (did), .look_mode (xmap0_mode), .curs_cmap (xmap0_curs_cmap)
     );
     np_xmap9 #(.REVISION(8'd3)) u_xmap1 (
         .clk (clk), .reset (reset),
         .sel (xmap1_sel), .we (dcb_we), .crs (dcb_crs),
         .wdata (dcb_wdata), .rdata (xmap1_rdata),
-        .look_did (did), .look_mode (xmap1_mode)
+        .look_did (did), .look_mode (xmap1_mode), .curs_cmap ()
     );
 
     // CMAP 0's revision carries the board revision in [6:4] and the frame
@@ -311,6 +314,16 @@ module newport #(
         end
     end
 
+    // THE CURSOR IS ONE STAGE AHEAD AND HAS TO BE HELD BACK. It is generated
+    // from VC2's own counters, which is where the frame buffer ADDRESS comes
+    // from; the word for that address arrives a cycle later. Combining them
+    // without this register puts the pointer one pixel left of everything it
+    // is drawn over, which is exactly the kind of thing that survives a glance.
+    always_ff @(posedge clk) begin
+        if (reset)        cursor_q <= 2'd0;
+        else if (ce_pix)  cursor_q <= vc2_cursor;
+    end
+
     // The mode table entry: [1] overlay enable, [7:3] colour map page,
     // [9:8] pixel mode (0 = colour index), [11:10] pixel size.
     wire  [1:0] pix_mode = xmap0_mode[9:8];
@@ -320,14 +333,23 @@ module newport #(
 
     // 12bpp indexes only the top page of the map; every other index size uses
     // the mode table's page directly.
-    assign cmap_index = (pix_size == 2'd2) ? {cmap_msb[4], 12'h0} | {5'b0, fb_rgb[7:0]}
-                                           : {cmap_msb, fb_rgb[7:0]};
+    // THE CURSOR TAKES PRIORITY OVER THE PIXEL UNDER IT, and it indexes the
+    // map somewhere else entirely: (XMAP's cursor page << 5) | its two bits,
+    // which is what IRIS's compositor does. Zero is transparent, so a cursor
+    // that is off, or off this pixel, changes nothing.
+    wire [12:0] cmap_index_fb = (pix_size == 2'd2)
+                              ? {cmap_msb[4], 12'h0} | {5'b0, fb_rgb[7:0]}
+                              : {cmap_msb, fb_rgb[7:0]};
+    assign cmap_index = (cursor_q != 2'd0)
+                      ? {xmap0_curs_cmap, 5'b0} | {11'b0, cursor_q}
+                      : cmap_index_fb;
 
     logic [23:0] pix_rgb;
     always_comb begin
         if (dbg_raw_index) begin
-            // The index itself, as grey. See the port comment.
-            pix_rgb = {3{fb_rgb[7:0]}};
+            // The index itself, as grey - and the cursor as white, so that the
+            // debug view does not report a pointer-shaped hole.
+            pix_rgb = (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
         end else if (pix_mode == 2'd0) begin
             // Colour index: 0x00BBGGRR out of the map.
             pix_rgb = cmap0_rgb;
