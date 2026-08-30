@@ -29,8 +29,13 @@ defaults**, a zeroed `config/SGIINDY.CFG` - graphics Fitted, caches On, memory
 **IT IS ALSO, RIGHT NOW, NOT COMING UP.** Redeployed and md5-verified, the same
 bitstream boots the PROM (exception vectors and szmem's patterns are in DDR3),
 runs REX3 (it wipes a marker off the whole frame buffer), **clears the screen to
-index 0 and stops, with no video signal at all**. So the machine gets to
-`rex3Clear` and no further.
+index 0, and stops.** The machine gets to `rex3Clear` and no further.
+
+**The video signal is FINE - an earlier version of this paragraph said there was
+none, and that was wrong.** One capture failed and was written up as "no video
+at all"; the next relaunch captured a screenshot normally. The raster comes up.
+The screen is black because the frame buffer is black, which is a different
+fault entirely and points somewhere else. Do not go looking at VC2.
 
 ### What was measured, after four wrong explanations
 
