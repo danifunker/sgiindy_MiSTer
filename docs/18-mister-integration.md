@@ -71,10 +71,55 @@ pixels checked and zero misses, which reads like success.
 
 ## What will be wrong on the first build
 
-### 1. The refresh is about 28 Hz, and that is the only thing left wrong
+### 0. The frame buffer stores eight bytes a pixel to display one of them
 
-**Fixed since this was first written: the raster is now exact, and the pixel
-rate has doubled.** What is left is a refresh rate.
+**This is now the single most valuable change left in this file's scope, and
+hardware is what promoted it.** The store is one 64-bit word per pixel - 24
+bits of drawing planes, 24 of auxiliary, on a 2048-pixel stride - so a visible
+line is 1344 words. At one core clock per pixel that is **0.80 words a clock
+against a DDR3 port whose absolute peak is 1.00**, before the CPU or the
+rasteriser ask for anything. A DE10-Nano delivered 0.52 and missed the first
+710 pixels of every line, for ever; `PIX_DIV` is 2 again because of it, at
+about 14 Hz.
+
+**The display never reads seven of those eight bytes.** `newport.sv` takes
+`pix_word[7:0]` in index mode and `[23:0]` in packed RGB, and it never touches
+the auxiliary planes at all - this core builds no overlay, no popup planes and
+no cursor.
+
+**IRIS stores them as two separate arrays, which is the shape to copy.**
+`rex3.rs` has `fb_rgb: Box<[u32]>` and `fb_aux: Box<[u32]>`, both
+2048x1024 and both indexed `y * 2048 + x`, and `compositor.rs` reads `fb_aux`
+only for the popup bits (`raw_aux >> 2`) and the overlay byte. Two regions of
+four bytes a pixel is therefore not a compression trick, it is what the
+reference implementation does.
+
+The consequences are all good:
+
+| | bytes fetched per pixel | words/clock at `PIX_DIV = 1` |
+|---|---|---|
+| now | 8 | 0.80 |
+| split planes, display reads RGB only | 4 | **0.39** |
+
+That is `PIX_DIV = 1` and the 27 Hz back, with room to spare for the other two
+masters. One 64-bit read then carries **two adjacent pixels**, so REX3's
+per-pixel write picks a half with the byte enables `ddr3_mux.sv` already
+honours, and `fb_linecache.sv` fetches 660 words a line instead of 1344.
+
+What it costs: `np_rex3.sv`'s `fb_byte_addr` becomes a per-plane address,
+`ddr3_mux.sv` grows a region, and every test that knows the frame buffer's
+shape - `tests/rex3_replay.py`, `--fbdump` - has to follow. It is a real
+change and it is the right one.
+
+### 1. The refresh is about 14 Hz, and the fix is above, not a faster clock
+
+**Corrected by hardware: the pixel rate is halved again, and the refresh with
+it.** The raster is exact. `PIX_DIV` went to 1 for a free doubling of the frame
+rate and the doubling was not free - see section 0 - so it is 2, and the frame
+comes out at about 14 Hz. **A faster core clock does not fix this and neither
+does a second clock domain**: both make the display ask for MORE memory per
+second, and memory is what it has run out of. Fetching half as much per pixel
+is the fix.
 
 VC2 walks its timing table in units of two pixel clocks and derives those by
 dividing `clk_sys`. The table the PROM loads was written for a **107.5 MHz**
