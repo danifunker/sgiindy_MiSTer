@@ -1,6 +1,6 @@
 //============================================================================
-//  fb_linecache - a scanline ahead of the display, so DDR3 latency never
-//  reaches the pixel.
+//  fb_linecache - several scanlines ahead of the display, so DDR3 latency
+//  never reaches the pixel.
 //
 //  THE PROBLEM THIS SOLVES IS NOT BANDWIDTH, IT IS THAT NEWPORT DOES NOT WAIT.
 //  `newport.sv` issues one frame buffer read per pixel and latches whatever
@@ -19,21 +19,62 @@
 //  the same core, and this is a property of the memory system it was plugged
 //  into rather than of the Indy.
 //
+//  AND THE DISPLAY CAN BE ASKING FOR MORE THAN THE BRIDGE HAS, WHICH IS NOT
+//  SOMETHING A CACHE CAN FIX. A DE10-Nano measured it: the first 710 pixels of
+//  every 1318-pixel line missed, every line, for ever. The arithmetic says why
+//  and it is not subtle. At one pixel per clock the display wants LINE_WORDS
+//  words per 1680-clock line - 0.80 words a clock - and the MiSTer DDR3 port
+//  is 64 bits at 50 MHz, so its ABSOLUTE PEAK is 1.00. The display alone was
+//  asking for eighty per cent of the bus before the CPU or the rasteriser
+//  asked for anything, and it measured 0.52 delivered.
+//
+//  MORE BUFFERS DO NOT HELP A SUSTAINED DEFICIT, and that was worth measuring
+//  rather than assuming: at one pixel per clock, going from two line buffers
+//  to eight moved the miss rate from 98.8% to 97%. Buffers absorb jitter. They
+//  cannot absorb a rate that is simply too low, and nor can a bigger burst -
+//  64 to 255 words a burst moved it by a tenth.
+//
+//  WHAT FIXED IT WAS HALVING THE DEMAND: newport.sv's PIX_DIV is 2 again.
+//  THAT PARAMETER AND THIS FILE ARE COUPLED AND NOTHING ENFORCES IT. PIX_DIV
+//  went from 2 to 1 to double the frame rate, which also doubled the display's
+//  memory demand and pushed it past what the bridge can supply - and the unit
+//  test in tb_linecache.cpp still said PIX_DIV was 2, so it handed the fill
+//  engine exactly twice the time it had and passed with zero misses while the
+//  hardware missed more than half of every line. A model kinder than the
+//  hardware is not a test of the hardware. (Do not start a line comment in
+//  this file with the tool's name - it is read as a pragma.)
+//
+//  THE REAL FIX IS TO STOP FETCHING EIGHT BYTES TO USE ONE. The store is a
+//  64-bit word per pixel - 24 bits of drawing planes, 24 of auxiliary - and
+//  the display reads `pix_word[7:0]` in index mode and never reads the
+//  auxiliary planes at all. Packing the drawing planes so one 64-bit read
+//  serves two pixels would halve the traffic and let the pixel clock go back
+//  to one per clock. That is a REX3 addressing change and it is written up in
+//  docs/18-mister-integration.md rather than attempted here.
+//
+//  NBUF IS FOUR RATHER THAN TWO FOR MARGIN, NOT AS THE FIX. Two passes the
+//  unit test at PIX_DIV=2, but that test has one master on the bus and the
+//  machine has three; four buffers give the fill three line times instead of
+//  one to absorb whatever the CPU and the rasteriser take. Each buffer is
+//  LINE_WORDS x 64 bits of M10K, so four is 344 Kbit of the device's 5.6.
+//
 //  HOW IT KNOWS WHAT TO FETCH. The display's access pattern is not a guess -
 //  it is fully determined. VC2 walks x from 0 across a line and advances y at
 //  the end of each visible one, so a request's line number is
-//  `addr / (STRIDE * 8)` and the next line wanted is always that plus one.
-//  Two buffers: one being read, one being filled with the line after it. At
-//  the top of a frame the sequence jumps from the last line back to zero,
+//  `addr / (STRIDE * 8)` and the lines are wanted strictly in order. The
+//  buffers are therefore a ring: `fill_idx` walks them, `fill_line` counts up,
+//  and the fill is throttled to stay less than NBUF ahead of the line being
+//  displayed - which is exactly the condition that stops it overwriting a
+//  buffer still in use. At the top of a frame the sequence jumps back to zero,
 //  which no "fetch the next one" rule predicts - hence `vs`, which restarts
-//  the prefetcher at line zero during vertical blanking, where there is a
-//  whole frame's worth of time to do it.
+//  the ring during vertical blanking, where there is time to refill it.
 //
 //  A MISS SERVES BLACK RATHER THAN STALLING, because stalling is not on the
-//  menu: there is no back-pressure on this path. A miss can only happen on the
-//  first frame after reset or if a fill did not finish in a line time, and it
-//  costs one line of black, which is visible and self-correcting - the honest
-//  failure. `miss` is brought out so that a top level can count them.
+//  menu: there is no back-pressure on this path. A miss costs one pixel of
+//  black, which is visible and self-correcting - the honest failure. `miss` is
+//  brought out so that a top level can count them, and `dbg_miss_mark` makes
+//  one visible on a screen, which is how the DE10-Nano's were found at all: a
+//  miss and a frame buffer that is genuinely black look identical otherwise.
 //============================================================================
 
 module fb_linecache #(
@@ -45,10 +86,14 @@ module fb_linecache #(
     // timing table in np_timing.h is 1318 pixels; fetching the whole 2048
     // would cost a third more memory traffic for nothing.
     parameter int LINE_WORDS = 1344,
-    // Words per burst. The bridge takes up to 255; 64 keeps a single fill from
-    // owning the bus for too long at a stretch, which matters because the CPU
-    // is behind the same arbiter.
-    parameter int BURST      = 64
+    // Line buffers. NBUF-1 is how many line times a fill gets. Margin against
+    // the other two masters, not the fix for the deficit - see the header.
+    parameter int NBUF       = 4,
+    // Words per burst. The bridge takes up to 255. Larger is slightly better
+    // for the display and worse for everyone behind the same arbiter, and the
+    // measurement says it barely matters: 64 to 255 moved the miss rate by a
+    // tenth when the display was over-subscribed.
+    parameter int BURST      = 128
 ) (
     input  logic        clk,
     input  logic        reset,
@@ -76,147 +121,159 @@ module fb_linecache #(
     // A miss serves black, which is indistinguishable from a frame buffer that
     // really is black - and on the first hardware run those were the two
     // candidates. With this set a miss serves index 0x80 instead, so a display
-    // that is never being fed shows as mid-grey under newport's
-    // dbg_raw_index rather than as nothing at all.
+    // that is not being fed shows as mid-grey under newport's dbg_raw_index
+    // rather than as nothing at all. It is what found the fill shortfall.
     input  logic        dbg_miss_mark
 );
 
     localparam int AW = $clog2(LINE_WORDS);
     localparam int LINE_SHIFT = $clog2(STRIDE) + 3;   // bytes per line, log2
-
-    // Two line buffers. Simple dual port: one write port for the fill, one
-    // read port for the display - which is the shape that infers as M10K, and
-    // getting it wrong here costs the same way it cost the real-time clock
-    // 30,430 ALUTs. See syn/README.md.
-    logic [63:0] buf0 [LINE_WORDS];
-    logic [63:0] buf1 [LINE_WORDS];
+    localparam int SW = $clog2(NBUF);
 
     // Which line each buffer holds, and whether it holds anything.
-    logic [10:0] tag0, tag1;
-    logic        val0, val1;
+    logic [10:0]     tag [NBUF];
+    logic [NBUF-1:0] val;
 
-    // The buffer being filled. The other one is the one being displayed.
-    logic        fill_sel;
+    // The ring: which buffer is being filled, and with which line.
+    logic [SW-1:0] fill_idx;
+    logic [10:0]   fill_line;
+    logic [AW:0]   fill_pos;      // words already placed in the buffer
+    logic  [8:0]   burst_left;
 
-    wire [10:0] req_line = px_addr[LINE_SHIFT + 10 : LINE_SHIFT];
-    wire [AW-1:0] req_off  = px_addr[LINE_SHIFT-1 : 3];
-
-    wire hit0 = val0 && (tag0 == req_line);
-    wire hit1 = val1 && (tag1 == req_line);
-
-    // ---- the fill engine -------------------------------------------------
-    typedef enum logic [1:0] { F_IDLE, F_REQ, F_DATA } fstate_t;
-    fstate_t      fst;
-    logic [10:0]  fill_line;
-    logic [AW:0]  fill_pos;      // words already placed in the buffer
-    logic  [8:0]  burst_left;
-
-    // The line the prefetcher should be working on: one past whatever the
-    // display last asked for, or zero after a vertical sync.
-    logic [10:0]  want_line;
     // The line the display is actually reading, latched on a request. Between
     // requests px_addr still moves - it is combinational from VC2's counters,
-    // which keep running through blanking - so the eviction decision must not
-    // look at it directly.
+    // which keep running through blanking - so the throttle must not look at
+    // it directly.
     logic [10:0]  disp_line;
     logic         vs_d, restart;
 
-    // Widths spelled out rather than left to inference: this is an address,
-    // and an address that silently grew or lost a bit is the expensive kind of
-    // mistake. See ddr3_mux.sv, where exactly that truncated a region base.
-    wire [31:0] line_base = 32'({21'b0, fill_line} << LINE_SHIFT);
-    wire [31:0] fill_byte = 32'({20'b0, fill_pos} << 3);
+    wire [10:0]   req_line = px_addr[LINE_SHIFT + 10 : LINE_SHIFT];
+    wire [AW-1:0] req_off  = px_addr[LINE_SHIFT-1 : 3];
+
+    // ---- the buffers -----------------------------------------------------
+    // ONE ARRAY PER BUFFER, NOT ONE ARRAY OF ARRAYS. An array indexed by a
+    // variable buffer number is a mux in front of a memory, and Quartus infers
+    // no memory at all from that - it builds LINE_WORDS x 64 x NBUF
+    // flip-flops and says nothing. Each of these is a plain single-write,
+    // single-read block with the read going straight into a register, which is
+    // the shape that becomes an M10K; the mux is AFTER the registers.
+    logic [63:0] q [NBUF];
+    logic        fill_wr;
+
+    genvar g;
+    generate
+        for (g = 0; g < NBUF; g++) begin : lbuf
+            logic [63:0] mem [LINE_WORDS];
+            // ABOVE ANY RESET, for the reason np_vc2.sv spells out: a reset on
+            // the register an array reads into stops the inference. The read
+            // is unconditional anyway.
+            always_ff @(posedge clk) begin
+                q[g] <= mem[req_off];
+                if (fill_wr && fill_idx == SW'(g)) mem[fill_pos[AW-1:0]] <= fbr_dout;
+            end
+        end
+    endgenerate
+
+    // ---- the display's read ----------------------------------------------
+    // Registered, one cycle after the request, which is exactly what the
+    // simulator's memory did and what newport.sv's readout already expects.
+    logic [SW-1:0] hit_idx, sel_q;
+    logic          hit_any;
+    always_comb begin
+        hit_idx = '0;
+        hit_any = 1'b0;
+        for (int i = 0; i < NBUF; i++)
+            if (val[i] && tag[i] == req_line) begin
+                hit_idx = SW'(i);
+                hit_any = 1'b1;
+            end
+    end
+
+    logic ack_q, miss_q;
+    assign px_rdata = miss_q ? (dbg_miss_mark ? 64'h80 : 64'h0) : q[sel_q];
+    assign px_ack   = ack_q;
+    assign miss     = miss_q;
+
+    // ---- the fill engine -------------------------------------------------
+    typedef enum logic [1:0] { F_IDLE, F_REQ, F_DATA } fstate_t;
+    fstate_t fst;
+
+    wire [31:0] line_base  = 32'({21'b0, fill_line} << LINE_SHIFT);
+    wire [31:0] fill_byte  = 32'({20'b0, fill_pos} << 3);
     wire [31:0] words_left = 32'(LINE_WORDS) - 32'({20'b0, fill_pos});
 
     assign fbr_addr  = line_base + fill_byte;
     assign fbr_burst = (words_left < 32'(BURST)) ? words_left[7:0] : 8'(BURST);
     assign fbr_req   = (fst == F_REQ);
 
-    // ---- the display's read ----------------------------------------------
-    // REGISTERED, one cycle after the request, which is exactly what the
-    // simulator's memory did and what newport.sv's readout already expects.
-    logic [63:0] q0, q1;
-    logic        sel_q, ack_q, miss_q;
+    assign fill_wr = (fst == F_DATA) && fbr_dout_valid;
 
-    assign px_rdata = miss_q ? (dbg_miss_mark ? 64'h80 : 64'h0)
-                             : (sel_q ? q1 : q0);
-    assign px_ack   = ack_q;
-    assign miss     = miss_q;
+    // HOW FAR AHEAD THE FILL IS ALLOWED TO RUN, and this one comparison is the
+    // whole of the eviction policy. The lines are wanted strictly in order, so
+    // the buffer `fill_idx` is about to overwrite holds line fill_line - NBUF,
+    // which the display has already passed as long as the fill is less than
+    // NBUF lines ahead of it. Signed, because at the top of a frame the fill
+    // restarts at zero while `disp_line` is still the last line of the frame
+    // before - and an unsigned compare there reads as "enormously ahead" and
+    // stalls the prefetcher for a whole frame.
+    wire signed [12:0] ahead = $signed({2'b0, fill_line}) - $signed({2'b0, disp_line});
+    wire may_fill = restart || (ahead < 13'sd0) || (ahead < $signed(13'(NBUF)));
 
     always_ff @(posedge clk) begin
-        // ABOVE THE RESET, for the reason np_vc2.sv spells out: a reset on the
-        // register an array reads into stops Quartus inferring a memory, and
-        // these two are 172 Kbit that would become flip-flops. The reads are
-        // unconditional anyway.
-        q0 <= buf0[req_off];
-        q1 <= buf1[req_off];
-
         if (reset) begin
-            val0 <= 1'b0; val1 <= 1'b0;
-            tag0 <= 11'h7FF; tag1 <= 11'h7FF;
-            fill_sel <= 1'b0;
-            fst <= F_IDLE;
+            val <= '0;
+            for (int i = 0; i < NBUF; i++) tag[i] <= 11'h7FF;
+            fill_idx  <= '0;
             fill_line <= 11'd0;
-            fill_pos <= '0;
+            fill_pos  <= '0;
             burst_left <= 9'd0;
-            want_line <= 11'd0;
             disp_line <= 11'h7FF;
-            vs_d <= 1'b0;
-            restart <= 1'b1;
-            ack_q <= 1'b0; miss_q <= 1'b0; sel_q <= 1'b0;
+            fst       <= F_IDLE;
+            vs_d      <= 1'b0;
+            restart   <= 1'b1;
+            ack_q     <= 1'b0;
+            miss_q    <= 1'b0;
+            sel_q     <= '0;
         end else begin
             ack_q  <= 1'b0;
             miss_q <= 1'b0;
 
-            // ---- the display's read, unconditionally one cycle -----------
-            // (the array read itself is hoisted above the reset, see above)
             if (px_req) begin
-                ack_q  <= 1'b1;
-                sel_q  <= hit1;
-                miss_q <= !(hit0 || hit1);
-            end
-
-            // ---- what to prefetch ----------------------------------------
-            // A request for line L means L+1 is next. That is the whole
-            // policy, and it is right because the display never skips.
-            if (px_req) begin
-                want_line <= req_line + 11'd1;
+                ack_q     <= 1'b1;
+                sel_q     <= hit_idx;
+                miss_q    <= !hit_any;
                 disp_line <= req_line;
             end
 
             vs_d <= vs;
             if (vs && !vs_d) begin
-                // A new frame. The next line wanted is zero, and there is a
-                // whole vertical blanking interval to fetch it in.
-                want_line <= 11'd0;
-                restart   <= 1'b1;
+                // A new frame. Everything held is from the frame before and
+                // none of it will be asked for again, so throw it away and
+                // refill from line zero - there is a whole vertical blanking
+                // interval to get ahead in.
+                restart <= 1'b1;
             end
 
-            // ---- the fill engine -----------------------------------------
             case (fst)
                 F_IDLE: begin
-                    // Start a line whenever the one we want is not already
-                    // resident somewhere.
-                    automatic logic have =
-                        (val0 && tag0 == want_line) || (val1 && tag1 == want_line);
-                    // Buffer 0 is serving the display, so buffer 1 is free.
-                    automatic logic use1 = (val0 && tag0 == disp_line);
-                    if (restart || !have) begin
+                    if (restart) begin
                         restart   <= 1'b0;
-                        fill_line <= want_line;
+                        val       <= '0;
+                        fill_idx  <= '0;
+                        fill_line <= 11'd0;
                         fill_pos  <= '0;
-                        // FILL WHICHEVER BUFFER THE DISPLAY IS NOT READING,
-                        // and invalidate that same one. The first version of
-                        // this had the sense inverted and invalidated the
-                        // other buffer as well, so a fill could land in the
-                        // line being displayed: the unit test saw it as a run
-                        // of pixels from the wrong line AND as a tenth of
-                        // every frame missing, because a buffer that was being
-                        // filled was also being read and then thrown away.
-                        fill_sel  <= use1;
-                        if (use1) val1 <= 1'b0;
-                        else      val0 <= 1'b0;
+                        // AND THE DISPLAY POINTER TOO. It is still holding the
+                        // last visible line of the frame before - px_req stops
+                        // during blanking - so leaving it there makes the fill
+                        // look a thousand lines behind and it never throttles.
+                        disp_line <= 11'd0;
                         fst       <= F_REQ;
+                    end else if (may_fill) begin
+                        fill_pos <= '0;
+                        // The buffer about to be overwritten stops being
+                        // valid the moment the first word lands in it.
+                        val[fill_idx] <= 1'b0;
+                        fst      <= F_REQ;
                     end
                 end
 
@@ -226,16 +283,18 @@ module fb_linecache #(
                 end
 
                 default: if (fbr_dout_valid) begin
-                    if (fill_sel) buf1[fill_pos[AW-1:0]] <= fbr_dout;
-                    else          buf0[fill_pos[AW-1:0]] <= fbr_dout;
                     fill_pos   <= fill_pos + 1'b1;
                     burst_left <= burst_left - 9'd1;
                     if (burst_left <= 9'd1) begin
                         if (int'(fill_pos) + 1 >= LINE_WORDS) begin
-                            // The line is complete: publish it.
-                            if (fill_sel) begin tag1 <= fill_line; val1 <= 1'b1; end
-                            else          begin tag0 <= fill_line; val0 <= 1'b1; end
-                            fst <= F_IDLE;
+                            // The line is complete: publish it and step the
+                            // ring on.
+                            tag[fill_idx] <= fill_line;
+                            val[fill_idx] <= 1'b1;
+                            fill_idx      <= (fill_idx == SW'(NBUF-1))
+                                             ? '0 : fill_idx + 1'b1;
+                            fill_line     <= fill_line + 11'd1;
+                            fst           <= F_IDLE;
                         end else begin
                             fst <= F_REQ;
                         end

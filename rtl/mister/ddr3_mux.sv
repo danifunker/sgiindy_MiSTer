@@ -324,10 +324,18 @@ module ddr3_mux #(
             // one-cycle memory and never instantiates this file, and tb_ddr3
             // drove every master as a pulse. Its phase 3 is REX3's shape now.
             for (int i = 0; i < NM; i++) begin
+                // Blocked only in the cycle that carries the master's own
+                // acknowledgement, and only when what it is presenting is the
+                // transaction just completed. Leaving `ack_q` out of it - "a
+                // held request that has not changed is never new" - hangs
+                // REX3's screen-to-screen copy, where DR_SRC_RD and DR_DST_RD
+                // are two reads of the SAME address with the line never
+                // dropping between them: the second would never be taken and
+                // the rasteriser would wait for ever.
                 if (!rq[i]) rq_seen[i] <= 1'b0;
-                else if (!pend[i] && (!rq_seen[i]
-                                      || rq_we[i]   != p_we[i]
-                                      || rq_addr[i] != p_addr[i])) begin
+                else if (!pend[i] && !(rq_seen[i] && ack_q[i]
+                                       && rq_we[i]   == p_we[i]
+                                       && rq_addr[i] == p_addr[i])) begin
                     pend[i]    <= 1'b1;
                     rq_seen[i] <= 1'b1;
                     if (i == M_FBR) p_burst <= fbr_burst;

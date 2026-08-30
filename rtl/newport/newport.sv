@@ -29,14 +29,27 @@ module newport #(
     parameter int          VC2_RAM_WORDS  = 32768,
     // Core clocks per pixel out of the video timing generator.
     //
-    // ONE, NOT TWO, AND THAT IS A FREE DOUBLING OF THE FRAME RATE. It was two
-    // so that the frame buffer read port was not asked for a word every single
-    // clock - which mattered when every pixel was a memory transaction, and
-    // stopped mattering when rtl/mister/fb_linecache.sv put a scanline of
-    // block RAM in front of it. The raster's geometry does not change: the
-    // timing table's durations are in units of two pixel clocks either way,
-    // so this changes when the pixels come out and not which ones.
-    parameter int          PIX_DIV        = 1
+    // TWO, AND THE DOUBLING TO ONE WAS NOT FREE AFTER ALL. It was two so that
+    // the frame buffer read port was not asked for a word every single clock;
+    // it went to one on the argument that rtl/mister/fb_linecache.sv had put a
+    // scanline of block RAM in front of it, so the port no longer cared. That
+    // argument is wrong, and a DE10-Nano is what said so. The line cache moves
+    // WHEN the words are needed, not HOW MANY: a visible line is still
+    // LINE_WORDS 64-bit words and it still has one line time to arrive.
+    //
+    // At one clock per pixel that is 0.80 words a clock, against a MiSTer DDR3
+    // port whose absolute peak is 1.00 - eighty per cent of the bus for the
+    // display alone, before the CPU or the rasteriser ask for anything. The
+    // hardware delivered 0.52 and missed the first 710 pixels of every line,
+    // for ever, and the screen was black.
+    //
+    // THE RASTER'S GEOMETRY DOES NOT CHANGE EITHER WAY - the timing table's
+    // durations are in units of two pixel clocks - so this decides when the
+    // pixels come out and not which ones. What it costs is the frame rate:
+    // about 14 Hz rather than 27. The way back to one is to stop fetching
+    // eight bytes per pixel to use one of them; see fb_linecache.sv's header
+    // and docs/18-mister-integration.md.
+    parameter int          PIX_DIV        = 2
 ) (
     input  logic        clk,
     input  logic        reset,

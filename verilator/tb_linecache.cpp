@@ -39,6 +39,17 @@ static const int H_VIS = 1318, H_TOTAL = 1680;
 static const int V_VIS = 1024, V_TOTAL = 1065;
 static const int V_SYNC_AT = 1030;       // a few lines into the blanking
 static const int STRIDE = 2048;          // pixels per frame buffer line
+// CORE CLOCKS PER PIXEL, AND IT MUST MATCH newport.sv's PARAMETER OF THE SAME
+// NAME. NOTHING ENFORCES THAT AND IT HAS ALREADY BEEN WRONG ONCE: the RTL went
+// to 1 to double the frame rate and this stayed at 2, so the fill engine was
+// handed exactly twice the time it had on hardware. The test passed with zero
+// misses while a real DE10-Nano missed the first 710 pixels of every line and
+// showed a black screen. A model kinder than the hardware is not a test of the
+// hardware - it is a reason to trust a design that does not work.
+//
+// If you change one, change the other, and re-run this. At PIX_DIV=1 this test
+// reports about 1.25 million misses a frame, which is what the hardware was
+// doing; at 2 it reports none.
 static const int PIX_DIV = 2;            // core clocks per pixel
 
 static Vfb_linecache *dut;

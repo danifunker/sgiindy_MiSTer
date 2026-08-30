@@ -383,6 +383,33 @@ int main(int argc, char **argv)
     printf("  %llu read-modify-write pixels, %llu with a wrong destination\n",
            (unsigned long long)rmw_done, (unsigned long long)rmw_bad);
 
+    // ---- phase 4: two identical reads back to back, line never dropping ---
+    // REX3's screen-to-screen copy reads the source and then the destination,
+    // and when they are the same pixel that is the SAME address twice with
+    // `fb_req` high throughout. A latch rule that says "a held request that
+    // has not changed is never new" refuses the second one and the rasteriser
+    // waits for ever, which is a hang rather than a wrong picture.
+    printf("\nphase 4: two identical reads with the request line held ...\n");
+    uint64_t pairs = 0;
+    for (int n = 0; n < 200; n++) {
+        uint32_t a = (uint32_t)(n % 512) * 8;
+        uint64_t want = fb_shadow.count(a) ? fb_shadow[a] : 0;
+        bool ok = true;
+        for (int half = 0; half < 2 && ok; half++) {
+            dut->fbw_addr = a; dut->fbw_we = 0; dut->fbw_req = 1;
+            int spins = 0;
+            while (!dut->fbw_ack && ++spins < 4000) keep_ram_busy();
+            if (!dut->fbw_ack) { fail("identical back-to-back read hung", a, want, 0);
+                                 ok = false; break; }
+            if (dut->fbw_rdata != want) fail("identical read", a, want, dut->fbw_rdata);
+            keep_ram_busy();          // the one-cycle reaction delay, line still up
+        }
+        if (!ok) break;
+        dut->fbw_req = 0; tick();
+        pairs++;
+    }
+    printf("  %llu identical read pairs completed\n", (unsigned long long)pairs);
+
     printf("\n%-6s %10s %10s %12s\n", "master", "issued", "acked", "worst wait");
     for (Master *m : all)
         printf("%-6s %10llu %10llu %12llu\n", m->name,
@@ -417,6 +444,8 @@ int main(int argc, char **argv)
     // THE ONE HARDWARE FOUND. A held request must not be taken twice.
     check("a held read-modify-write master read back its own writes",
           rmw_done == (uint64_t)RMW_PIXELS && rmw_bad == 0);
+    check("two identical held reads back to back both completed",
+          pairs == 200);
 
     printf(failures ? "\nDDR3MUX: FAIL\n" : "\nDDR3MUX: PASS\n");
     delete dut;
