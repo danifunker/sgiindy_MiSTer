@@ -139,6 +139,59 @@ static const std::vector<Case> CASES = {
         true, 0, false, 0
     },
     {
+        // THE READ PATH HAS BEEN CLEARED THREE WAYS AND THE WRITE PATH NOT AT
+        // ALL, which is the wrong way round now that the panic's bad pointer
+        // looks like a store that lost a byte: 0x00747474 is 0xa8747474 with
+        // its top byte missing, on a boot whose memory had been zeroed. Eight
+        // byte stores at the eight offsets of one doubleword, read back as a
+        // single `ld`, is the tightest check there is on byte-enable
+        // placement - a lane that goes astray shows up as a zero in a known
+        // position rather than as a wrong answer somewhere later.
+        "byte stores at all 8 offsets, read back as one doubleword",
+        "does every byte enable land where it should?",
+        {
+            0xff402000,  // sd    $zero, 0x2000($k0)   clear the target
+            0x24080011,  // addiu $t0, $zero, 0x11
+            0xa3482000,  // sb    $t0, 0x2000($k0)
+            0x24080022,  // addiu $t0, $zero, 0x22
+            0xa3482001,  // sb    $t0, 0x2001($k0)
+            0x24080033,  // addiu $t0, $zero, 0x33
+            0xa3482002,  // sb    $t0, 0x2002($k0)
+            0x24080044,  // addiu $t0, $zero, 0x44
+            0xa3482003,  // sb    $t0, 0x2003($k0)
+            0x24080055,  // addiu $t0, $zero, 0x55
+            0xa3482004,  // sb    $t0, 0x2004($k0)
+            0x24080066,  // addiu $t0, $zero, 0x66
+            0xa3482005,  // sb    $t0, 0x2005($k0)
+            0x24080077,  // addiu $t0, $zero, 0x77
+            0xa3482006,  // sb    $t0, 0x2006($k0)
+            0x24080088,  // addiu $t0, $zero, 0x88
+            0xa3482007,  // sb    $t0, 0x2007($k0)
+            0xdf492000,  // ld    $t1, 0x2000($k0)
+            0xff491000,  // sd    $t1, 0x1000($k0)     publish all 64 bits
+        },
+        false, 0x55667788, true, 0x11223344
+    },
+    {
+        // The same question for wider stores: a 32-bit store into each half of
+        // a doubleword, which is the access the PROM's pointer writes actually
+        // are.
+        "word stores into both halves of a doubleword",
+        "does a 32-bit store write all four of its bytes?",
+        {
+            0xff402000,  // sd    $zero, 0x2000($k0)
+            0x3c08a874,  // lui   $t0, 0xa874
+            0x35087474,  // ori   $t0, $t0, 0x7474     -> the panic's pointer
+            0xaf482000,  // sw    $t0, 0x2000($k0)
+            0x3c091122,  // lui   $t1, 0x1122
+            0x35293344,  // ori   $t1, $t1, 0x3344
+            0xaf492004,  // sw    $t1, 0x2004($k0)
+            0xdf492000,  // ld    $t1, 0x2000($k0)
+            0xff491000,  // sd    $t1, 0x1000($k0)
+        },
+        false, 0x11223344, true, 0xa8747474
+    },
+    {
         "load-use from PROM, ALL 64 BITS",
         "the constant has bit 31 set - is it sign-extended into the register?",
         {
