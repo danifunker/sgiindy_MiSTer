@@ -277,8 +277,7 @@ module sgi_hpc3 (
         // replaced by w, so its 0x10-granular index is addr[7:4] whichever
         // half is being read.
         else if (blk == BLK_HAL2)
-            hpc3_rd = (addr[7:4] == 4'h2) ? 32'h0000_4010
-                                          : 32'h0000_0000;
+            hpc3_rd = {16'h0, hal2_rdata};
         else
             hpc3_rd = 32'h0000_0000;
     endfunction
@@ -304,6 +303,32 @@ module sgi_hpc3 (
         end
     end
 
+    // ---- HAL2 -------------------------------------------------------------
+    // The audio processor's register file. It used to be a constant here -
+    // REV and nothing else - and the PROM's init at 0xBFC00BD0 wrote IAR and
+    // IDR into a hole. Those land in real registers now. See rtl/sgi/hal2.sv,
+    // and read its header before touching ISR: bit 0 is what that init spins
+    // on, and it has to stay clear.
+    //
+    // A HAL2 register is 16 bytes from the next, so addr[7:4] names one
+    // whichever half of the doubleword the CPU addressed - which is also why
+    // the read above replicates it into both halves, as the constant did.
+    // Writes take whichever half carries byte enables.
+    wire        hal2_sel = sel && (blk == BLK_HAL2);
+    wire        hal2_we  = hal2_sel && we && (wr_en[0] || wr_en[1]);
+    wire [15:0] hal2_wd  = wr_en[0] ? wval[0][15:0] : wval[1][15:0];
+    wire [15:0] hal2_rdata;
+
+    hal2 u_hal2 (
+        .clk    (clk),
+        .reset  (reset),
+        .sel    (hal2_sel),
+        .we     (hal2_we),
+        .regsel (addr[7:4]),
+        .wdata  (hal2_wd),
+        .rdata  (hal2_rdata)
+    );
+
     integer i;
     always_ff @(posedge clk) begin
         ack   <= 1'b0;
@@ -326,8 +351,10 @@ module sgi_hpc3 (
                         BLK_GEN:    gen[{addr[4:3], w[0]}]           <= wval[w];
                         BLK_CFGDMA: cfgdma[addr[11:9]]               <= wval[w];
                         BLK_CFGPIO: cfgpio[addr[11:8]]               <= wval[w];
-                        // HAL2 and the three write-only PBUS registers accept
-                        // and discard: nothing reads them back.
+                        // HAL2 has its own register file above and takes its
+                        // write from `hal2_we`. The three write-only PBUS
+                        // registers still accept and discard: nothing reads
+                        // them back.
                         default:    ;
                     endcase
                 end

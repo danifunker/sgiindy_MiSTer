@@ -101,6 +101,7 @@ CPUTEST_V = \
 	$(RTL)/sgi/sgi_mc.sv \
 	$(RTL)/sgi/mc_gio_dma.sv \
 	$(RTL)/sgi/sgi_hpc3.sv \
+	$(RTL)/sgi/hal2.sv \
 	$(RTL)/sgi/hpc3_scsi_dma.sv \
 	$(RTL)/sgi/sgi_ioc.sv \
 	$(RTL)/sgi/i8042.sv \
@@ -177,6 +178,15 @@ CPUONLY_V = tb_cpuonly.sv $(RTL)/cpu/r4300_bus.sv $(RTL)/cpu/generated/r4300_wra
 cpuonly: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_cpuonly --top-module tb_cpuonly 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vtb_cpuonly $(CPUONLY_V) tb_cpuonly.cpp
 	./obj_dir_cpuonly/Vtb_cpuonly
+
+# --- HAL2 register file unit test ------------------------------------------
+# The audio processor's IAR/IDR indirect file, checked against IRIS's decode.
+# One check in it is a boot-stopper rather than an audio bug: ISR bit 0 is what
+# the PROM's audio init spins on and it has to stay clear.
+#   make -C verilator hal2test
+hal2test:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_hal2 --top-module hal2 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vhal2 $(RTL)/sgi/hal2.sv tb_hal2.cpp
+	./obj_dir_hal2/Vhal2
 
 # --- MC GIO64 DMA fill engine unit test ------------------------------------
 # Checks the engine against a C++ transcription of IRIS's own dma_worker loop,

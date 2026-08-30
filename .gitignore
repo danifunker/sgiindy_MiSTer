@@ -66,6 +66,7 @@ verilator/obj_dir_cmapdbg/
 # The DDR3 mux and the frame buffer line cache each build their own.
 verilator/obj_dir_cpuonly/
 verilator/obj_dir_mcdma/
+verilator/obj_dir_hal2/
 verilator/obj_dir_ddr3/
 verilator/obj_dir_lcache/
 # And the rasteriser's standalone back-pressure test.
