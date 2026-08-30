@@ -86,9 +86,6 @@ module fb_linecache #(
     // timing table in np_timing.h is 1318 pixels; fetching the whole 2048
     // would cost a third more memory traffic for nothing.
     parameter int LINE_WORDS = 1344,
-    // Line buffers. NBUF-1 is how many line times a fill gets. Margin against
-    // the other two masters, not the fix for the deficit - see the header.
-    parameter int NBUF       = 4,
     // Words per burst. The bridge takes up to 255. Larger is slightly better
     // for the display and worse for everyone behind the same arbiter, and the
     // measurement says it barely matters: 64 to 255 moved the miss rate by a
@@ -128,6 +125,11 @@ module fb_linecache #(
 
     localparam int AW = $clog2(LINE_WORDS);
     localparam int LINE_SHIFT = $clog2(STRIDE) + 3;   // bytes per line, log2
+    // FIXED AT FOUR because the buffers are written out one by one; see the
+    // comment on them. NBUF-1 is how many line times a fill gets, which is
+    // margin against the other two masters rather than the fix for the
+    // bandwidth deficit - the header has that.
+    localparam int NBUF = 4;
     localparam int SW = $clog2(NBUF);
 
     // Which line each buffer holds, and whether it holds anything.
@@ -151,33 +153,61 @@ module fb_linecache #(
     wire [AW-1:0] req_off  = px_addr[LINE_SHIFT-1 : 3];
 
     // ---- the buffers -----------------------------------------------------
-    // ONE ARRAY PER BUFFER, NOT ONE ARRAY OF ARRAYS. An array indexed by a
-    // variable buffer number is a mux in front of a memory, and Quartus infers
-    // no memory at all from that - it builds LINE_WORDS x 64 x NBUF
-    // flip-flops and says nothing. Each of these is a plain single-write,
-    // single-read block with the read going straight into a register, which is
-    // the shape that becomes an M10K; the mux is AFTER the registers.
-    logic [63:0] q [NBUF];
+    // FOUR ARRAYS WRITTEN OUT LONGHAND, AND THAT IS NOT A STYLE CHOICE. The
+    // obvious version of this is a generate loop declaring one array per
+    // iteration, and Quartus infers NO MEMORY FROM IT AT ALL - an array
+    // declared inside a generate block, written behind that block-local
+    // declaration, is the shape the RAM inference does not recognise. It does
+    // not warn, either: the whole point of Info (276014) is the arrays it
+    // COULD see, and these produced no message whatsoever. What it produced
+    // was 166,268 registers against a device with about 84,000, a fit that
+    // failed at 291%, and no clue in the log.
+    //
+    // So: four plain arrays, four unconditional registered reads hoisted above
+    // any reset, and one plain enabled store each. The mux is AFTER the
+    // registers. This is the same shape the two-buffer version used and it is
+    // the only one measured to work here - see the memory note on Quartus RAM
+    // inference and syn/README.md.
+    //
+    // The cost is that NBUF is fixed at four rather than being a parameter.
+    // That is worth it: an elegant version that silently builds flip-flops is
+    // not a version.
+    logic [SW-1:0] sel_q;
+    logic [63:0] buf0 [LINE_WORDS];
+    logic [63:0] buf1 [LINE_WORDS];
+    logic [63:0] buf2 [LINE_WORDS];
+    logic [63:0] buf3 [LINE_WORDS];
+    logic [63:0] q0, q1, q2, q3;
     logic        fill_wr;
 
-    genvar g;
-    generate
-        for (g = 0; g < NBUF; g++) begin : lbuf
-            logic [63:0] mem [LINE_WORDS];
-            // ABOVE ANY RESET, for the reason np_vc2.sv spells out: a reset on
-            // the register an array reads into stops the inference. The read
-            // is unconditional anyway.
-            always_ff @(posedge clk) begin
-                q[g] <= mem[req_off];
-                if (fill_wr && fill_idx == SW'(g)) mem[fill_pos[AW-1:0]] <= fbr_dout;
-            end
-        end
-    endgenerate
+    always_ff @(posedge clk) begin
+        // ABOVE ANY RESET, for the reason np_vc2.sv spells out: a reset on the
+        // register an array reads into stops the inference. These reads are
+        // unconditional anyway.
+        q0 <= buf0[req_off];
+        q1 <= buf1[req_off];
+        q2 <= buf2[req_off];
+        q3 <= buf3[req_off];
+        if (fill_wr && fill_idx == 2'd0) buf0[fill_pos[AW-1:0]] <= fbr_dout;
+        if (fill_wr && fill_idx == 2'd1) buf1[fill_pos[AW-1:0]] <= fbr_dout;
+        if (fill_wr && fill_idx == 2'd2) buf2[fill_pos[AW-1:0]] <= fbr_dout;
+        if (fill_wr && fill_idx == 2'd3) buf3[fill_pos[AW-1:0]] <= fbr_dout;
+    end
+
+    logic [63:0] q_sel;
+    always_comb begin
+        case (sel_q)
+            2'd0:    q_sel = q0;
+            2'd1:    q_sel = q1;
+            2'd2:    q_sel = q2;
+            default: q_sel = q3;
+        endcase
+    end
 
     // ---- the display's read ----------------------------------------------
     // Registered, one cycle after the request, which is exactly what the
     // simulator's memory did and what newport.sv's readout already expects.
-    logic [SW-1:0] hit_idx, sel_q;
+    logic [SW-1:0] hit_idx;
     logic          hit_any;
     always_comb begin
         hit_idx = '0;
@@ -190,7 +220,7 @@ module fb_linecache #(
     end
 
     logic ack_q, miss_q;
-    assign px_rdata = miss_q ? (dbg_miss_mark ? 64'h80 : 64'h0) : q[sel_q];
+    assign px_rdata = miss_q ? (dbg_miss_mark ? 64'h80 : 64'h0) : q_sel;
     assign px_ack   = ack_q;
     assign miss     = miss_q;
 
