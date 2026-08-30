@@ -86,3 +86,6 @@ c5_pin_model_dump.txt
 # session scratch: build console captures and measurement runs
 *.console
 *.out
+
+# Python bytecode from tools/prom
+__pycache__/
