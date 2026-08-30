@@ -50,12 +50,13 @@ Nothing else changed between those rows. Not the bitstream, not `boot.rom`
 (`11bb4acd64fb7c79c985d3d09390668b` everywhere), not `config/SGIINDY.CFG`
 (sixteen zero bytes), not the OSD options.
 
-**`tools/misterdeploy/memclear.py` is the workaround and `scripts/hwcheck.sh`
-now runs it before every launch**, next to the frame buffer marker and for the
-same reason. **The fix is to make the GIO DMA engine real.** It was already
-listed below as "the most suspicious thing in the core that the installer
-touches and nothing tests"; it is no longer suspicious, it is the reason a boot
-is not reproducible, and it should be built before anything else on hardware.
+**THAT IS FIXED NOW - `ba5b89d` builds the GIO64 DMA engine and the PROM clears
+its own memory.** See "THE MEMORY CLEAR IS FIXED IN RTL" below for the
+before/after. `tools/misterdeploy/memclear.py` and the memclear step in
+`hwcheck.sh` are kept because starting a measurement from a known state is
+worth doing anyway, but they are instruments now and not the thing holding the
+machine up. The rest of this section is the diagnosis that got there, and it is
+kept because the reasoning is reusable and the measurements are still true.
 
 ### The working tree has an uncommitted build in it, and `deploy.sh` will push it
 
@@ -79,6 +80,63 @@ bitstream has to say `--rbf releases/SGIIndy_20260829.rbf`, or use
 Every measurement in this section was taken with the release on the board -
 `/media/fat/_Unstable/SGIIndy.rbf`, md5 verified `214e9fdd…` - and `--no-deploy`
 is how it stayed there.
+
+### THE MEMORY CLEAR IS FIXED IN RTL, AND `memclear.py` IS NOW A DIAGNOSTIC
+
+`ba5b89d` builds the MC's GIO64 DMA fill engine, and it works on the board.
+The test is the sharpest before/after this project has:
+
+| main memory before launch | old bitstream | with the engine |
+|---|---|---|
+| filled with 0xa5, no memclear | **never drew, every time** | **drew 8 of 8** |
+
+and after one of those boots not one 0xa5 byte survives anywhere in 48 MB. The
+PROM clears its own memory now. `bash scripts/bootrate.sh 8 --poison a5` is
+that test.
+
+**So a boot no longer depends on what the previous run left in DDR3**, which
+was the fault that cost an evening. `tools/misterdeploy/memclear.py` and the
+memclear step in `hwcheck.sh` are still worth keeping - they make a run
+repeatable from a known state - but they are instruments now rather than the
+thing holding the machine up.
+
+### WHAT IS LEFT IS THE PANIC, AND FOUR PATHS ARE CLEARED
+
+The rate did not move: **3 panics in 8** on the fixed bitstream against 4 in 10
+before, which is the same number. Neither the exception-code fix nor the memory
+clear touches it.
+
+Everything checkable about the CPU's memory path is now checked and correct:
+
+| checked in `verilator/tb_cpuonly.cpp` | result |
+|---|---|
+| the load that fails on hardware, latency 0..260 | correct |
+| its 64-bit sign extension | correct |
+| byte stores at all eight offsets of a doubleword | correct |
+| word stores into both halves, incl. the panic's own pointer | correct |
+
+and the whole CPU suite passes on the hardware, 240 tests, including the
+eighteen `mem` tests of every load width at every byte offset.
+
+**Every one of those ran with one master on the memory, and that is the
+remaining gap.** The CPU suite never programs Newport, so the frame buffer
+reader is idle for its whole run; a PROM boot programs it and `docs/18`
+measures that reader saturating the port. The fault only appears during boots.
+
+`tests/run-cputest-hw.sh --load` is the first attempt at closing that, and it
+**passes** - 2160 checks with roughly 62 GB of DDR3 reads alongside them. But
+read what it does before believing it cleared anything: the load competes at
+the HPS's memory controller, not through `ddr3_mux`'s arbiter, and the arbiter
+is where Newport's reader competes. **The test that would settle it is a
+bare-metal image that starts the raster and then checks memory under it**, and
+that is the next thing to build.
+
+**`cp0/compare_sets_ip7` is flaky on this hardware** and a run can legitimately
+come back 2160 or 2161 without anything having changed. It reports "timer did
+not fire ... 2212 iterations" on some runs and passes silently on others,
+because how many iterations the CP0 timer needs to reach Compare is a race. An
+earlier note here blamed the one-check gap against Verilator on the suite's
+testdev probe; that was wrong.
 
 ### What that episode cost, and the rule it argues for
 
