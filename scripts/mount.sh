@@ -36,13 +36,14 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_SSH_KEY:?}"; : "${MISTER_SSH_USER:=root}"
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 
-DISK1=""; DISK2=""; CD=""; LAUNCH=1
+DISK1=""; DISK2=""; CD=""; LAUNCH=1; PERSIST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --disk1) DISK1="$2"; shift ;;
         --disk2) DISK2="$2"; shift ;;
         --cd)    CD="$2";    shift ;;
         --no-launch) LAUNCH=0 ;;
+        --persist)   PERSIST=1 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
@@ -84,6 +85,34 @@ for f in tools/misterdeploy/memclear.py tools/misterdeploy/fb_poke.py \
     scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
         "$f" "$MISTER_SSH_USER@$MISTER_HOST:/media/fat/sgidbg/" 2>/dev/null
 done
+
+# --persist: MAKE THE MOUNT SURVIVE A CORE RELOAD, which an MGL does not.
+#
+# The CONF_STR slots are `SC1`/`SC2`/`SC3` rather than `S1`/`S2`/`S3`, and the
+# C is what makes the framework save a chosen image's path to
+# /media/fat/config/<core>.s<n> and mount it again at every core start
+# (Main_MiSTer menu.cpp:2782 and user_io.cpp:977-1006). It writes that file
+# when the image is picked in the OSD; this writes it directly, because the
+# screenshot API does not capture the OSD and a blind menu walk cannot be
+# verified - the same reason scripts/setopt.sh exists for options.
+#
+# THE FORMAT IS A FIXED 1024-BYTE RECORD, not a text file: FileSaveConfig
+# writes the whole of menu.cpp's `char selPath[1024]`, so the path goes in
+# NUL-terminated and zero-padded to that length.
+if [ "$PERSIST" = 1 ]; then
+    CORE="${RBF_REMOTE%.rbf}"
+    rsh "mkdir -p /media/fat/config" >/dev/null 2>&1
+    for pair in "1:$DISK1" "2:$DISK2" "3:$CD"; do
+        SLOT="${pair%%:*}"; P="${pair#*:}"
+        [ -z "$P" ] && continue
+        rsh "python3 -c \"
+import sys
+p = sys.argv[1].encode()
+open('/media/fat/config/$CORE.s$SLOT','wb').write(p + b'\\0' * (1024 - len(p)))
+\" '$P'" || exit 1
+        log "persisted slot $SLOT -> $P  (config/$CORE.s$SLOT)"
+    done
+fi
 
 [ "$LAUNCH" = 0 ] && { log "--no-launch: stopping here"; exit 0; }
 

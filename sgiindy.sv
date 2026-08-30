@@ -88,9 +88,28 @@ localparam CONF_STR = {
 	"-;",
 	"FS0,BIN,Load PROM;",
 	"-;",
-	"S1,IMGISOCHD,SCSI ID1;",
-	"S2,IMGISOCHD,SCSI ID2;",
-	"S3,IMGISOCHD,SCSI ID6 CD;",
+	// `SC` RATHER THAN `S`, AND THE C IS THE WHOLE POINT: it makes the mount
+	// SURVIVE A CORE RELOAD. The framework parses this string on the ARM side;
+	// `S` mounts an image and forgets it, `SC` also writes the path to
+	// /media/fat/config/SGIIndy.s<n> when it is selected (Main_MiSTer
+	// menu.cpp:2782) and mounts it again from there at every core start
+	// (user_io.cpp:977-1006), with no OSD interaction at all - the same shape
+	// as boot.rom arriving at index 0.
+	//
+	// That matters here more than on most cores because this machine takes
+	// thirty seconds to draw its boot screen and is relaunched constantly
+	// during bring-up, and because the screenshot API does not capture the OSD,
+	// so blind menu navigation cannot be verified. scripts/mount.sh's MGL is
+	// still the way to mount something for ONE run; this is the way to make a
+	// disk stay attached to the machine.
+	//
+	// The saved path is written when an image is chosen in the OSD. To seed it
+	// without the OSD, write the path NUL-terminated into a 1024-byte
+	// config/SGIIndy.s<n> - that is exactly what FileSaveConfig writes, since
+	// menu.cpp's selPath is char[1024]. scripts/mount.sh --persist does it.
+	"SC1,IMGISOCHD,SCSI ID1;",
+	"SC2,IMGISOCHD,SCSI ID2;",
+	"SC3,IMGISOCHD,SCSI ID6 CD;",
 	"-;",
 	"O[10],Graphics board,Fitted,None;",
 	"O[11],Primary caches,On,Off;",
