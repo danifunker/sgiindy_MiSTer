@@ -132,6 +132,42 @@ are bit-identical to each other: 1340 text pixels, 169 colour indices, every
 time. The boot is not flaky; the boot is deterministic and something occasional
 knocks it over.
 
+**THE SHARPEST LEAD IS `0x00747474`, AND IT IS PROBABLY A POINTER MISSING ONE
+BYTE.** That value appears nowhere in the PROM image - not as a word, not as a
+byte sequence, not once in 512 KB - so it is made at runtime. But look at what
+the same panic's register dump is full of: `gp a8740000`, `t1 a8747c9c`,
+`t2 a8747b44`, `arg[0] a8740000`. The PROM's data lives at `0xa874xxxx`.
+
+**`0xa8747474` is an entirely ordinary pointer in that area, and `0x00747474`
+is that pointer with its most significant byte lost.** The boot that produced
+it ran on memory this project had just zeroed, so a byte that was never written
+reads back as exactly the zero that was put there. A 32-bit store landing three
+bytes out of four would produce precisely this value and nothing else would.
+
+That is a claim about the WRITE path rather than the read path, and it is
+checkable. The read path has already been cleared twice: the load of the PROM
+constant is correct at every memory latency from 0 to 260 clocks in all four
+cache modes (`verilator/tb_cpuonly.cpp`), and it sign-extends correctly, and
+the cpu-tests `mem` group - eighteen tests of every load width at every byte
+offset - passes on this hardware.
+
+**But every one of those checks ran with one master on the memory.** The CPU
+suite never programs Newport, so the frame buffer reader is idle for its whole
+run and the CPU has DDR3 to itself. A PROM boot programs Newport, and `docs/18`
+measures that reader saturating the port - 0.52 words per clock delivered
+against the 0.80 it wants. So: the CPU-to-memory path is proven under one
+master and has never been tested under two, and the fault only appears during
+boots. That is not a coincidence worth ignoring.
+
+`tests/run-cputest-hw-loaded.sh` is the first cut at closing that gap: the same
+2160 checks with a second heavy reader on the memory. It contends at the HPS
+end rather than through `ddr3_mux`'s arbiter, so a pass does not clear the
+arbiter - but a failure would be worth a great deal, because 2160 checks
+localise a fault that a boot reports as a garbage pointer three turns from its
+cause. **The stronger version of the same test, and the one to build if that
+one passes, is a bare-metal image that starts the raster and then checks memory
+under it** - that puts the real second master on the port.
+
 **THE PANIC IS NOT ALWAYS THE SAME ONE, and an earlier version of this section
 said it was.** That claim came from reading two panics that happened to match
 and generalising. Three distinct signatures are now recorded, and the only
