@@ -13,12 +13,14 @@
 //  wiring that makes a fit possible: the chipset, its memory, its console,
 //  its disks and its screen, on a DE10-Nano.
 //
-//  IT HAS NOT BEEN THROUGH QUARTUS. There is no Quartus on the machine this
-//  was written on, so what follows is checked as far as Verilator can check it
-//  and no further - `rtl/mister/ddr3_mux.sv` has a unit test, the rest is
-//  wiring that either elaborates or does not. Treat the first build as a
-//  bring-up exercise and read docs/18-mister-integration.md first; it lists
-//  what is known to be missing rather than leaving it to be discovered.
+//  IT HAS BEEN THROUGH QUARTUS AND IT MEETS TIMING. The whole flow completes
+//  on a 5CSEBA6U23I7 - 73% of the ALMs, positive slack on every clock - and
+//  `scripts/build.sh` reproduces it. What that does NOT prove is that the
+//  machine runs: a fit checks wiring, not behaviour, and everything this
+//  project claims about the behaviour still comes from Verilator. Treat a
+//  hardware run as a bring-up exercise and read docs/18-mister-integration.md
+//  first; it lists what is known to be missing rather than leaving it to be
+//  discovered. `scripts/deploy.sh` puts a build on a board.
 //
 //  THE FOUR THINGS WORTH KNOWING BEFORE READING THE CODE:
 //
