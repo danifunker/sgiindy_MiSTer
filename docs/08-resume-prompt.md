@@ -32,6 +32,40 @@ runs REX3 (it wipes a marker off the whole frame buffer), **clears the screen to
 index 0 and stops, with no video signal at all**. So the machine gets to
 `rex3Clear` and no further.
 
+### What was measured, after four wrong explanations
+
+Every hypothesis below was written down confidently and then killed by a
+measurement. They are kept because the measurements are the useful part.
+
+| explanation | how it died |
+|---|---|
+| the cursor commits broke it | the VERIFIED WORKING bitstream fails identically |
+| the frame buffer marker caused it | fails with the marker absent too |
+| it is merely slow | frame buffer flat at zero non-black pixels for 4.5 minutes |
+| it is intermittent | three identical relaunches, three identical failures |
+
+**Where it stops, precisely.** With the verified release running right now:
+
+* the PROM image is in DDR3 and correct - `00 00 00 00 f0 00 f0 0b` at
+  `0x35000000`, which is the right bytes in the right order;
+* the PROM RUNS - its exception vectors are at `0x30000000` and szmem's
+  walking-bit patterns are across all 48 MB;
+* REX3 RUNS - it clears the frame buffer to index 0;
+* **and then nothing happens, ever.** No drawing, no further memory movement.
+
+**Nothing persistent on the card explains it.** `config/SGIINDY.CFG` is
+sixteen zero bytes - all defaults. There is no `SGIIndy` section in
+`MiSTer.ini`, and no other per-core config.
+
+**THE SAME FILE DREW THE WHOLE BOOT SCREEN AT 05:00 AND REACHED THE
+MAINTENANCE MENU.** So something about that board's state changed, and it is
+not the bitstream, the PROM or the settings. **The obvious untried reset is a
+COLD POWER CYCLE** - every reset in this session was a soft reboot through the
+mrext API, which does not clear DDR3 or re-initialise the HPS. Do that before
+concluding anything about the core.
+
+### The instrumentation suspicion, now dead but worth knowing about
+
 ### The suspicion, and it is about the instrumentation rather than the core
 
 **Every failing run had the frame buffer PRE-FILLED with 0xE7 and the working
