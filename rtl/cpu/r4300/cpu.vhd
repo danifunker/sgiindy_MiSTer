@@ -38,6 +38,32 @@ entity cpu is
       error_exception       : out std_logic := '0';
       error_fifo            : out std_logic := '0';
       error_TLB             : out std_logic := '0';
+
+      -- SGI: the PC of the instruction entering decode, and a strobe that says
+      -- one entered this clock. This is OUTSIDE the savestate export's
+      -- `-- synthesis translate_off` block on purpose: pcOld2..4 and
+      -- cpu_export.pc live inside it, so they are not in the netlist GHDL
+      -- lowers for Verilator, and docs/06-simulation.md lists the missing PC
+      -- as the one instrument this harness did not have. It is needed the
+      -- moment a failure stops producing bus cycles: an IRIX kernel that wedges
+      -- in a cached loop is silent on the bus and invisible without it.
+      -- pcOld1/decodeNew are the last pair in the pipeline that are
+      -- synthesised, which is why the tap is at decode and not at writeback.
+      dbg_pc                : out std_logic_vector(31 downto 0) := (others => '0');
+      dbg_pc_valid          : out std_logic := '0';
+      -- SGI: {privilegeMode, bit64region, region_TLBmapped}. The address
+      -- region decode below turns these into "put this access through the TLB"
+      -- or "strip the top three bits and go straight to the bus", and getting
+      -- that choice wrong is silent - the access completes, at the wrong
+      -- physical address. Four bits, so it can be watched.
+      dbg_mode              : out std_logic_vector(3 downto 0) := (others => '0');
+      dbg_exc               : out std_logic := '0';
+      dbg_exc_code          : out std_logic_vector(4 downto 0) := (others => '0');
+      dbg_exc_epc           : out std_logic_vector(31 downto 0) := (others => '0');
+      dbg_exc_bad           : out std_logic_vector(31 downto 0) := (others => '0');
+      -- The RETIRING instruction's PC and a one-clock strobe. See dbg_pc2.
+      dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
+      dbg_retire            : out std_logic := '0';
       
       mem_request           : out std_logic := '0';
       mem_rnw               : out std_logic := '0'; 
@@ -549,6 +575,19 @@ architecture arch of cpu is
    signal fpuRegMode                   : std_logic;
    signal privilegeMode                : unsigned(1 downto 0);
    signal bit64region                  : std_logic;
+   -- SGI: the PC carried down the pipeline alongside pcOld2..4, but OUTSIDE
+   -- the `-- synthesis translate_off` blocks those live in, so it reaches the
+   -- netlist GHDL lowers for Verilator. dbg_pc taps DECODE, which re-presents
+   -- an instruction whenever the pipeline replays or stalls; this one pulses
+   -- exactly once per instruction RETIRED, which is what a trace has to be if
+   -- two runs of the same guest are going to be diffed against each other.
+   signal dbg_pc2                      : unsigned(63 downto 0) := (others => '0');
+   signal dbg_pc3                      : unsigned(63 downto 0) := (others => '0');
+   signal dbg_pc4                      : unsigned(63 downto 0) := (others => '0');
+   signal dbg_retire_i                 : std_logic := '0';
+   signal dbg_exc_code_u               : unsigned(4 downto 0);    -- SGI
+   signal dbg_exc_epc_u                : unsigned(31 downto 0);   -- SGI
+   signal dbg_exc_bad_u                : unsigned(31 downto 0);   -- SGI
    signal irqTrigger                   : std_logic;
    signal TLBDone                      : std_logic;
    
@@ -1992,17 +2031,45 @@ begin
                         decodeMemWriteType      <= MEMWRITETYPE_SWR;
                         
                      when 16#2F# => -- Cache
-                        decodeCacheEnable       <= '1';
-                        decodeCacheTLBTranslate <= '1';
-                        
+                        -- SGI: AN OP THIS CORE DOES NOT IMPLEMENT IS A NO-OP,
+                        -- NOT A COMMAND WITH AN UNKNOWN CODE. Upstream raised
+                        -- error_instr and then sent the op to the caches
+                        -- anyway; cpu_datacache.vhd answers ANY CacheCommandEna
+                        -- by entering COMMANDPROCESS, while its
+                        -- CachecommandStall only covers the seven codes it
+                        -- knows - so an unknown op put the data cache into a
+                        -- command state that the pipeline did not wait for.
+                        --
+                        -- The IP22 kernel makes this matter: it contains all
+                        -- sixteen secondary-cache ops plus `I Fill` (0x14),
+                        -- `I Hit_Writeback` (0x18) and `I Index_Load_Tag`
+                        -- (0x04), and it executes about a thousand of them per
+                        -- boot. Every one of those is safely nothing on this
+                        -- machine - Config.SC reports no secondary cache, and
+                        -- nothing here ever writes the instruction cache, so a
+                        -- writeback of it has nothing to write back - but only
+                        -- if the op stops at decode.
                         case (to_integer(decSource2)) is
-                           when 16#00# | 16#08# | 16#10# => decodeCacheTLBTranslate <= '0';
-                           when others => null;
-                        end case;
-                        
-                        case (to_integer(decSource2)) is
-                           when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# | 16#0D# | 16#10# | 16#11# | 16#15# | 16#19# => null;
-                           when others => error_instr <= '1';
+                           when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# |
+                                16#0D# | 16#10# | 16#11# | 16#15# | 16#19# =>
+                              decodeCacheEnable       <= '1';
+                              decodeCacheTLBTranslate <= '1';
+                              -- 0x00 and 0x08 are INDEX ops: their operand is
+                              -- an index, not an address, so there is nothing
+                              -- to translate. 0x10 is `Hit_Invalidate I` and
+                              -- looks like it should translate - but this
+                              -- instruction cache is VIRTUALLY INDEXED
+                              -- (cpu_instrcache.vhd indexes the tag ram with
+                              -- read_addr(13:5), the virtual fetch address,
+                              -- and compares a physical tag), so the index it
+                              -- needs is the virtual one. Translating it was
+                              -- tried and is wrong.
+                              case (to_integer(decSource2)) is
+                                 when 16#00# | 16#08# | 16#10# => decodeCacheTLBTranslate <= '0';
+                                 when others => null;
+                              end case;
+                           when others =>
+                              error_instr <= '1';
                         end case;
 
                      when 16#30# => -- LL
@@ -2719,6 +2786,7 @@ begin
                      pcOld2                        <= pcOld1;  
                      opcode2                       <= opcode1;
 -- synthesis translate_on
+                     dbg_pc2                       <= pcOld1;   -- SGI
                             
                      -- from calculation
                      if (decodeTarget = 0 or exceptionNew3 = '1') then
@@ -3124,6 +3192,7 @@ begin
                   hi_1                         <= hi;
                   lo_1                         <= lo;
 -- synthesis translate_on
+                  dbg_pc3                      <= dbg_pc2;   -- SGI
                
                   writebackTarget              <= resultTarget;
                   writebackData                <= resultData;
@@ -3354,6 +3423,8 @@ begin
          
          elsif (ce_93 = '1') then
             
+            dbg_retire_i <= '0';   -- SGI: default; set below when one retires
+
             if (stall4Masked = 0 and writebackNew = '1') then
             
 -- synthesis translate_off
@@ -3362,6 +3433,8 @@ begin
                hi_2                 <= hi_1;
                lo_2                 <= lo_1;
 -- synthesis translate_on
+               dbg_pc4              <= dbg_pc3;   -- SGI
+               dbg_retire_i         <= '1';       -- SGI: exactly one per instruction
                
                -- export
                if (writebackWriteEnable = '1') then 
@@ -3475,6 +3548,10 @@ begin
       fpuRegMode              => fpuRegMode,
       privilegeMode           => privilegeMode,
       bit64region             => bit64region,
+      dbg_exc                 => dbg_exc,
+      dbg_exc_code            => dbg_exc_code_u,
+      dbg_exc_epc             => dbg_exc_epc_u,
+      dbg_exc_bad             => dbg_exc_bad_u,
       CONFIG_K0               => config_K0,             -- SGI
       
       writeEnable             => executeCOP0WriteEnable,
@@ -3589,6 +3666,20 @@ begin
       SS_CSR            => unsigned(ss_in(24)(24 downto 0))
    );
    
+--##############################################################
+--############################### SGI: PC debug tap
+--##############################################################
+
+   -- Concurrent, so it costs a wire and no logic. See the port declaration.
+   dbg_pc       <= std_logic_vector(PCold1(31 downto 0));
+   dbg_pc_valid <= decodeNew;
+   dbg_mode     <= std_logic_vector(privilegeMode) & bit64region & region_TLBmapped;
+   dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
+   dbg_retire   <= dbg_retire_i;
+   dbg_exc_code <= std_logic_vector(dbg_exc_code_u);
+   dbg_exc_epc  <= std_logic_vector(dbg_exc_epc_u);
+   dbg_exc_bad  <= std_logic_vector(dbg_exc_bad_u);
+
 --##############################################################
 --############################### savestates
 --##############################################################

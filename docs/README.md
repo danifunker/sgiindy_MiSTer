@@ -51,6 +51,7 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | **[15-synthesis-prompt.md](15-synthesis-prompt.md)** | **Work-item prompt** for getting `syn/` through Quartus and reading the size and Fmax. Needs a machine that can run Quartus |
 | **[FEATURES_EVALUATE.md](FEATURES_EVALUATE.md)** | **Deliberately not built**, with the evidence: CD audio (the CD-ROM is data-only), the secondary cache, and why "66 Mhz" is a measurement rather than a clock |
 | **[20-releases.md](20-releases.md)** | **The built bitstreams in `releases/`**, what each one does and does not do, and the one step of the install that fails silently — MiSTer does not create `games/SGIIndy` for you |
+| **[21-icache-bug.md](21-icache-bug.md)** | **OPEN BUG**: the instruction cache hands out a wrong word and kills `init`. The bisection that isolated it, everything already ruled out with the measurement that ruled it out, the leads left, and the PC diff that lied |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
 ## Machines under consideration

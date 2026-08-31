@@ -40,6 +40,7 @@
 #include <string>
 #include <map>
 #include <deque>
+#include <array>
 #include <vector>
 #include <tuple>
 #include <algorithm>
@@ -128,6 +129,35 @@ struct Options {
     std::string fbdump;
     std::string viddump;
     bool        fbindex = false;
+    // --pc: print every PC the CPU decodes, from --pc-from, for --pc-count.
+    // Expensive - one line per instruction - so it is off by default and the
+    // ring buffer below is what a normal run relies on.
+    // --ramdump ADDR:LEN:FILE, repeatable. ADDR is a MIPS address: KSEG0/KSEG1
+    // are stripped, so 0x88010174 and 0x08010174 both name the same bytes.
+    std::vector<std::array<std::string, 3>> ramdumps;
+    // --pc-user FILE: cycle and PC for every USER-mode instruction entering
+    // decode. Made for diffing two runs that should agree - the first
+    // differing PC names the instruction where they parted company.
+    //
+    // READ THE CAVEAT BEFORE TRUSTING A DIFF OF THESE. This is the DECODE tap,
+    // and decode re-presents an instruction on every pipeline replay and
+    // stall. Two runs in different configurations replay in different places,
+    // so a raw diff reports divergences that are not there - it will point at
+    // a "loop" that is really a function prologue being replayed. Collapse
+    // consecutive repeats in both streams before comparing, and treat the
+    // result as a lead rather than as proof.
+    std::string pcuser;
+    bool        exc = false;
+    uint64_t    exc_count = 200;
+    // --trace-from-pc HEX: arm the bus trace the first time the CPU decodes
+    // this PC. A cycle number cannot be known in advance for anything that
+    // happens after a kernel has booted, and this is how a line fill for a
+    // named instruction gets caught with its data.
+    bool        trace_from_pc_set = false;
+    uint32_t    trace_from_pc = 0;
+    bool        pctrace = false;
+    uint64_t    pc_from = 0;
+    uint64_t    pc_count = 2000;
     // Newport fitted. Default on, because a real Indy always has a graphics
     // board; the serial-console regressions turn it off, because the PROM
     // moves its console to the graphics head as soon as it finds one.
@@ -222,6 +252,23 @@ static void usage()
         "  --viddump FILE    on exit, write what came out of the video PINS as a\n"
         "                    PPM - the index after XMAP9 and CMAP, not the store\n"
         "  --fbindex         dump the colour index as grey, not the colour\n"
+        "  --ramdump A:N:F   on exit, write N bytes of guest RAM from address A\n"
+        "                    to file F (repeatable). A is a MIPS address; KSEG0\n"
+        "                    and KSEG1 are stripped, so 0x88010174 works. This\n"
+        "                    is guestmem.py for the simulator: disassemble the\n"
+        "                    result with tools/misterdeploy/disbin.py\n"
+        "  --trace-from-pc H arm the bus trace the first time PC H is decoded\n"
+        "                    (implies --trace). For catching the line fill that\n"
+        "                    served a named instruction\n"
+        "  --pc-user FILE    write every user-mode PC to FILE, one per line and\n"
+        "                    nothing else, for diffing two runs against each other\n"
+        "  --exc             one line per exception the CPU accepts: ExcCode,\n"
+        "                    BadVAddr and EPC (first 200; --exc-count N)\n"
+        "  --pc              print one line per decoded instruction. The last\n"
+        "                    64 PCs are ALWAYS printed on exit, which is what\n"
+        "                    names a wedge that has stopped touching the bus\n"
+        "  --pc-from N       start the PC trace at cycle N (implies --pc)\n"
+        "  --pc-count N      how many PCs to print (default 2000)\n"
         "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
         "                    console on the serial port\n"
         "  --key-at N STR    press STR at the keyboard once cycle N is reached.\n"
@@ -273,6 +320,28 @@ int main(int argc, char **argv)
         else if (a == "--fbdump")     opt.fbdump = next("--fbdump");
         else if (a == "--viddump")    opt.viddump = next("--viddump");
         else if (a == "--fbindex")    opt.fbindex = true;
+        else if (a == "--ramdump") {
+            std::string spec = next("--ramdump");
+            size_t c1 = spec.find(':'), c2 = spec.rfind(':');
+            if (c1 == std::string::npos || c1 == c2) {
+                fprintf(stderr, "--ramdump wants ADDR:LEN:FILE\n"); return 2;
+            }
+            opt.ramdumps.push_back({spec.substr(0, c1),
+                                    spec.substr(c1 + 1, c2 - c1 - 1),
+                                    spec.substr(c2 + 1)});
+        }
+        else if (a == "--trace-from-pc") { opt.trace = true; opt.trace_from_pc_set = true;
+            // Park the start cycle out of reach until the PC is seen.
+            opt.trace_from = ~0ull;
+            opt.trace_from_pc = (uint32_t)strtoul(next("--trace-from-pc"), nullptr, 16); }
+        else if (a == "--pc-user")    opt.pcuser = next("--pc-user");
+        else if (a == "--exc")        opt.exc = true;
+        else if (a == "--exc-count")  { opt.exc = true;
+                                        opt.exc_count = strtoull(next("--exc-count"), nullptr, 0); }
+        else if (a == "--pc")         opt.pctrace = true;
+        else if (a == "--pc-from")    { opt.pctrace = true;
+                                        opt.pc_from = strtoull(next("--pc-from"), nullptr, 0); }
+        else if (a == "--pc-count")   opt.pc_count = strtoull(next("--pc-count"), nullptr, 0);
         else if (a == "--no-gfx")     opt.gfx = false;
         else if (a == "--watch")       opt.watch.push_back(
                  static_cast<uint32_t>(strtoul(next("--watch"), nullptr, 16)) & ~7u);
@@ -372,7 +441,12 @@ int main(int argc, char **argv)
 
     // Opened up front and flushed per line, so a long run can be watched with
     // `tail -f` instead of only being readable once it has finished.
+    FILE *pcuser_f = nullptr;
     FILE *console_f = nullptr;
+    if (!opt.pcuser.empty()) {
+        pcuser_f = fopen(opt.pcuser.c_str(), "wb");
+        if (!pcuser_f) fprintf(stderr, "cannot write %s\n", opt.pcuser.c_str());
+    }
     if (!opt.dump_console.empty()) {
         console_f = fopen(opt.dump_console.c_str(), "wb");
         if (!console_f) fprintf(stderr, "cannot write %s\n", opt.dump_console.c_str());
@@ -418,6 +492,32 @@ int main(int argc, char **argv)
     uint64_t last_progress = 0;
     uint32_t stuck_addr = 0;
     uint64_t stuck_hits = 0;
+
+    // THE LAST 64 PCs, ALWAYS. A wedge that stops touching the bus - an IRIX
+    // kernel spinning in a loop that fits in the caches - leaves the stuck
+    // detector with nothing to name and the bus trace ending mid-routine.
+    // These sixty-four entries are the loop itself. They cost two stores per
+    // instruction and are worth it: without them the only way to see a
+    // cached loop is to rebuild with --no-icache and wait out a much slower
+    // boot. See rtl/cpu/r4300/cpu.vhd's dbg_pc for where they come from.
+    static const int PCRING = 64;
+    uint32_t pcring[PCRING] = {0};
+    uint64_t pcring_cy[PCRING] = {0};
+    int      pcring_at = 0;
+    uint64_t pcs = 0, pcs_traced = 0;
+    uint64_t excs = 0;
+    uint64_t retired = 0;
+
+    // The same, for USER-mode instructions only - anything the CPU decoded
+    // with Status.KSU saying user and EXL/ERL clear (dbg_mode's top two bits).
+    // A kernel that reports a signal 11 in a process has already unwound the
+    // fault by the time it says so, and the general ring is full of the
+    // kernel's own reporting path by then; this one still holds the
+    // instructions that actually trapped.
+    uint32_t upcring[PCRING] = {0};
+    uint64_t upcring_cy[PCRING] = {0};
+    int      upcring_at = 0;
+    uint64_t upcs = 0;
 
     UartRx   uart;
     UartTx   utx;
@@ -596,6 +696,68 @@ int main(int argc, char **argv)
             }
         }
 
+        // One line per exception the CPU accepts, under --exc. ExcCode is what
+        // separates a TLB miss from an address error from a reserved
+        // instruction, and from the console all three are "generated trap".
+        if (opt.exc && top->dbg_exc) {
+            static const char *const kExc[32] = {
+                "Int","TLBMod","TLBL","TLBS","AdEL","AdES","IBE","DBE",
+                "Sys","Bp","RI","CpU","Ov","Tr","?","FPE",
+                "?","?","?","?","?","?","?","?",
+                "?","?","?","?","?","?","?","?"};
+            excs++;
+            if (excs <= opt.exc_count)
+                printf("[%10llu] EXC %-6s code=%02x badvaddr=%08x epc=%08x\n",
+                       static_cast<unsigned long long>(cycle),
+                       kExc[top->dbg_exc_code & 31], top->dbg_exc_code,
+                       top->dbg_exc_bad, top->dbg_exc_epc);
+        }
+
+        // The PC of whatever entered decode this clock. Recorded on every
+        // instruction, printed only on exit (or under --pc).
+        if (top->dbg_pc_valid) {
+            pcs++;
+            pcring[pcring_at]    = top->dbg_pc;
+            pcring_cy[pcring_at] = cycle;
+            pcring_at = (pcring_at + 1) % PCRING;
+            if (opt.trace_from_pc_set && top->dbg_pc == opt.trace_from_pc &&
+                opt.trace_from > cycle) {
+                opt.trace_from = cycle;
+                fprintf(stderr, "[%10llu] trace armed at PC %08x\n",
+                        static_cast<unsigned long long>(cycle), top->dbg_pc);
+            }
+            if ((top->dbg_mode >> 2) != 0) {
+                upcs++;
+                if (pcuser_f) fprintf(pcuser_f, "%10llu %08x\n",
+                                      static_cast<unsigned long long>(cycle),
+                                      top->dbg_pc);
+                if (pcuser_f) fprintf(pcuser_f, "%10llu %08x\n",
+                                      static_cast<unsigned long long>(cycle), top->dbg_pc);
+                upcring[upcring_at]    = top->dbg_pc;
+                upcring_cy[upcring_at] = cycle;
+                upcring_at = (upcring_at + 1) % PCRING;
+            }
+            if (opt.pctrace && cycle >= opt.pc_from && pcs_traced < opt.pc_count) {
+                printf("[%10llu] PC %08x  ksu=%u %s %s\n",
+                       static_cast<unsigned long long>(cycle), top->dbg_pc,
+                       (unsigned)(top->dbg_mode >> 2),
+                       (top->dbg_mode & 2) ? "64" : "32",
+                       (top->dbg_mode & 1) ? "tlb" : "unmapped");
+                pcs_traced++;
+            }
+        }
+
+        // dbg_retire / dbg_rpc are wired all the way out to here and are NOT
+        // used, deliberately. They were added to give --pc-user one line per
+        // instruction RETIRED, which is what a diff of two runs wants; the
+        // stream that came back was interleaved rather than sequential, so the
+        // mirror of pcOld2..4 in cpu.vhd does not yet track the pipeline the
+        // way pcOld2..4 do. Finishing it is worth doing - see docs/06 - but an
+        // instrument that looks right and is not is worse than none, so
+        // --pc-user stays on the decode tap below, whose one quirk (an
+        // instruction re-presented on a pipeline replay) is documented.
+        if (top->dbg_retire) retired++;
+
         // Unclaimed cycles are collected, not printed: an undecoded register
         // in a poll loop produces one line per iteration and buries everything
         // else. The summary on exit is what actually answers "what does the
@@ -723,6 +885,50 @@ int main(int argc, char **argv)
         }
     }
 
+    for (const auto &d : opt.ramdumps) {
+        uint32_t a = static_cast<uint32_t>(strtoul(d[0].c_str(), nullptr, 0));
+        uint32_t n = static_cast<uint32_t>(strtoul(d[1].c_str(), nullptr, 0));
+        // KSEG0/KSEG1 -> physical, then physical -> offset into the RAM store.
+        if ((a >> 29) == 4 || (a >> 29) == 5) a &= 0x1fffffffu;
+        uint32_t off = a - 0x08000000u;
+        if (a < 0x08000000u || off + n > g_dev.ram.size()) {
+            fprintf(stderr, "--ramdump %s: not in RAM\n", d[0].c_str());
+            continue;
+        }
+        FILE *f = fopen(d[2].c_str(), "wb");
+        if (!f) { fprintf(stderr, "cannot write %s\n", d[2].c_str()); continue; }
+        fwrite(g_dev.ram.bytes.data() + off, 1, n, f);
+        fclose(f);
+        printf("ramdump %08x +%u -> %s\n", a, n, d[2].c_str());
+    }
+
+    if (upcs) {
+        printf("last %d USER-mode PCs (oldest first), %llu total:\n",
+               (int)(upcs < PCRING ? upcs : PCRING),
+               static_cast<unsigned long long>(upcs));
+        int n = (int)(upcs < PCRING ? upcs : PCRING);
+        for (int i = 0; i < n; i++) {
+            int k = (upcring_at - n + i + PCRING) % PCRING;
+            printf("  [%10llu] %08x\n",
+                   static_cast<unsigned long long>(upcring_cy[k]), upcring[k]);
+        }
+    }
+
+    // The last sixty-four instructions, oldest first. Read the CYCLES as much
+    // as the addresses: a tight loop repeating with no gaps is a spin, and the
+    // same PC arriving after a long gap is the machine having waited.
+    if (pcs) {
+        printf("last %d PCs decoded (oldest first), %llu total:\n",
+               (int)(pcs < PCRING ? pcs : PCRING),
+               static_cast<unsigned long long>(pcs));
+        int n = (int)(pcs < PCRING ? pcs : PCRING);
+        for (int i = 0; i < n; i++) {
+            int k = (pcring_at - n + i + PCRING) % PCRING;
+            printf("  [%10llu] %08x\n",
+                   static_cast<unsigned long long>(pcring_cy[k]), pcring[k]);
+        }
+    }
+
     {
         bool any = false;
         for (int b = 0; b < 6; b++) if (err_count[b]) any = true;
@@ -812,6 +1018,7 @@ int main(int argc, char **argv)
             printf("could not write %s\n", opt.fbdump.c_str());
     }
 
+    if (pcuser_f) fclose(pcuser_f);
     if (console_f) fclose(console_f);
 
     delete top;

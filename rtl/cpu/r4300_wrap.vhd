@@ -64,6 +64,19 @@ entity r4300_wrap is
       error_fifo        : out std_logic;
       error_TLB         : out std_logic;
 
+      -- The PC entering decode, and a strobe. See cpu.vhd's port of the same
+      -- name for why the tap is where it is; it is a simulation instrument
+      -- that happens to be synthesisable, so it costs nothing to carry.
+      dbg_pc            : out std_logic_vector(31 downto 0);
+      dbg_pc_valid      : out std_logic;
+      dbg_mode          : out std_logic_vector(3 downto 0);
+      dbg_exc           : out std_logic;
+      dbg_exc_code      : out std_logic_vector(4 downto 0);
+      dbg_exc_epc       : out std_logic_vector(31 downto 0);
+      dbg_exc_bad       : out std_logic_vector(31 downto 0);
+      dbg_rpc           : out std_logic_vector(31 downto 0);
+      dbg_retire        : out std_logic;
+
       -- Memory port. See rtl/cpu/r4300_bus.sv for the byte-lane contract;
       -- it is not the obvious one and it differs between read and write.
       mem_request       : out std_logic;
@@ -207,6 +220,15 @@ begin
       error_exception       => error_exception,
       error_fifo            => error_fifo,
       error_TLB             => error_TLB,
+      dbg_pc                => dbg_pc,
+      dbg_pc_valid          => dbg_pc_valid,
+      dbg_mode              => dbg_mode,
+      dbg_exc               => dbg_exc,
+      dbg_exc_code          => dbg_exc_code,
+      dbg_exc_epc           => dbg_exc_epc,
+      dbg_exc_bad           => dbg_exc_bad,
+      dbg_rpc               => dbg_rpc,
+      dbg_retire            => dbg_retire,
 
       mem_request           => mem_request,
       mem_rnw               => mem_rnw,

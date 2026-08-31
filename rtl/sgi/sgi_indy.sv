@@ -188,7 +188,20 @@ module sgi_indy #(
     output logic        bus_unclaimed,
     output logic  [5:0] cpu_error,
     output logic  [4:0] irq_lines_o,   // Cause.IP[6:2], as INT2 drives them
-    output logic [39:0] int2_state_o   // see sgi_ioc.sv
+    output logic [39:0] int2_state_o,  // see sgi_ioc.sv
+    // The CPU's decode-stage PC and a strobe. See rtl/cpu/r4300/cpu.vhd's
+    // dbg_pc: it is the only view of what the CPU is doing when the failure
+    // stops producing bus cycles, which is what an IRIX kernel wedged in a
+    // cached loop looks like.
+    output logic [31:0] dbg_pc,
+    output logic        dbg_pc_valid,
+    output logic  [3:0] dbg_mode,
+    output logic        dbg_exc,
+    output logic  [4:0] dbg_exc_code,
+    output logic [31:0] dbg_exc_epc,
+    output logic [31:0] dbg_exc_bad,
+    output logic [31:0] dbg_rpc,
+    output logic        dbg_retire
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -262,6 +275,15 @@ module sgi_indy #(
         .error_exception  (cpu_error[3]),
         .error_fifo       (cpu_error[4]),
         .error_TLB        (cpu_error[5]),
+        .dbg_pc           (dbg_pc),
+        .dbg_pc_valid     (dbg_pc_valid),
+        .dbg_mode         (dbg_mode),
+        .dbg_exc          (dbg_exc),
+        .dbg_exc_code     (dbg_exc_code),
+        .dbg_exc_epc      (dbg_exc_epc),
+        .dbg_exc_bad      (dbg_exc_bad),
+        .dbg_rpc          (dbg_rpc),
+        .dbg_retire       (dbg_retire),
 
         .mem_request      (mem_request),
         .mem_rnw          (mem_rnw),

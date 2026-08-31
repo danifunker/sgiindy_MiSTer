@@ -15,13 +15,42 @@ tests/run-scsi.sh         # the same boot with a disk on it, and a block read
 tests/run-cdrom.sh        # the same boot with a CD-ROM drive on ID 6
 tests/run-newport.sh      # the same boot with graphics, and the picture
 tests/run-rex3.sh         # every pixel REX3 drew against every command it got
+tests/run-irix.sh         # boot an INSTALLED IRIX 5.3 root to the kernel    ~5 m
 ```
 
-**Everything except the last two passes `--no-gfx`**, and that is not a
+`run-irix.sh` is the only one that runs guest code past the PROM, and it needs
+a two-gigabyte installed-IRIX image this repository cannot carry — it **skips**
+without one. It is worth its five minutes: the PROM never uses the TLB, so
+every other test here passed against the CPU bug in `docs/09` that looped the
+IRIX kernel forever on its first nested TLB miss.
+
+**Everything except the last two graphics tests passes `--no-gfx`**, and that is not a
 shortcut: the moment ARCS finds a graphics board the PROM moves its console
 onto it and the serial port goes quiet. A serial ratchet has to fit a machine
 with no graphics card, which is a real configuration and the one every boot log
 in this repository showed before Newport existed.
+
+## `run-irix.sh` — the kernel
+
+Boots an installed IRIX 5.3 root off SCSI ID 1, presses `1` at the System
+Maintenance Menu, and asserts the kernel identifies itself:
+
+```
+IRIX Release 5.3 IP22 Version 12200159 System V
+Copyright 1987-1994 Silicon Graphics, Inc.
+```
+
+Getting there means the PROM read the volume header, `sash` loaded `/unix`
+off an EFS filesystem, and the kernel ran far enough to bring up its own
+console — which on an R4400 means a few million TLB refill exceptions. That
+last part is the point. `docs/09`, "A TLB refill taken with EXL set", is a
+CPU bug that every other test in this directory passes over, because the PROM
+runs entirely in KSEG0/KSEG1 and never takes a TLB exception at all.
+
+The image is not in the repository and cannot be. Set `IRIXDISK` to a raw
+disk image, or `IRIXCHD` to a MAME CHD (the script will run `chdman
+extractraw` once and cache the result in `$TMPDIR`). With neither it prints
+`IRIX: SKIP` and exits 0 rather than reporting a failure it did not measure.
 
 ## `run-cputest.sh` — the CPU
 

@@ -9,6 +9,169 @@ session that changes the answer to "what works" or "what is next".
 
 ---
 
+# STOP — IRIX 5.3 BOOTS AND RUNS USERLAND (2026-08-31)
+
+**Three CPU bugs were found and fixed today, all in the vendored R4300i, and
+the machine went from "wedges the moment the IRIX kernel loads" to "boots the
+kernel, starts `init`, and runs the dynamic linker".** One fault is left and it
+is isolated to one component. Read this box and the "WHAT IS LEFT" section; the
+rest of the file below the second STOP is history.
+
+## What works now, measured on an installed IRIX 5.3 disk in Verilator
+
+| | was | is |
+|---|---|---|
+| after "Starting up the system..." | dead at cycle 182,599,999, no bus cycles | **`IRIX Release 5.3 IP22 Version 12200159 System V`** |
+| userland | never reached | `init` runs, `rld` relocates, hundreds of syscalls |
+| with `--no-icache` | — | **past `init`, as far as `ec0: no carrier`** |
+| `tests/run-cputest.sh` | 3 failed | **3 failed** (`fpu/vec_cvt_from_l`, pre-existing) |
+| every other ratchet | PASS | **PASS**, plus a new `tests/run-irix.sh` |
+
+## The three fixes, all in rtl/cpu/r4300/
+
+1. **`cpu_cop0.vhd` — the TLB refill vector ignored `Status.EXL`.** It tested
+   `ERL`, which is a different bit. A refill taken inside the refill handler
+   went back to the refill handler; IRIX's `utlbmiss` reads a page table that
+   is itself mapped, so it nests a miss on every boot and looped forever in
+   eight cached instructions - no console, no exception, **no bus cycles at
+   all**. That is the wedge this file used to call "THE JOB NOW".
+2. **`cpu_cop0.vhd` — `privilegeMode` was the raw `Status.KSU`.** The processor
+   is in kernel mode whenever `EXL` or `ERL` is set; the same file computes
+   that correction twenty lines away and uses it only for `bit64mode`. So every
+   exception taken from user code decoded its handler's addresses with the USER
+   table, and IRIX's handler keeps its scratch area in KSEG3 - which the user
+   table calls unmapped. The save area landed at physical `0x1FFFA000` where
+   nothing answers, the handler read its own stack pointer back as
+   `0xFFFFFFFF`, and re-entered itself five million times.
+3. **`cpu.vhd` / `cpu_instrcache.vhd` — two smaller ones, both real but neither
+   the fault above:** a `cache` op the core does not implement now stops at
+   decode instead of entering the data cache's command state machine
+   unstalled (the IP22 kernel executes about a thousand such ops per boot),
+   and an instruction-cache command that arrives while the cache is filling is
+   now latched instead of silently dropped.
+
+`docs/09-cpu-validation.md` has all of it, with the measurements.
+
+## WHAT IS LEFT: `init` dies with signal 11, and it is THE INSTRUCTION CACHE
+
+**[21-icache-bug.md](21-icache-bug.md) is the whole write-up** — symptom,
+reproduction, oracle, everything already ruled out with what ruled it out, and
+the leads that are left. What follows here is the short version.
+
+```
+WARNING: Process [init] 1 generated trap, but has signal 11 held or ignored
+PANIC: init died (why = 2, what = 0x9)
+```
+
+**The bisection is already done and it is unambiguous:**
+
+| run | result |
+|---|---|
+| both caches on | `init` dies |
+| `--no-dcache` | `init` dies |
+| **`--no-icache`** | **`init` survives; the boot reaches `ec0: no carrier`** |
+| both caches off | same as `--no-icache` |
+
+So the instruction cache hands out a wrong word, rarely. `--exc` shows the end
+of it: `rld` runs thousands of instructions and hundreds of syscalls, then
+`TLBS badvaddr=0000000c` - a store through a pointer that came out zero.
+
+**Things already ruled out, so nobody spends the evening on them again:**
+
+* the mini data TLB (`DISABLE_DTLBMINI => '1'` changes nothing),
+* the data cache (`--no-dcache` alone still dies),
+* unimplemented `cache` ops (made no-ops; no change),
+* I-cache commands dropped during a fill (latched; no change),
+* translating `Hit_Invalidate I` - **this was tried and it is WRONG**: the
+  instruction cache is virtually indexed, so the untranslated address is the
+  index it needs. Reverted, with the reason written next to the code,
+* the fill index skew between tag and data in `cpu_instrcache.vhd` - a genuine
+  hazard, now removed, but it moved no measurement.
+
+**Still open and worth trying, roughly in order:** the fill path's clock
+pipeline (`rtl/cpu/r4300_wrap.vhd` ties `clk1x`, `clk2x` and `clk93` all to one
+clock, and `cpu_instrcache.vhd`'s fill logic was written for three different
+ones); `FetchAddrTLBMuxed1/2` in `cpu.vhd`, which hand BOTH tag comparators the
+one `TLB_instrAddrOutFound`; and the alias case a 16 KB virtually-indexed cache
+has over 4 KB pages.
+
+## THE THREE THINGS THAT MADE TODAY POSSIBLE
+
+1. **THE WHOLE-MACHINE MODEL BUILDS ON THE MAC.** This file used to say the
+   work "belongs on a machine that can build the whole-machine Verilator
+   model". It builds here, on Verilator 5.048, with no `-fno-gate`; the only
+   thing wrong was that `verilator/sim_top.sv` had never been given the
+   `mac_addr` and `dbg_raw_index` ports `sgi_indy.sv` grew. `make -C verilator
+   cputest`.
+2. **AN INSTALLED IRIX DISK, IN SIMULATION.** `~/irix-images/
+   Indy-IRIX53_dev.chd` is a MAME CHD of an installed IRIX 5.3 root.
+   `chdman extractraw -i … -o …/irix53_dev.img`, then
+   `--disk 1=… --type-on 'Option?' '1\r'`. **It reproduces the hardware wedge
+   deterministically, at the same cycle every time, in five minutes.** Chasing
+   a kernel bug by re-running the *installer* was never going to work; booting
+   an already-installed disk takes the install out of the question. Do this
+   first for anything kernel-shaped. `tests/run-irix.sh` is the ratchet.
+3. **IRIS IS AN ORACLE FOR THIS EXACT IMAGE.** `~/repos/iris` boots the same
+   file to "The system is coming up.", which is how we know `init`'s death is
+   ours and not the disk's:
+
+   ```sh
+   printf 'headless = true\nno_audio = true\nbanks = [64,0,0,0]\n[scsi.1]\npath = "…/irix53_dev.img"\ncdrom = false\n' > iris.toml
+   iris --config iris.toml --prom …/ip24prom.070-9101-011.bin --ci --ci-socket /tmp/i.sock
+   IRIS_SOCKET=/tmp/i.sock iris-ci start && iris-ci serial-send 1 && iris-ci serial-read
+   ```
+
+   The socket path must be short (`/tmp/…`), and `iris-ci serial-send 1` takes
+   the text without an escaped `\r`.
+
+## THE INSTRUMENTS THAT ARE NEW, AND ONE THAT IS NOT FINISHED
+
+All in `verilator/sim_cputest.cpp` unless noted, all documented in `docs/06`:
+
+* **`dbg_pc`** (`rtl/cpu/r4300/cpu.vhd`) - the PC at decode. **The last 64 PCs
+  print on every exit.** This is what named the refill loop; a wedge in a
+  cached loop is invisible to `--stuck`, to the bus trace and to `alive.py`
+  alike, because it issues no bus cycles.
+* **`dbg_mode`** - `{privilegeMode, bit64region, region_TLBmapped}`, printed
+  beside the PC by `--pc`. One line found the second bug:
+  `PC 880101a8 ksu=2 32 unmapped`.
+* **`--exc`** - one line per exception with `Cause.ExcCode`, `BadVAddr`, `EPC`.
+* **`--ramdump A:N:F`** - guest RAM to a file, KSEG-stripped, for
+  `tools/misterdeploy/disbin.py`. `guestmem.py` for the simulator. (`disbin.py`
+  needs `capstone`; on a PEP-668 Python make a venv.)
+* **`--trace-from-pc H`** - arm the bus trace when PC H is first decoded, for
+  catching the line fill that served a named instruction.
+* **`--pc-user FILE`** - every user-mode PC, for diffing two runs.
+  **READ ITS CAVEAT.** It is the DECODE tap, which re-presents an instruction
+  on every pipeline replay, and two configurations replay in different places -
+  a raw diff will confidently point at a "loop" that is a function prologue
+  being replayed. Collapse consecutive repeats first, and treat the answer as a
+  lead.
+* **NOT FINISHED: `dbg_rpc` / `dbg_retire`.** Ports for a retire-accurate PC,
+  wired from `cpu.vhd` all the way to the harness and deliberately unused. They
+  mirror `pcOld2..4` outside the savestate export's `translate_off`, and the
+  stream that comes back is interleaved rather than sequential, so the mirror
+  does not track the pipeline the way `pcOld2..4` do. **Finishing this is
+  probably the highest-value hour available**, because a trustworthy retire
+  trace turns "diff a good run against a bad one" into a routine technique -
+  and that is exactly what the remaining instruction-cache bug needs.
+
+## Two other things that are true and not obvious
+
+* **`tests/run-newport.sh` fails on this machine** - "REX3 drew at least
+  1000000 pixels" and "red, green and blue all carry pixels", 0 lit pixels. It
+  was verified to fail **identically with today's CPU fixes reverted**, so it is
+  pre-existing at this commit and unrelated. Undiagnosed.
+* **NONE OF TODAY'S WORK HAS BEEN RUN ON HARDWARE.** The DE10-Nano wedge in
+  `tests/hardware/irix53-install-wedge-20260830.png` is the same IP22 kernel
+  taking the same nested miss and the symptoms match one for one, so fix (1) is
+  very probably it - but that needs a board run to say. **There is also no
+  IRIX 5.3 install CD on this machine**, so the "install" half of the job
+  cannot be reproduced in simulation until one is put somewhere findable;
+  `~/irix-images/` has only `IRIS-Development-Option-5.3.iso`.
+
+---
+
 # STOP — THE SECTIONS BELOW ARE OUT OF DATE (2026-08-30)
 
 **The job they describe is done and three of the faults they call open are
@@ -47,7 +210,10 @@ first of them:**
    The address comes from the RTC's NVRAM, not the EEPROM; both were tried and
    the negative result is committed with its screenshot.
 
-**THE JOB NOW: the machine wedges after the IRIX kernel loads.** The install
+**FIXED ON 2026-08-31 — see the box at the top of this file. The paragraph
+below is what it looked like before the cause was known.**
+
+**THE JOB THEN: the machine wedges after the IRIX kernel loads.** The install
 copies the miniroot byte-exactly, does not panic, and gets the kernel into RAM —
 `"IRIX"` at `0x8818a8dc` and the IP22 kernel's message table around it — and
 then stops with the CPU not executing and no exception frame.

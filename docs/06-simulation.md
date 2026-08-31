@@ -110,6 +110,41 @@ Everything docs recommended porting from the sandbox is there:
   useful diagnostic for chipset bring-up — the next thing to build is nearly
   always the address at the top of a poll loop — and it replaced a per-cycle
   stderr line that buried everything else under 122000 copies of itself;
+- **the PC**, from `dbg_pc` in `rtl/cpu/r4300/cpu.vhd`. The last 64 decoded
+  PCs are printed on **every** exit, with the cycle each was decoded on, and
+  `--pc` / `--pc-from N` / `--pc-count N` print one line per instruction over
+  a window. This is the instrument for a failure that has stopped touching the
+  bus: an IRIX kernel that wedges in a loop small enough to sit in the primary
+  caches issues no bus cycles at all, so `--stuck` has no address to name and
+  the bus trace simply ends mid-routine. Sixty-four PCs named the loop in one
+  run — see `docs/09`, "A TLB refill taken with EXL set". Read the cycle
+  numbers as well as the addresses: consecutive cycles on one PC are a stall,
+  a repeating span with no gaps is a spin, and the same PC after a long gap is
+  a machine that waited. The tap is at **decode**, not writeback, because
+  `pcOld2`..`pcOld4` and `cpu_export.pc` all live inside `-- synthesis
+  translate_off` and are therefore not in the netlist GHDL lowers for
+  Verilator; `pcOld1` is the last one that is;
+- **`--exc`**, one line per exception the CPU accepts, with `Cause.ExcCode`,
+  `BadVAddr` and `EPC`. From the console every failure is the same three words
+  ("generated trap"); this separates a TLB miss from an address error from a
+  reserved instruction, and it is what showed `init`'s dynamic linker running
+  thousands of instructions before dereferencing a null pointer;
+- **`--ramdump ADDR:LEN:FILE`**, repeatable — guest RAM to a file, with KSEG0
+  and KSEG1 stripped so `0x88010174` works. This is `guestmem.py` for the
+  simulator: disassemble the result with `tools/misterdeploy/disbin.py`, which
+  is how the IRIX exception handler was read as instructions rather than
+  guessed at. (`disbin.py` imports `capstone`; on a PEP-668 Python, a venv.);
+- **`--trace-from-pc HEX`**, which arms the bus trace the first time that PC is
+  decoded. A cycle number cannot be known in advance for anything that happens
+  after a kernel has booted, and this is how the line fill that served a named
+  instruction gets caught with its data;
+- **`--pc-user FILE`**, every user-mode PC with its cycle, for diffing two runs
+  that ought to agree. **It is the decode tap, and the decode tap re-presents
+  an instruction on every pipeline replay**; two configurations replay in
+  different places, so a raw diff will report a divergence that is not there.
+  Collapse consecutive repeats in both streams first and treat the result as a
+  lead. `dbg_rpc`/`dbg_retire` exist in the RTL to replace this with a
+  retire-accurate trace and are **not finished** — see `docs/09`;
 - `--irq`, one line per change of INT2's five lines into the CPU, with the
   status and mask registers that decided them. An interrupt that never fires
   and an interrupt that fires and is ignored look identical from the console,
@@ -132,10 +167,9 @@ Everything docs recommended porting from the sandbox is there:
 - **MMIO** spoofing. The GUI's spoof table patches the PROM image, which covers
   the sandbox's whole list of "known-hard spots"; overriding a device register
   would need RTL support, since the devices are no longer in C++.
-- The **PC** panel. `cpu.vhd`'s PC is only observable through the savestate
-  export, which lives inside a `-- synthesis translate_off` block and so is not
-  in the netlist GHDL lowers for Verilator. Adding an `-- SGI:` debug output
-  outside that block would put it in reach.
+- The **PC panel** in the GUI. The PC itself is no longer missing — `dbg_pc`
+  is described above and the headless harness prints it — but `sim_gui.cpp`
+  has no window for it yet.
 
 ## What the DE1 sandbox had
 

@@ -81,6 +81,15 @@ module sim_top
     output wire        bus_ack,
     output wire        bus_unclaimed,
     output wire  [5:0] cpu_error,
+    output wire [31:0] dbg_pc,
+    output wire        dbg_pc_valid,
+    output wire  [3:0] dbg_mode,
+    output wire        dbg_exc,
+    output wire  [4:0] dbg_exc_code,
+    output wire [31:0] dbg_exc_epc,
+    output wire [31:0] dbg_exc_bad,
+    output wire [31:0] dbg_rpc,
+    output wire        dbg_retire,
     output wire  [4:0] irq_lines,
     output wire [39:0] int2_state
 );
@@ -173,6 +182,13 @@ module sim_top
         .gio_present   (gio_present),
         .gfx_present   (gfx_present),
 
+        // The harness has no OSD and no MAC file to upload, so the machine
+        // gets sgiindy.sv's power-on default: sgi_ds1386.sv seeds it into the
+        // RTC's NVRAM, which is where the PROM reads `eaddr` from, and the
+        // IRIX installer dereferences the null it gets back without one.
+        .mac_addr      (48'h08_00_69_12_34_56),
+        .dbg_raw_index (1'b0),   // --fbindex does this in C++, on the dump
+
         .fbw_req       (fbw_req),
         .fbw_we        (fbw_we),
         .fbw_addr      (fbw_addr),
@@ -211,6 +227,15 @@ module sim_top
         .bus_ack_o     (bus_ack),
         .bus_unclaimed (bus_unclaimed),
         .cpu_error     (cpu_error),
+        .dbg_pc        (dbg_pc),
+        .dbg_pc_valid  (dbg_pc_valid),
+        .dbg_mode      (dbg_mode),
+        .dbg_exc       (dbg_exc),
+        .dbg_exc_code  (dbg_exc_code),
+        .dbg_exc_epc   (dbg_exc_epc),
+        .dbg_exc_bad   (dbg_exc_bad),
+        .dbg_rpc       (dbg_rpc),
+        .dbg_retire    (dbg_retire),
         .irq_lines_o   (irq_lines),
         .int2_state_o  (int2_state)
     );

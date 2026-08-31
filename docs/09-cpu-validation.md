@@ -124,6 +124,229 @@ Spoofing `PRId` to R4400 is tempting and probably necessary for the PROM, but
 be aware it makes the suite assert R4400 behaviour the R4300i genuinely does
 not have. Keep the real ID reachable somewhere so tests can branch honestly.
 
+## A TLB refill taken with EXL set — the bug that wedged the IRIX kernel
+
+**This is the eighth bug in the vendored CPU, it was found on 2026-08-31, and
+it is the one that stopped the IRIX 5.3 kernel dead after it loaded.** It is
+worth reading even if you never touch CP0 again, because of how it hid.
+
+`cpu_cop0.vhd` chose the exception vector like this:
+
+```vhdl
+if (COP0_12_SR_errorLevel = '0' and ... tlbMiss ...) then
+   exceptionPC <= x"80000000";     -- or 0x80000080, the XTLB vector
+else
+   exceptionPC <= x"80000180";     -- the general vector
+end if;
+```
+
+It tests **ERL**. The R4000 rule is **EXL**: offset `0x000`/`0x080` is used for
+a TLB refill only when `Status.EXL = 0`, and with `EXL = 1` every exception —
+TLB refill included — goes to offset `0x180`. ERL is a different bit and is set
+only by Reset, NMI and Cache Error.
+
+**Nothing on an N64 nests a TLB miss, so upstream never saw it. IRIX does it on
+every boot and cannot survive it.** Its `utlbmiss` handler at `0x80000000` is:
+
+```
+    mfc0  k0, Context
+    nop
+    sra   k0, k0, 1          # Context indexes 8-byte PTEs; IRIX's are 4
+    lw    k1, 0(k0)          # <- the page table is ITSELF mapped
+    lw    k0, 4(k0)          # <- so this can miss, and does
+```
+
+The second load takes a TLB miss of its own with `EXL` already set. The kernel
+expects to land in the general handler, which has the recover-the-page-table
+path. Instead it landed back at `0x80000000`, with `EPC` untouched, and re-ran
+the same two loads forever.
+
+The fix is one term, and the signal it needs already existed:
+
+```vhdl
+tlbRefillVector := (COP0_12_SR_errorLevel = '0' and excSavedEXL = '0' and ...);
+```
+
+`excSavedEXL`, **not** `COP0_12_SR_exceptionLevel`. The vector block sees the
+exception one clock after it was accepted, and accepting it has already set
+`EXL`; reading the live bit sends *every* refill to the general vector.
+`excSavedEXL` is the pre-exception value, latched on the same clock `EXL` was
+set, and it is what the two EPC-suppression rules in the same file already use.
+`tests/tlb/refill_context` in the IRIS suite catches the live-bit version
+immediately — it reports `refill vector = 3` where it wants 1 or 2 — which is
+the second reason to run the suite after any CP0 edit and not just before.
+
+### How it was found, which is the reusable part
+
+The failure produced **nothing**. No console output, no exception box, no
+panic, and — this is the trap — no bus cycles either, because the loop is eight
+instructions in the primary caches. On hardware `alive.py` could only say
+"memory is not moving"; in simulation `--stuck` had no address to name, and the
+bus trace ended mid-routine at an instruction fetch of `0x80000000..0x8000001f`
+and never fetched the second half of the handler.
+
+Three things turned that into a one-line fix:
+
+1. **A real installed IRIX disk, in Verilator, on a laptop.** `~/irix-images/
+   Indy-IRIX53_dev.chd` is a MAME CHD of an installed IRIX 5.3 root;
+   `chdman extractraw` makes it an ordinary image and `--disk 1=...` attaches
+   it. That reproduces the hardware wedge **deterministically, at the same
+   cycle every time** (182,599,999), in about five minutes, with no board in
+   the loop. Reproducing a kernel bug by re-running the *installer* would have
+   been hopeless; booting an already-installed disk takes the install out of
+   the question entirely.
+2. **`--irq`.** It showed the kernel setting `L0_MASK = 0x82`, `L1_MASK =
+   0x22` and `MAP_MASK0 = 0x20` and then nothing ever asserting — which ruled
+   out "the machine is waiting for an interrupt" and, with `1fbd98b0` at zero
+   hits, ruled out "the 8254 is not ticking" as well. Both were plausible and
+   both were wrong.
+3. **The PC.** `dbg_pc` did not exist; `docs/06` had listed it as the one
+   missing instrument for years. Adding it took an afternoon and answered the
+   question in a single run: the last 64 PCs were
+   `80000000 → 80000004 → 80000008 → 8000000c → 80000010 → 80000000 → …`,
+   which is the refill vector re-entering itself. Everything above is
+   circumstantial next to that.
+
+## Kernel mode is EXL or ERL, not just KSU — the bug after that one
+
+**The ninth bug, found the same day and in the same file, and it is the one
+that kept IRIX from running a single user process.** With the TLB refill vector
+fixed the kernel boots, prints its banner, and starts `init` — and then wedges
+again, this time in a five-million-iteration loop through its own general
+exception handler.
+
+`cpu_cop0.vhd` exported the privilege mode as the raw `Status.KSU` field:
+
+```vhdl
+privilegeMode <= COP0_12_SR_privilegeMode;
+```
+
+The MIPS rule is that the processor is in **Kernel mode when `KSU = 00` OR
+`EXL = 1` OR `ERL = 1`**. Twenty lines away, in the same file, the exception
+process computes exactly that correction — and uses it only for `bit64mode`:
+
+```vhdl
+mode := COP0_12_SR_privilegeMode;
+if (mode > 2) then mode := "10"; end if;
+if (COP0_12_SR_exceptionLevel = '1') then mode := "00"; end if;
+if (COP0_12_SR_errorLevel     = '1') then mode := "00"; end if;
+```
+
+`privilegeMode` is what the address-region decode in `cpu.vhd` uses to choose
+between "put this access through the TLB" and "strip the top three bits and go
+straight to the bus". Getting that choice wrong is **silent**: the access
+completes, at the wrong physical address.
+
+So every exception taken *from user code* decoded its handler's addresses with
+the user table. IRIX's general exception handler keeps its scratch area in
+KSEG3 and reaches it with a fixed offset off `$zero`:
+
+```
+88010184  mfc0 k0, Cause
+...
+880101a8  sd   at, 0xa038(zero)      # save $at at 0xFFFFA038
+880108e8  lw   k0, -0x5fec(zero)     # read a flag at 0xFFFFA014
+88010928  lw   sp, -0x5fd0(zero)     # load the kernel stack pointer
+88010938  jal  8800b48c              # into the C handler
+8800b49c  sw   ra, 0x1c(sp)          # <- faults: sp is 0xFFFFFFFF
+```
+
+With `KSU` still 2 the decode called KSEG3 unmapped, stripped the top three
+bits, and the whole save area landed at **physical `0x1FFFA000`**, where
+nothing answers: writes vanished and reads came back `0xFFFFFFFF`. The handler
+loaded its own stack pointer as `0xFFFFFFFF`, faulted on the first push, and
+re-entered itself — about five million times before the run gave up.
+
+Nothing on an N64 notices, for the same reason as the last one: its handlers
+live in KSEG0, which the *user* table calls unused and which upstream's strip
+then maps correctly anyway.
+
+The fix is the correction the file already knows how to make, moved to where
+`privilegeMode` is exported.
+
+### The instruments this one needed
+
+`dbg_pc` was not enough on its own, because the loop *did* touch the bus. Two
+more went in, and both are cheap and permanent:
+
+- **`dbg_mode`** — `{privilegeMode, bit64region, region_TLBmapped}`, printed
+  next to the PC by `--pc`. One line settled it:
+  `[226116623] PC 880101a8  ksu=2 32 unmapped`. The `sd` into the kernel's
+  save area, decoded in user mode, decoded as unmapped. Everything before that
+  line was inference; that line is the bug.
+- **`--exc`** — one line per accepted exception with `Cause.ExcCode`,
+  `BadVAddr` and `EPC`. From the console every failure is the same three words
+  ("generated trap"); this separates a TLB miss from an address error from a
+  reserved instruction, and it is what shows `init`'s dynamic linker running
+  thousands of instructions and hundreds of syscalls before it dereferences a
+  null pointer. **Put its assignments OUTSIDE `-- synthesis translate_off`**:
+  the first version of this landed inside the savestate export block, GHDL
+  dropped it, and all three registers read as a constant zero in Verilator.
+- **`--ramdump ADDR:LEN:FILE`** — guest RAM out to a file, KSEG-stripped, for
+  `tools/misterdeploy/disbin.py`. `guestmem.py` for the simulator, and the
+  reason the handler above could be read as instructions rather than guessed
+  at. (`disbin.py` needs `capstone`; on a PEP-668 Python a venv is the way.)
+
+## Still open: `init` dies with signal 11, and it is the instruction cache
+
+With both fixes above in, IRIX boots, `init` starts, and its dynamic linker
+runs thousands of instructions and hundreds of syscalls — and then stores
+through a pointer that came out zero:
+
+```
+[234801203] EXC TLBS   code=03 badvaddr=0000000c epc=7fc20f90
+WARNING: Process [init] 1 generated trap, but has signal 11 held or ignored
+PANIC: init died (why = 2, what = 0x9)
+```
+
+**The bisection is done.** `--no-dcache` alone still dies; `--no-icache` boots
+past `init` as far as `ALERT: ec0: no carrier`. So the instruction cache hands
+out a wrong word, rarely. `~/repos/iris` boots the same disk image to "The
+system is coming up.", so the image is sound and the fault is this core's.
+
+Ruled out, each by measurement, so nobody repeats them:
+
+| tried | result |
+|---|---|
+| `DISABLE_DTLBMINI => '1'` (mini data TLB off) | still dies |
+| `--no-dcache` | still dies |
+| unimplemented `cache` ops made no-ops at decode | still dies (kept: real fix) |
+| I-cache commands latched instead of dropped mid-fill | still dies (kept: real fix) |
+| translating `Hit_Invalidate I` | **wrong** — the I-cache is virtually indexed, so the untranslated address is the index it needs. Reverted |
+| writing the fill's data at the un-pipelined index | no change (kept: hazard removed) |
+
+Worth trying next, in order:
+
+1. **The fill path's clock pipeline.** `cpu_instrcache.vhd` was written for
+   three different clocks (`clk1x`, `clk2x`, `clk93`); `r4300_wrap.vhd` ties
+   all three to the one system clock. Anything in there whose correctness came
+   from a 2× clock is now suspect.
+2. **`FetchAddrTLBMuxed1/2` in `cpu.vhd`.** There are two tag comparators, fed
+   two different virtual addresses, and both are given the one
+   `TLB_instrAddrOutFound`. Within a page that is the same answer; across a
+   page boundary it is not.
+3. **The alias case.** 16 KB direct-mapped, indexed by virtual bits 13:5,
+   tagged with physical bits 31:12, over 4 KB pages — four virtual colours per
+   physical page, as on a real R4000. What IRIX assumes about that is worth
+   reading before assuming the core is wrong.
+
+### A method note that cost an afternoon
+
+Diffing the PC streams of a good run and a bad one is the obvious way in, and
+`--pc-user` exists for it. **The decode tap re-presents an instruction on every
+pipeline replay**, and two configurations replay in different places, so a raw
+diff confidently reports a divergence that is not there — in this case it
+pointed at a two-instruction "loop" at `0x7fc05274` that `--trace-from-pc` then
+showed to be `sw ra,0x3c(sp)` in a function prologue, replayed. Collapse
+consecutive repeats in both streams before comparing.
+
+`dbg_rpc` / `dbg_retire` were added to fix that properly — a retire-accurate
+PC, mirroring `pcOld2..4` outside the savestate export's `translate_off` — and
+they are **wired to the harness but not used**, because the stream they produce
+is interleaved rather than sequential: the mirror does not yet track the
+pipeline the way `pcOld2..4` do. Finishing it is probably the most valuable
+hour available on this problem.
+
 ## IRIS is also a far better oracle than MAME
 
 `docs/06-simulation.md` recommends diffing against MAME. IRIS is better on

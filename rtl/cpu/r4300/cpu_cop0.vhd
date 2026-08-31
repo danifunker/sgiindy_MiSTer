@@ -57,6 +57,16 @@ entity cpu_cop0 is
       privilegeMode           : out unsigned(1 downto 0) := (others => '0');
       bit64region             : out std_logic;
 
+      -- SGI: one strobe per exception accepted, with the three registers that
+      -- say what it was. Outside the savestate export, so it survives into the
+      -- netlist GHDL lowers for Verilator. Cause.ExcCode alone separates a TLB
+      -- miss from an address error from a reserved instruction, which from the
+      -- console are the same three words - "generated trap".
+      dbg_exc                 : out std_logic := '0';
+      dbg_exc_code            : out unsigned(4 downto 0) := (others => '0');
+      dbg_exc_epc             : out unsigned(31 downto 0) := (others => '0');
+      dbg_exc_bad             : out unsigned(31 downto 0) := (others => '0');
+
       -- SGI: Config.K0, the KSEG0 coherency algorithm. Upstream stores the
       -- field and lets software read it back, but nothing acts on it: an N64
       -- never writes Config, so KSEG0 is cached and that is that. The IP24
@@ -398,7 +408,31 @@ begin
    COP1_enable   <= COP0_12_SR_enable_cop1;
    COP2_enable   <= COP0_12_SR_enable_cop2;
    fpuRegMode    <= COP0_12_SR_floatingPointMode;
-   privilegeMode <= COP0_12_SR_privilegeMode;
+   -- SGI: THE PROCESSOR IS IN KERNEL MODE WHENEVER EXL OR ERL IS SET, whatever
+   -- Status.KSU says. Upstream exported the raw KSU here and applied the rule
+   -- only to `bit64mode`, twenty lines of the same file away - see "set mode"
+   -- in the exception process, which computes exactly this correction and then
+   -- throws it away.
+   --
+   -- `privilegeMode` is what the address-region decode in cpu.vhd uses, so
+   -- the raw value means every exception taken FROM USER CODE decodes its
+   -- handler's addresses with the user table. On an N64 that is invisible:
+   -- the handler touches KSEG0, which the user table calls unused and which
+   -- upstream's strip then maps correctly anyway. On IRIX it is fatal. Its
+   -- general exception handler keeps its scratch area in KSEG3 and reaches it
+   -- with `sd $at, 0xa038($zero)` / `ld $k0, 0xa038($zero)`; with KSU still 2
+   -- the decode calls KSEG3 unmapped, strips the top three bits, and the save
+   -- area lands at PHYSICAL 0x1FFFA038 where nothing answers. The handler then
+   -- reads its own saved stack pointer back as 0xFFFFFFFF, faults on the first
+   -- push, and re-enters itself forever - about five million times before the
+   -- run gives up. docs/09 has the measurement.
+   --
+   -- The `> 2` arm is upstream's, kept: KSU has four encodings and only three
+   -- are defined.
+   privilegeMode <= "00" when (COP0_12_SR_exceptionLevel = '1' or
+                               COP0_12_SR_errorLevel     = '1') else
+                    "10" when (COP0_12_SR_privilegeMode > 2) else
+                    COP0_12_SR_privilegeMode;
    bit64region   <= bit64mode;
    
    TagLo_Valid   <= COP0_28_TAGLO_primaryCacheState(1);
@@ -547,6 +581,7 @@ begin
       variable nextEPC     : unsigned(63 downto 0);
       variable excAddr     : unsigned(63 downto 0);   
       variable excAddrWE   : std_logic;   
+      variable tlbRefillVector : boolean;   -- SGI: see its use below
    begin
       if (rising_edge(clk93)) then
       
@@ -564,9 +599,38 @@ begin
             eretPC <= COP0_14_EPC;
          end if;
          
+         -- SGI: A TLB REFILL EXCEPTION TAKEN WITH EXL ALREADY SET GOES TO THE
+         -- GENERAL VECTOR, NOT THE REFILL ONE. The R4000 manual's exception
+         -- vector table selects offset 0x000 (the refill vector) only when
+         -- Status.EXL = 0; with EXL = 1 every exception, TLB refill included,
+         -- takes offset 0x180. Upstream tested only Status.ERL, which is a
+         -- different bit and is set only by Reset/NMI/Cache Error.
+         --
+         -- Nothing on an N64 nests a TLB miss, so upstream never saw this.
+         -- IRIX does it on every boot and cannot survive it: its utlbmiss
+         -- handler reads the page table with `lw k1,0(k0)` / `lw k0,4(k0)`,
+         -- and the page table is itself mapped, so the second load takes a
+         -- TLB miss of its own. The kernel expects to land in the general
+         -- handler, which has the recover-the-page-table path. Without the
+         -- EXL test it lands back at 0x80000000 with EPC unchanged, and
+         -- re-runs the same two loads forever - a loop small enough to sit in
+         -- the primary caches, so it issues no bus cycles at all and looks
+         -- exactly like a halted machine. That is the wedge after the IRIX
+         -- kernel loads; docs/08 has the measurement that found it.
+         -- excSavedEXL, not COP0_12_SR_exceptionLevel: this block sees the
+         -- exception one clock after it was accepted, and accepting it has
+         -- already set EXL. Reading the live bit would send EVERY refill to
+         -- the general vector - tests/tlb/refill_context is what catches
+         -- that. excSavedEXL is the pre-exception value, saved on the same
+         -- clock EXL was set, and it is already what the EPC-suppression
+         -- rules above and below use.
+         tlbRefillVector := (COP0_12_SR_errorLevel = '0' and excSavedEXL = '0' and
+                             ((exception = '1' and tlbMiss3 = '1') or
+                              (exception = '0' and exceptionStage1 = '1' and tlbMiss1 = '1')));
+
          if (COP0_12_SR_vectorLocation = '1') then
          
-            if (COP0_12_SR_errorLevel = '0' and ((exception = '1' and tlbMiss3 = '1') or (exception = '0' and exceptionStage1 = '1' and tlbMiss1 = '1'))) then
+            if (tlbRefillVector) then
                if (bit64mode = '1') then
                   exceptionPC(31 downto 0) <= x"BFC00280";
                else
@@ -578,7 +642,7 @@ begin
             
          else
             
-            if (COP0_12_SR_errorLevel = '0' and ((exception = '1' and tlbMiss3 = '1') or (exception = '0' and exceptionStage1 = '1' and tlbMiss1 = '1'))) then
+            if (tlbRefillVector) then
                if (bit64mode = '1') then
                   exceptionPC(31 downto 0) <= x"80000080";
                else
@@ -935,7 +999,10 @@ begin
                end if;
             end if;
             
+            dbg_exc <= '0';   -- SGI: one clock per acceptance
+
             if (TLB_ExcInstrRead = '1') then
+               dbg_exc <= '1';   -- SGI
                exceptionStage1            <= '1';
                tlbMiss1                   <= TLB_ExcInstrMiss;
                excSavedEXL                <= COP0_12_SR_exceptionLevel;  -- SGI
@@ -950,6 +1017,7 @@ begin
                   if (decode_irq = '1' or exceptionFPU = '1' or exception3 = '1' or TLB_ExcDataRead = '1' or TLB_ExcDataWrite = '1' or TLB_ExcDataDirty = '1') then
                   
                      exception <= '1';
+                     dbg_exc   <= '1';   -- SGI
                      excSavedEXL                 <= COP0_12_SR_exceptionLevel;  -- SGI
                      COP0_12_SR_exceptionLevel   <= '1';
                      COP0_13_CAUSE_coprocessorError <= "00";
@@ -1441,6 +1509,16 @@ begin
       end if;
    end process;
 
+
+   -- SGI: the three registers that say what an exception was, live rather than
+   -- latched, for the harness to sample on dbg_exc. THIS MUST STAY OUTSIDE the
+   -- `-- synthesis translate_off` below: everything in there is the savestate
+   -- export, GHDL drops it, and a port assigned only in there reads as a
+   -- constant zero in Verilator - which is exactly what happened the first
+   -- time this was written.
+   dbg_exc_code <= COP0_13_CAUSE_exceptionCode;
+   dbg_exc_epc  <= COP0_14_EPC(31 downto 0);
+   dbg_exc_bad  <= COP0_8_BADVIRTUALADDRESS(31 downto 0);
 
    -- synthesis translate_off
    cop0_export(0)(5 downto 0)    <= COP0_0_INDEX_tlbEntry;
