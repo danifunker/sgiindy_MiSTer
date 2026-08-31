@@ -305,7 +305,17 @@ wire [31:0] mem_mb = (mem_sel == 2'd1) ? 32'd32
 // end. Nothing the machine did in that window outlives the reset - the PROM
 // region is read-only to the core, so garbage cannot have damaged the image
 // that is about to be executed.
-wire prom_download = ioctl_download && (ioctl_index[5:0] == 6'd0);
+// THE WHOLE LOW BYTE, NOT JUST THE SLOT NUMBER. `ioctl_index` carries the slot
+// in [5:0] and an EXTENSION INDEX in [7:6], and the framework uses that upper
+// field for its own automatic uploads: at every core start it sends
+// games/<core>/boot0.rom .. boot3.rom at index `i << 6` (Main_MiSTer
+// user_io.cpp:1629), with no CONF_STR entry and no OSD. Matching on [5:0]
+// alone therefore accepts boot1.rom, boot2.rom and boot3.rom AS THE BOOT PROM
+// and writes them over it. Nothing does that today because those files do not
+// exist, which is exactly what makes it worth fixing before one of them does -
+// the symptom would be a machine that executes garbage from its first fetch,
+// three layers from a file somebody dropped in the games directory.
+wire prom_download = ioctl_download && (ioctl_index[7:0] == 8'd0);
 
 // A CHANGE OF MEMORY SIZE RESETS THE MACHINE, because the PROM sizes memory
 // exactly once - `szmem` probes each bank at boot and writes the result into
