@@ -350,3 +350,4 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_SPI*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/mc_gio_dma.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/hal2.sv
