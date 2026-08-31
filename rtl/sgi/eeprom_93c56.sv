@@ -34,8 +34,9 @@
 //
 //  Contents are volatile: there is no backing store on the FPGA side yet, so
 //  the array powers up erased and anything the PROM writes is lost at reset.
-//  That is a deliberate gap. TWO words' power-up values actually matter, and
-//  both are parameters below: CACHSZ_PAGES and the Ethernet address.
+//  That is a deliberate gap. Two words' contents actually matter and neither
+//  can be left erased: CACHSZ_PAGES, a parameter, and the Ethernet address,
+//  which is a runtime input because it differs per board.
 //============================================================================
 
 module eeprom_93c56 #(
@@ -45,21 +46,33 @@ module eeprom_93c56 #(
     // state is 0xFFFF, and firmware that believes that spends the boot
     // flushing a 256 MB cache which does not exist, so a model with no L2 has
     // to say so explicitly. IRIS carries the same note in src/machine.rs.
-    parameter logic [15:0] CACHSZ_PAGES = 16'h0000,
+    parameter logic [15:0] CACHSZ_PAGES = 16'h0000
+)(
+    input  logic clk,
+    input  logic reset,
 
     // THE ETHERNET ADDRESS, AND IT IS NOT OPTIONAL JUST BECAUSE THERE IS NO
     // ETHERNET. Words 0x7D..0x7F of this part are the machine's MAC address,
-    // two bytes each, and the PROM turns them into the `eaddr` environment
-    // variable. IRIS names the same layout in src/eeprom_93c56.rs.
+    // two bytes each. IRIS names the same layout in src/eeprom_93c56.rs and
+    // writes it here as well as in the RTC.
     //
-    // Erased, those words read 0xFFFF and the address comes out as
-    // ff:ff:ff:ff:ff:ff - which the PROM carries as a literal string at
-    // 0xBFC4CF58 precisely so it can recognise it as invalid. It then leaves
-    // `eaddr` out of the environment altogether, and `printenv` in the Command
-    // Monitor showed exactly that: fifteen variables and no eaddr.
+    // It is an INPUT rather than a parameter because the address has to differ
+    // per board: sgiindy.sv latches it from games/<core>/boot1.rom, which the
+    // framework uploads at ioctl index 0x40 at every core start, and
+    // scripts/deploy.sh generates that file on the device with the MiSTer's own
+    // last octet in it.
     //
-    // THAT IS WHAT CRASHED THE IRIX 5.3 INSTALLER, all the way from a blank
-    // EEPROM to a panic, and every step was measured on hardware:
+    // THE PROM DOES NOT READ IT FROM HERE - that was measured. These six bytes
+    // were put in this part first, and `printenv` in the Command Monitor still
+    // listed fifteen variables and no eaddr; sgi_ds1386.sv's NVRAM is the copy
+    // that counts. It is set anyway, because IRIS sets both and a machine whose
+    // two copies disagree is a trap for whoever reads them next.
+    //
+    // WHY ANY OF THIS MATTERS. Erased, an address reads ff:ff:ff:ff:ff:ff -
+    // which the PROM carries as a literal string at 0xBFC4CF58 precisely so it
+    // can recognise it as invalid - and it then leaves `eaddr` out of the
+    // environment. That crashed the IRIX 5.3 installer, and every step of it
+    // was measured on hardware:
     //
     //   the installer calls the ARCS firmware vector at SPB+0x20, offset 0x78
     //   - GetEnvironmentVariable - for "eaddr" (0x880076E4), passes the result
@@ -69,16 +82,9 @@ module eeprom_93c56 #(
     //   PROM's handler prints "PANIC: Unexpected exception".
     //
     // The six bytes are copied into a six-byte buffer and nibble-picked right
-    // after the call, which is how the parser was identified as a MAC parser
+    // after the call, which is how that parser was identified as a MAC parser
     // rather than anything else.
-    //
-    // 08:00:69 is SGI's OUI. The suffix matches the one IRIS uses, so the two
-    // machines report the same address and can be compared directly; nothing
-    // in this core transmits, so there is no address to collide with.
-    parameter logic [47:0] MAC_ADDR = 48'h08_00_69_12_34_56
-)(
-    input  logic clk,
-    input  logic reset,
+    input  logic [47:0] mac_addr,
 
     input  logic cs,          // chip select, active high
     input  logic sk,          // serial clock; the part advances on its rising edge
@@ -130,9 +136,6 @@ module eeprom_93c56 #(
     initial begin
         for (i = 0; i < 128; i = i + 1) mem[i] = 16'hFFFF;
         mem[8'h11] = CACHSZ_PAGES;
-        mem[8'h7D] = MAC_ADDR[47:32];
-        mem[8'h7E] = MAC_ADDR[31:16];
-        mem[8'h7F] = MAC_ADDR[15:0];
     end
 
     always_ff @(posedge clk) begin
@@ -140,6 +143,18 @@ module eeprom_93c56 #(
         cs_q <= cs;
 
         if (reset) begin
+            // The Ethernet address, seeded from the runtime input. This array
+            // is flip-flops - Quartus reports it uninferred because the read
+            // is asynchronous - so three stores in one cycle cost nothing and
+            // need no sequencer, unlike the same job in sgi_ds1386.sv.
+            //
+            // The PROM does NOT read the address from here: the same six
+            // bytes were put in this part first and `printenv` still showed
+            // no eaddr. It is set because IRIS sets both and a machine whose
+            // two copies disagree is a trap for whoever reads them next.
+            mem[8'h7D]   <= mac_addr[47:32];
+            mem[8'h7E]   <= mac_addr[31:16];
+            mem[8'h7F]   <= mac_addr[15:0];
             state        <= S_STANDBY;
             do_out       <= 1'b1;
             write_enable <= 1'b0;

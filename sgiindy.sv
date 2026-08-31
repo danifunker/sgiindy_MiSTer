@@ -99,14 +99,13 @@ localparam CONF_STR = {
 	// That matters here more than on most cores because this machine takes
 	// thirty seconds to draw its boot screen and is relaunched constantly
 	// during bring-up, and because the screenshot API does not capture the OSD,
-	// so blind menu navigation cannot be verified. scripts/mount.sh's MGL is
-	// still the way to mount something for ONE run; this is the way to make a
-	// disk stay attached to the machine.
+	// so blind menu navigation cannot be verified.
 	//
-	// The saved path is written when an image is chosen in the OSD. To seed it
-	// without the OSD, write the path NUL-terminated into a 1024-byte
-	// config/SGIIndy.s<n> - that is exactly what FileSaveConfig writes, since
-	// menu.cpp's selPath is char[1024]. scripts/mount.sh --persist does it.
+	// The saved path is written when an image is chosen in the OSD.
+	// scripts/mount.sh writes it directly instead, because the screenshot API
+	// does not capture the OSD and a blind menu walk cannot be verified. The
+	// format is not a text file: FileSaveConfig writes the whole of menu.cpp's
+	// `char selPath[1024]`, so the path goes in NUL-terminated and zero-padded.
 	"SC1,IMGISOCHD,SCSI ID1;",
 	"SC2,IMGISOCHD,SCSI ID2;",
 	"SC3,IMGISOCHD,SCSI ID6 CD;",
@@ -370,6 +369,40 @@ always @(posedge clk_sys) begin
 	if (reset && !prom_download) dl_req <= 0;
 end
 
+// THE MACHINE'S ETHERNET ADDRESS, AT RUN TIME.
+//
+// It cannot be compiled in: two boards on one network must not share it. The
+// framework uploads games/<core>/boot0.rom .. boot3.rom at ioctl index `i << 6`
+// at every core start, with no CONF_STR entry and no OSD (Main_MiSTer
+// user_io.cpp:1629) - the same silent channel boot.rom arrives on at index 0.
+// scripts/deploy.sh writes boot1.rom on the device, six bytes, with the
+// MiSTer's own last octet in it, so index 0x40 is this machine's MAC.
+//
+// THE ORDER IS WHAT MAKES THIS WORK. The framework sends boot1.rom BEFORE
+// boot.rom, and boot.rom's download re-asserts reset and holds it for 65,535
+// clocks - so the address is latched well before the guest can read it, and
+// sgi_ds1386.sv seeds it into the NVRAM three clocks after reset releases.
+//
+// Not reset: the PROM download's own reset would otherwise wipe it. The
+// declared value is the fallback for a card with no boot1.rom on it, and it is
+// a valid address rather than zeros, because a machine with no eaddr panics the
+// IRIX installer - see rtl/sgi/eeprom_93c56.sv.
+//
+// hps_io's WIDE mode puts the earlier of each pair of bytes in the LOW half of
+// ioctl_dout, the same swap the PROM download does above.
+wire mac_download = ioctl_download && (ioctl_index[7:0] == 8'h40);
+reg [47:0] mac_addr = 48'h08_00_69_12_34_56;
+
+always @(posedge clk_sys) begin
+	if (ioctl_wr && mac_download) begin
+		case (ioctl_addr[2:1])
+			2'd0: mac_addr[47:32] <= {ioctl_dout[7:0], ioctl_dout[15:8]};
+			2'd1: mac_addr[31:16] <= {ioctl_dout[7:0], ioctl_dout[15:8]};
+			2'd2: mac_addr[15:0]  <= {ioctl_dout[7:0], ioctl_dout[15:8]};
+		endcase
+	end
+end
+
 ////////////////////////   THE MACHINE   /////////////////////////
 
 wire        ram_req, ram_we, ram_ack;
@@ -480,6 +513,8 @@ sgi_indy u_core
 
 	.ps2_key          (ps2_key),
 	.ps2_mouse        (ps2_mouse),
+
+	.mac_addr         (mac_addr),
 
 	.scsi_img_mounted (scsi_img_mounted),
 	.scsi_img_blocks  (img_size[40:9]),

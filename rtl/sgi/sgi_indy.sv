@@ -94,6 +94,14 @@ module sgi_indy #(
     input  logic [10:0] ps2_key,
     input  logic [24:0] ps2_mouse,
 
+    // ---- the machine's Ethernet address ---------------------------------
+    // Not a parameter, because it has to differ per board. sgiindy.sv latches
+    // it from the file MiSTer uploads at ioctl index 0x40; sgi_ds1386.sv
+    // seeds it into the NVRAM at reset, which is where the PROM reads it to
+    // build `eaddr`. See eeprom_93c56.sv for why a machine without one
+    // panics the IRIX installer.
+    input  logic [47:0] mac_addr,
+
     // ---- main memory -----------------------------------------------------
     output logic        ram_req,
     output logic        ram_we,
@@ -534,6 +542,7 @@ module sgi_indy #(
     eeprom_93c56 u_eeprom (
         .clk    (clk),
         .reset  (reset),
+        .mac_addr(mac_addr),
         .cs     (ee_cs),
         .sk     (ee_sk),
         .di     (ee_di),
@@ -744,6 +753,7 @@ module sgi_indy #(
     sgi_ds1386 #(.TICK_DIV(RTC_TICK_DIV)) u_rtc (
         .clk   (clk),
         .reset (reset),
+        .mac_addr(mac_addr),
         .ce    (ce),
         .sel   (bus_req && sel_rtc),
         .we    (bus_we),

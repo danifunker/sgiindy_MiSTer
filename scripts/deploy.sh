@@ -97,6 +97,23 @@ if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
 fi
 log "$ROM -> $GAMES/boot.rom, md5 verified: $LOCAL_MD5"
 
+# THE ETHERNET ADDRESS, AS A RUNTIME VALUE. The machine needs one - without it
+# the PROM has no `eaddr` and the IRIX 5.3 installer dereferences the null it
+# gets back - and it cannot be compiled in, because two boards on a network
+# must not share it. MiSTer's framework uploads games/<core>/boot0.rom ..
+# boot3.rom at ioctl index `i << 6` at every core start with no OSD
+# (Main_MiSTer user_io.cpp:1629), the same silent channel boot.rom uses at
+# index 0, so boot1.rom arrives at 0x40 and sgiindy.sv decodes it as six bytes
+# of MAC.
+#
+# The last octet is taken from the MiSTer's OWN interface, so it differs per
+# board; the first five are fixed, with 08:00:69 being SGI's OUI. It is
+# generated on the device because that is where the interface is.
+log "=== Ethernet address ==="
+"${SCP[@]}" tools/misterdeploy/mkmac.py "$DEV:/tmp/mkmac.py" || exit 1
+"${SSH[@]}" "$DEV" "python3 /tmp/mkmac.py '$GAMES/boot1.rom'" || {
+    log "ERROR: could not write $GAMES/boot1.rom"; exit 1; }
+
 if [ "$ROM_ONLY" = 1 ]; then
     log "--rom-only: the PROM and its directory are in place, stopping here"
     exit 0
