@@ -55,14 +55,18 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# WITH MEDIA MOUNTED THIS IS A DIFFERENT MEASUREMENT, and it has to be taken
-# the same way as the one without or the two cannot be compared: the panic
-# rate roughly doubles once a SCSI target answers, because that is what makes
-# the HPC3 DMA engine a second master on main memory. The launcher cannot
-# mount, so when any media is named the launch goes through an MGL - the same
-# file scripts/mount.sh writes, absolute paths and all, and that script has
-# the reason a relative path silently mounts nothing.
-MGL="/media/fat/$MISTER_CORE_FOLDER/SGIIndy_SCSI.mgl"
+# WITH MEDIA ATTACHED THIS IS A DIFFERENT MEASUREMENT, and it has to be taken
+# the same way as the one without or the two cannot be compared. It was worth
+# taking: before the memory arbiter was fixed the panic rate roughly doubled
+# once a SCSI target answered, because a target answering is what makes the
+# HPC3 DMA engine a second master on main memory.
+#
+# The images are attached by writing the core's SAVED SCSI SLOTS - scripts/
+# mount.sh does that and stops - and then the core is launched the ordinary
+# way, because the framework re-attaches them itself at every start. So a run
+# with media and a run without differ only in what is in the machine, not in
+# how it was started. That is the point of the `SC` slots; an MGL, which is
+# what this used to use, attaches for one launch and is gone on the next.
 MEDIA=0
 [ -n "$DISK1$DISK2$CD" ] && MEDIA=1
 
@@ -108,20 +112,16 @@ print("%-11s panel %5.1f%%  text %5d  indices %3d  marker %4.1f%%  %s"
 PYEOF
 
 if [ "$MEDIA" = 1 ]; then
-    for p in "$DISK1" "$DISK2" "$CD"; do
-        case "$p" in ""|/*) ;; *) echo "ERROR: not an absolute path: $p" >&2; exit 2 ;; esac
-    done
-    {
-        echo "<mistergamedescription>"
-        echo "	<rbf>$MISTER_CORE_FOLDER/${RBF_REMOTE%.rbf}</rbf>"
-        [ -n "$DISK1" ] && echo "	<file delay=\"2\" type=\"s\" index=\"1\" path=\"$DISK1\"/>"
-        [ -n "$DISK2" ] && echo "	<file delay=\"1\" type=\"s\" index=\"2\" path=\"$DISK2\"/>"
-        [ -n "$CD" ] && echo "	<file delay=\"1\" type=\"s\" index=\"3\" path=\"$CD\"/>"
-        echo "</mistergamedescription>"
-    } > /tmp/sgiindy_bootrate.mgl
-    scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
-        /tmp/sgiindy_bootrate.mgl "$MISTER_SSH_USER@$MISTER_HOST:$MGL" || exit 1
-    echo "=== media: ${DISK1:-none} + ${CD:-none} ==="
+    # scripts/mount.sh writes the saved SCSI slots and stops. From here the
+    # core is launched normally and the framework attaches them itself, so
+    # a run with media and a run without differ only in what is in the
+    # machine - not in how it was started, which is what makes the two
+    # panic rates comparable.
+    ARGS=""
+    [ -n "$DISK1" ] && ARGS="$ARGS --disk1 \"$DISK1\""
+    [ -n "$DISK2" ] && ARGS="$ARGS --disk2 \"$DISK2\""
+    [ -n "$CD" ]    && ARGS="$ARGS --cd \"$CD\""
+    eval bash scripts/mount.sh --no-launch $ARGS || exit 1
 fi
 
 echo "=== $N launches, ${WAIT}s each, memory: $([ -n "$POISON" ] && echo "POISONED 0x$POISON"       || { [ $MEMCLEAR = 1 ] && echo zeroed || echo "left as the last boot left it"; }) ==="
@@ -130,14 +130,10 @@ for i in $(seq 1 "$N"); do
     rsh "python3 $DBG/fb_poke.py fill 0xE7" >/dev/null 2>&1
     [ "$MEMCLEAR" = 1 ] && rsh "python3 $DBG/memclear.py" >/dev/null 2>&1
     [ -n "$POISON" ]    && rsh "python3 $DBG/memclear.py 0x$POISON" >/dev/null 2>&1
-    if [ "$MEDIA" = 1 ]; then
-        rsh "echo 'load_core $MGL' > /dev/MiSTer_cmd" >/dev/null 2>&1
-    else
-        python tools/misterdeploy/launch_unstable_core.py \
-            --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
-            --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
-            --ssh-key "$MISTER_SSH_KEY" --ssh-user "$MISTER_SSH_USER" >/dev/null 2>&1
-    fi
+    python tools/misterdeploy/launch_unstable_core.py \
+        --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
+        --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
+        --ssh-key "$MISTER_SSH_KEY" --ssh-user "$MISTER_SSH_USER" >/dev/null 2>&1
     # THE SETTLE WAITS ON THE DEVICE. classify.py samples twice 20 s apart,
     # so this is the rest of WAIT - and a foreground sleep here is refused by
     # some harnesses, while the ssh call has to be made anyway.
