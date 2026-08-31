@@ -35,6 +35,28 @@ module sgi_ds1386 #(
     // MC's RPSS divider implies (see sgi_mc.sv).
     parameter int TICK_DIV = 500_000,
 
+    // THE ETHERNET ADDRESS, AND THIS IS THE COPY THAT COUNTS. docs/02 says
+    // "MAC address comes from the RTC/NVRAM device" and that is now measured
+    // rather than quoted: the same six bytes were put in the 93C56 EEPROM
+    // first, at words 0x7D..0x7F where IRIS also writes them, and `printenv`
+    // in the Command Monitor still listed fifteen variables and no eaddr. The
+    // PROM reads this part.
+    //
+    // Device bytes 0x13A..0x13F, MSB first, which is physical
+    // 0x1FBE04E8..0x1FBE04FC at this device's one-byte-per-word stride. IRIS
+    // keeps them at the same offset (src/ds1x86.rs, MAC_REGS_OFFSET) and
+    // injects them at machine construction, in BOTH devices - which is why
+    // both are set here even though only this one has been shown to matter.
+    //
+    // WITHOUT IT THE IRIX 5.3 INSTALLER PANICS. It asks the PROM for `eaddr`
+    // through the ARCS GetEnvironmentVariable vector, gets a null pointer
+    // because the variable does not exist, and hands it straight to a MAC
+    // parser whose first instruction dereferences it. See eeprom_93c56.sv for
+    // the whole chain, which was read out of DDR3 while the machine sat at the
+    // panic. There is still no Ethernet in this core; the address is required
+    // because software asks for it and does not check the answer.
+    parameter logic [47:0] MAC_ADDR = 48'h08_00_69_12_34_56,
+
     // Power-on date, since there is no battery. On hardware this should come
     // from MiSTer's HPS clock at load time; until then it is a fixed, plainly
     // wrong-but-plausible value rather than 00:00 on an unset part.
@@ -85,6 +107,26 @@ module sgi_ds1386 #(
     // shadow of the 16 clock registers, as before.
     logic  [7:0] nv0 [0:4095];        // device bytes whose index bit 0 is 0
     logic  [7:0] nv1 [0:4095];        // ...and whose index bit 0 is 1
+
+    // THE ETHERNET ADDRESS AS POWER-UP CONTENTS. An initial block over an
+    // inferred memory is its power-up value: Quartus emits a .mif and the M10K
+    // comes up holding it, and Verilator runs the block at time zero. It adds
+    // no logic, so it cannot disturb the read shape this array's inference
+    // depends on - but check `Total registers` in the map summary anyway,
+    // because that is how this file's inference has failed before and it fails
+    // silently. About 38,500 is right; a number 65,000 higher is these two
+    // banks having become flip-flops again.
+    //
+    // dev_idx = {addr[14:3], w}, so device byte i lives in bank i[0] at index
+    // i[12:1]: 0x13A..0x13F is banks 0 and 1 at 0x9D, 0x9E and 0x9F.
+    initial begin
+        nv0[12'h09D] = MAC_ADDR[47:40];   // device byte 0x13A
+        nv1[12'h09D] = MAC_ADDR[39:32];   //             0x13B
+        nv0[12'h09E] = MAC_ADDR[31:24];   //             0x13C
+        nv1[12'h09E] = MAC_ADDR[23:16];   //             0x13D
+        nv0[12'h09F] = MAC_ADDR[15:8];    //             0x13E
+        nv1[12'h09F] = MAC_ADDR[7:0];     //             0x13F
+    end
     logic [31:0] tick;
 
     wire te = rtc[R_COMMAND][7];
