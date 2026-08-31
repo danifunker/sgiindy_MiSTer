@@ -652,7 +652,12 @@ module wd33c93 #(
                     end
                 end
 
-                ST_XFER_ACK: begin
+                // The same rule on the polled path. Its window is one cycle
+                // rather than tens - the REQ test is in the state before this
+                // one - so it has never been seen to fire, but a one-cycle
+                // race that corrupts a disk silently is not worth keeping for
+                // the sake of a cycle. See the note on ST_SAT_ACK.
+                ST_XFER_ACK: if (scsi_req) begin
                     scsi_ack <= 1'b1;
                     state    <= ST_XFER_REL;
                 end
@@ -917,7 +922,45 @@ module wd33c93 #(
                     end
                 end
 
-                ST_SAT_ACK: begin
+                // ACK ONLY IN ANSWER TO A REQ THAT IS STILL THERE, and this
+                // guard is not pedantry about the standard - without it this
+                // core corrupts every long disk write.
+                //
+                // REQ/ACK is interlocked: the target asserts REQ, the
+                // initiator answers with ACK, and the target latches the byte
+                // on the ACK edge. But the target is also allowed to WITHDRAW
+                // REQ before it has been answered, and scsi.v does exactly
+                // that for flow control - `io_busy` drops REQ while the next
+                // byte would land in the buffer half that is still being
+                // flushed to the card (see the wr_pending note at
+                // rtl/scsi/scsi.v:474). Acknowledging anyway makes it latch
+                // the byte into the block it is writing out.
+                //
+                // The window is wide precisely here, because ST_SAT_DMA is
+                // where the byte comes from and its own comment says so: the
+                // engine "could be part way through fetching a descriptor".
+                // Tens of cycles, every byte, with a real DDR3 behind it.
+                //
+                // MEASURED, on the disk the IRIX 5.3 installer wrote: of
+                // 26,214,400 bytes copied from the CD, 37,925 wrong ones sat
+                // at offset 0 of a 512-byte block and the other 511 offsets
+                // were clean. Over the blocks whose ONLY bad byte was offset
+                // 0, the byte that landed there was the first byte of block
+                // N+2 in 4924 cases out of 4924 - and N+2 is the block that
+                // shares a buffer half with N. tools/misterdeploy/imgdiff.py
+                // and firstbyte.py are that measurement.
+                //
+                // Waiting cannot deadlock: the target still wants this byte,
+                // so `data_cnt` has not advanced, `data_done` is false, and
+                // REQ returns as soon as the flush completes.
+                //
+                // This is the third REQ-as-a-level race in this initiator,
+                // after MESSAGE OUT (sat_identify_sent) and the CDB byte too
+                // many. It is also the third fault this month that no
+                // simulation could see, because verilator/sim_scsi.h answers a
+                // flush instantly and the fill never gets two blocks ahead of
+                // one in flight.
+                ST_SAT_ACK: if (scsi_req) begin
                     scsi_ack <= 1'b1;
                     state    <= ST_SAT_REL;
                 end
