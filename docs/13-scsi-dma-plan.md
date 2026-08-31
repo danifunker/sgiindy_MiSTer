@@ -480,6 +480,84 @@ register that selects DMA mode - so the next command silently runs in PIO, on
 the DBR path, and completes without the engine moving anything. It completed
 and reported `0x16`, which is what a working command looks like.
 
+### The first byte of every block, and the ACK the target never asked for
+
+**The IRIX 5.3 installer's copy to disk was corrupt, and it was one byte per
+512-byte block.** This is the fault that `run-scsiwr.sh` passing six phases
+could not have caught, and it is worth reading before adding a seventh.
+
+The guest reported it as a header:
+
+```
+Illegal f_magic number 0x363, expected MIPSELMAGIC or MIPSEBMAGIC
+```
+
+`0x0163` is `01 63`; it read `03 63`. One byte in two.
+
+**A SCSI image on this core is an ordinary file on the SD card, and the
+installer copies its miniroot verbatim from the CD, so the CD is a byte-exact
+reference and the core can be taken out of the loop entirely.** That is what
+`tools/misterdeploy/imgdiff.py` does, and it is the tool that separates a write
+fault from a read fault. Of 26,214,400 bytes:
+
+| where the wrong bytes are | count |
+|---|---|
+| offset `+0x000` of a 512-byte block | 37,925 |
+| each of the other 511 offsets | ~1,030 (≈875 wholly different blocks) |
+
+The first byte of nearly every block was wrong and the other 511 were right.
+`tools/misterdeploy/firstbyte.py` then asked what landed there, over the 4,924
+blocks whose *only* wrong byte was offset 0:
+
+```
+source[N+2][0]     4924   (100.0%)
+```
+
+Every one, no exceptions. **`scsi.v` buffers writes in two 512-byte halves, so
+block N+2 fills the same half as block N** — a byte for N+2 arriving while N is
+still being flushed lands at offset 0 of the half being flushed. The measurement
+is the mechanism.
+
+**The target's half of this was already right, and its comment says so.**
+`scsi.v:474` documents the identical bug from the Mac core this file came from
+— *"a 7.5 MB write otherwise perfect except the FIRST WORD of one 512-byte
+block ... this window's exact signature"* — and the `wr_pending` term in
+`io_busy` fixes it by withdrawing REQ while the fill would enter the half being
+flushed.
+
+**What was missing was the initiator obeying the withdrawal.** `wd33c93.sv`'s
+`ST_SAT_ACK` raised `scsi_ack` unconditionally, and it is reached from
+`ST_SAT_DMA`, whose own comment says the byte "may be several cycles away — the
+engine could be part way through fetching a descriptor". During those cycles the
+target drops REQ; the initiator acknowledged anyway and the target latched the
+byte on the ACK edge. Both ACK states now wait for `scsi_req`.
+
+Three things generalise:
+
+* **This is the third REQ-as-a-level race in this initiator**, after MESSAGE OUT
+  (`sat_identify_sent`) and the CDB byte too many. If a fourth appears, look for
+  a state that asserts ACK without re-reading REQ.
+* **REQ/ACK is interlocked but REQ is not a promise.** A target may withdraw it
+  before it is answered, and this one does, for flow control. An initiator that
+  treats a REQ it saw N cycles ago as still valid is wrong however short N is.
+* **No simulation here could have found it.** `verilator/sim_scsi.h`
+  acknowledges a flush instantly, so the fill never gets two blocks ahead of one
+  in flight and the window never opens. That is the same shape as the memory
+  arbiter fault in `docs/18` and as `fb_linecache` and `DR_FILL` before it: **a
+  model kinder than the hardware.** The honest fix for the test is to make
+  `sim_scsi.h`'s flush slow and variable, which would turn `run-scsiwr.sh` into
+  a real ratchet for this class.
+
+**`-fno-gate` builds `scsi.v` under Verilator 5.020.** The crash that has kept
+this file out of every unit test — `V3Gate.cpp:693: No pending substitutions` at
+`scsi.v:2761` — is one optimisation pass, and that flag turns it off. With it,
+`sgi_scsi.sv` + `wd33c93.sv` + `scsi.v` + `cd_audio.sv` build with `--top-module
+sgi_scsi`, which is exactly the right unit for a SCSI test: it holds the
+initiator, the targets, the HPS block-device interface and the DMA interface and
+nothing else. **A testbench there that flushes slowly is the missing ratchet**,
+and it is the next thing to build in this area. (The whole-machine `sim_top`
+still faults in a later pass, so `tests/run-*.sh` is unaffected.)
+
 ## What to be suspicious of
 
 * **The PROM polls; it does not take interrupts during POST**, and its
