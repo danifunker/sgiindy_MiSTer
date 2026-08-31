@@ -9,6 +9,69 @@ session that changes the answer to "what works" or "what is next".
 
 ---
 
+# STOP — THE SECTIONS BELOW ARE OUT OF DATE (2026-08-30)
+
+**The job they describe is done and three of the faults they call open are
+fixed.** Read this box, then treat everything after it as history: the
+measurements in it are still true of the machine it describes, and the reasoning
+is still worth reading, but the "what is next" is not.
+
+`hinv` lists the disk and the CD-ROM on the DE10-Nano. Measured on bitstream
+`ccb07d80298ff601d420c54dbf758e37`:
+
+| | was | is |
+|---|---|---|
+| healthy boots with disk + CD attached | 2 / 10 | **10 / 10** |
+| POST SCSI device/cable failure mask | `0x02` (the disk) | **0** |
+| the installer's 25.6 MB copy vs the CD | 37,925 wrong bytes | **0 differ** |
+| `printenv` | no `eaddr` | **`eaddr=08:00:69:12:34:f1`** |
+| SCSI mounts across a core reload | lost | restored from `config/SGIIndy.s<n>` |
+
+**Four bugs, and the one-in-three boot panic this file spends pages on was the
+first of them:**
+
+1. `rtl/sgi/ram_arb.sv` — the CPU/DMA memory arbiter gated the DMA on a
+   transaction in flight and did not gate the CPU, so a CPU access inside a DMA
+   round trip took the DMA's acknowledgement *and its data*. That is the
+   panic on a freshly loaded pointer, the wedge, and the SCSI command that
+   hung, all three. `verilator/tb_ramarb.cpp` fails against the old logic at
+   every memory latency above zero and **passes at zero** — which is why no
+   simulation here ever saw it. `docs/18` has the diagnosis.
+2. `rtl/scsi/wd33c93.sv` — `ST_SAT_ACK` asserted ACK without rechecking
+   `scsi_req`, and the target withdraws REQ for flow control, so the first byte
+   of nearly every 512-byte block written was wrong. `docs/13` has it.
+3. `sgiindy.sv` — `prom_download` matched `ioctl_index[5:0]`, ignoring the
+   extension field, so any `boot1/2/3.rom` would have landed on the boot PROM.
+4. `rtl/sgi/sgi_ds1386.sv` — the machine had no Ethernet address, and the IRIX
+   installer asks the PROM for `eaddr` and dereferences the null it gets back.
+   The address comes from the RTC's NVRAM, not the EEPROM; both were tried and
+   the negative result is committed with its screenshot.
+
+**THE JOB NOW: the machine wedges after the IRIX kernel loads.** The install
+copies the miniroot byte-exactly, does not panic, and gets the kernel into RAM —
+`"IRIX"` at `0x8818a8dc` and the IP22 kernel's message table around it — and
+then stops with the CPU not executing and no exception frame.
+`tools/misterdeploy/alive.py` is what says so, and it is the tool to reach for
+whenever the question is "is it doing anything": once the console is the frame
+buffer, a hung machine and a working one are the same rectangle.
+
+**That work belongs on a machine that can build the whole-machine Verilator
+model**, because a wedge leaves no message and this core has no CPU debug port.
+`--stuck` names the address being hammered; the unclaimed-address summary names
+a device that is not there. If Verilator dies on `rtl/scsi/scsi.v` with
+`V3Gate.cpp:693`, add **`-fno-gate`**.
+
+New instruments since this file was written, all documented in their own
+headers: `alive.py`, `guestmem.py` + `disbin.py` (read and disassemble the
+guest's own code by its MIPS address — this is how the `eaddr` crash was
+solved), `imgdiff.py` + `firstbyte.py` (separate a write fault from a read
+fault with the core out of the loop), `sgivh.py`, `scripts/screen.sh` (read the
+screen as text), `scripts/bootok.sh`, and `ws_send.py`'s `text:` step.
+`scripts/mount.sh` no longer uses an MGL — the CONF_STR has `SC` slots and the
+framework re-attaches images at every core start.
+
+---
+
 You are continuing work on an **SGI Indy (IP24)** core for MiSTer FPGA. The repo
 is `~/repos/sgiindy_MiSTer`.
 
