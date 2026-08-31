@@ -34,8 +34,8 @@
 //
 //  Contents are volatile: there is no backing store on the FPGA side yet, so
 //  the array powers up erased and anything the PROM writes is lost at reset.
-//  That is a deliberate gap. The one word whose power-up value actually
-//  matters is CACHSZ_PAGES below.
+//  That is a deliberate gap. TWO words' power-up values actually matter, and
+//  both are parameters below: CACHSZ_PAGES and the Ethernet address.
 //============================================================================
 
 module eeprom_93c56 #(
@@ -45,7 +45,37 @@ module eeprom_93c56 #(
     // state is 0xFFFF, and firmware that believes that spends the boot
     // flushing a 256 MB cache which does not exist, so a model with no L2 has
     // to say so explicitly. IRIS carries the same note in src/machine.rs.
-    parameter logic [15:0] CACHSZ_PAGES = 16'h0000
+    parameter logic [15:0] CACHSZ_PAGES = 16'h0000,
+
+    // THE ETHERNET ADDRESS, AND IT IS NOT OPTIONAL JUST BECAUSE THERE IS NO
+    // ETHERNET. Words 0x7D..0x7F of this part are the machine's MAC address,
+    // two bytes each, and the PROM turns them into the `eaddr` environment
+    // variable. IRIS names the same layout in src/eeprom_93c56.rs.
+    //
+    // Erased, those words read 0xFFFF and the address comes out as
+    // ff:ff:ff:ff:ff:ff - which the PROM carries as a literal string at
+    // 0xBFC4CF58 precisely so it can recognise it as invalid. It then leaves
+    // `eaddr` out of the environment altogether, and `printenv` in the Command
+    // Monitor showed exactly that: fifteen variables and no eaddr.
+    //
+    // THAT IS WHAT CRASHED THE IRIX 5.3 INSTALLER, all the way from a blank
+    // EEPROM to a panic, and every step was measured on hardware:
+    //
+    //   the installer calls the ARCS firmware vector at SPB+0x20, offset 0x78
+    //   - GetEnvironmentVariable - for "eaddr" (0x880076E4), passes the result
+    //   straight to a ':'-separated hex parser with NO null check (0x880076EC),
+    //   and that parser's first instruction is `lbu $t6, ($a0)` (0x880075B4).
+    //   With $a0 = 0 it takes a UTLB refill on virtual address zero and the
+    //   PROM's handler prints "PANIC: Unexpected exception".
+    //
+    // The six bytes are copied into a six-byte buffer and nibble-picked right
+    // after the call, which is how the parser was identified as a MAC parser
+    // rather than anything else.
+    //
+    // 08:00:69 is SGI's OUI. The suffix matches the one IRIS uses, so the two
+    // machines report the same address and can be compared directly; nothing
+    // in this core transmits, so there is no address to collide with.
+    parameter logic [47:0] MAC_ADDR = 48'h08_00_69_12_34_56
 )(
     input  logic clk,
     input  logic reset,
@@ -100,6 +130,9 @@ module eeprom_93c56 #(
     initial begin
         for (i = 0; i < 128; i = i + 1) mem[i] = 16'hFFFF;
         mem[8'h11] = CACHSZ_PAGES;
+        mem[8'h7D] = MAC_ADDR[47:32];
+        mem[8'h7E] = MAC_ADDR[31:16];
+        mem[8'h7F] = MAC_ADDR[15:0];
     end
 
     always_ff @(posedge clk) begin
