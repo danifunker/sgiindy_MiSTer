@@ -1,0 +1,104 @@
+# IRIX 5.3's wd93 driver negotiating with the WD33C93A, captured from IRIS.
+#
+# Captured 2026-09-01 for sgiindy_MiSTer docs/23-init-divergence.md, with
+#   iris --config iris-diff.toml   +  monitor: log scsi on / log scsi file ...
+# on the same disk image and PROM the DE10-Nano boots. This is the REFERENCE
+# for what the driver programs into the chip - not for what a target should
+# answer, which IRIS cannot tell you: it has no bus-level target, so it
+# swallows the MESSAGE OUT bytes and never presents a MESSAGE IN reply.
+#
+# The sequence below repeats ~3180 times over a boot: Select-with-ATN (0x06),
+# then Transfer Info (0x20) with a transfer count of SIX in MESSAGE OUT.
+# Six bytes is IDENTIFY (1) + SDTR extended message (5), which is the
+# negotiation the board answers badly enough that IRIX prints
+#   NOTICE: wd93 SCSI Bus=0 ID=1: SYNC negotiation error, resetting bus
+#
+# Chip status codes the driver is waiting on, in order:
+#   0x11  selection complete
+#   0x8E  MESSAGE OUT phase requested   (ST_REQ_SMESGOUT)
+#   0x8A  the MESSAGE OUT transfer finished
+#
+
+[scsi] WD33C93A(0): Read Reg 13 -> 00
+[scsi] WD33C93A(0): Read Reg 14 -> 00
+[scsi] WD33C93A(0): Write AR <- 11
+[scsi] WD33C93A(0): Write Reg 11 <- 00
+[scsi] WD33C93A(0): Write AR <- 0f
+[scsi] WD33C93A(0): Write Reg 0f <- 00
+[scsi] WD33C93A(0): Write AR <- 15
+[scsi] WD33C93A(0): Write Reg 15 <- 01
+[scsi] WD33C93A(0): Write AR <- 18
+[scsi] WD33C93A(0): Write Reg 18 <- 06
+[scsi] WD33C93A(0): Processing Command 06
+[scsi] WD33C93A(0): Command 06 (CmdPhase: 60, Tgt: 1, ASR: 10)
+[scsi] WD33C93A(0):           Regs: CTRL=2d DST_ID=01 SRC_ID=80
+[scsi] WD33C93A(0): Phase 60->10 (Status=16)
+[scsi] WD33C93A(0): SELECT_ATN → 0x11 then 0x8E
+[scsi] WD33C93A(0): queue_interrupt phase=Some(10) status=11 deferred=false
+[scsi] WD33C93A(0): queue_interrupt phase=None status=8e deferred=false
+[scsi] WD33C93A(0): Read ASR -> 80
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 11
+[scsi] WD33C93A(0): Read ASR -> 80
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 8e
+[scsi] WD33C93A(0): Write AR <- 12
+[scsi] WD33C93A(0): Write Reg 12 <- 00
+[scsi] WD33C93A(0): Write Reg 13 <- 00
+[scsi] WD33C93A(0): Write Reg 14 <- 06
+[scsi] WD33C93A(0): Read ASR -> 00
+[scsi] WD33C93A(0): Write AR <- 18
+[scsi] WD33C93A(0): Write Reg 18 <- 20
+[scsi] WD33C93A(0): Read ASR -> 10
+[scsi] WD33C93A(0): Processing Command 20
+[scsi] WD33C93A(0): Command 20 (CmdPhase: 10, Tgt: 1, ASR: 10)
+[scsi] WD33C93A(0):           Regs: CTRL=2d DST_ID=01 SRC_ID=80
+[scsi] WD33C93A(0): TRANSFER_INFO scsi_status=8e cmd_phase=10
+[scsi] WD33C93A(0): XFER_INFO MESG_OUT count=6 dma=true
+[scsi] WD33C93A(0): queue_interrupt phase=Some(20) status=8a deferred=false
+[scsi] WD33C93A(0): Read ASR -> 80
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 8a
+[scsi] WD33C93A(0): Read ASR -> 00
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 8a
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 8a
+[scsi] WD33C93A(0): Read ASR -> 00
+[scsi] WD33C93A(0): Write AR <- 18
+[scsi] WD33C93A(0): Write Reg 18 <- 01
+[scsi] WD33C93A(0): Processing Command 01
+[scsi] WD33C93A(0): Command 01 (CmdPhase: 20, Tgt: 1, ASR: 10)
+[scsi] WD33C93A(0):           Regs: CTRL=2d DST_ID=01 SRC_ID=80
+[scsi] WD33C93A(0): queue_interrupt phase=Some(00) status=01 deferred=false
+[scsi] WD33C93A(0): Read ASR -> 80
+[scsi] WD33C93A(0): Write AR <- 17
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 01
+
+# ---- and the ordinary command path, for contrast: one connection ----
+# Select-with-ATN-AND-Transfer (0x08) carries IDENTIFY and the CDB together,
+# which is the case rtl/scsi/scsi.v's cmd_timeout exists to serve.
+
+[scsi] WD33C93A(0): Write AR <- 15
+[scsi] WD33C93A(0): Write Reg 15 <- 41
+[scsi] WD33C93A(0): Write AR <- 0f
+[scsi] WD33C93A(0): Write Reg 0f <- 00
+[scsi] WD33C93A(0): Write AR <- 18
+[scsi] WD33C93A(0): Write Reg 18 <- 08
+[scsi] WD33C93A(0): Processing Command 08
+[scsi] WD33C93A(0): Command 08 (CmdPhase: 00, Tgt: 1, ASR: 10)
+[scsi] WD33C93A(0):           Regs: CTRL=2d DST_ID=41 SRC_ID=80
+[scsi] WD33C93A(0): Phase 00->10 (Status=01)
+[scsi] WD33C93A(0): SELECT_XFER/SELECT_ATN_XFER
+[scsi] WD33C93A(0): SCSI Command 12 (INQUIRY) Target 1 Bytes=0x24
+[scsi] WD33C93A(0): Sending 0x24 bytes via DMA (offset=0x0)
+[scsi] WD33C93A(0): queue_interrupt phase=Some(60) status=16 deferred=false
+[scsi] WD33C93A(0): Read ASR -> 80
+[scsi] WD33C93A(0): Write AR <- 18
+[scsi] WD33C93A(0): Read Reg 18 -> 08
+[scsi] WD33C93A(0): Write AR <- 0f
+[scsi] WD33C93A(0): Read Reg 0f (TARGET_LUN) -> 00
+[scsi] WD33C93A(0): Read Reg 10 -> 60
+[scsi] WD33C93A(0): Write AR <- 16
+[scsi] WD33C93A(0): Read Reg 16 -> 80
+[scsi] WD33C93A(0): Read Reg 17 (SCSI_STATUS) -> 16

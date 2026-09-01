@@ -436,6 +436,46 @@ is no bus-level target, no REQ/ACK, no phase machine - which is exactly the
 limitation [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md) warns
 about, and it is why IRIS cannot be the oracle for this particular divergence.
 
+### What IRIX's driver actually does, from IRIS
+
+Captured with IRIS's own per-device log (`log scsi on` / `log scsi file ...`)
+over a whole boot; the excerpt is committed as
+[`tests/traces/iris-scsi-negotiation.txt`](../tests/traces/iris-scsi-negotiation.txt).
+The driver's command histogram over one boot is five commands and nothing else:
+
+| WD33C93A command | count | what it is |
+|---|---:|---|
+| `0x08` | 3356 | Select-with-ATN **and Transfer** - IDENTIFY and the CDB in one connection |
+| `0x04` | 3233 | Disconnect |
+| `0x20` | 3221 | Transfer Info |
+| `0x06` | 3221 | Select-with-ATN |
+| `0x01` | 3221 | (follows the message transfer) |
+
+and the negotiation is the `0x06` → `0x20` → `0x01` triple, which runs ~3221
+times a boot:
+
+```
+Write Reg 15 <- 01                    ; DST_ID = target 1
+Write Reg 18 <- 06                    ; Select-with-ATN
+  SELECT_ATN -> 0x11 then 0x8E        ; selected, then MESSAGE OUT requested
+Write Reg 12 <- 00 / 13 <- 00 / 14 <- 06     ; transfer count = SIX
+Write Reg 18 <- 20                    ; Transfer Info
+  XFER_INFO MESG_OUT count=6 dma=true
+  status 0x8a                         ; message transfer finished
+```
+
+**Six bytes is IDENTIFY (1) plus an SDTR extended message (5).** So the
+contract the target has to satisfy is concrete: after Select-with-ATN report
+`0x11` then `0x8E`, accept a six-byte DMA'd MESSAGE OUT, report `0x8A`.
+
+**And this is exactly where IRIS stops being an oracle, in a way that is now
+visible rather than assumed.** Its model swallows the six bytes and never
+presents a MESSAGE IN reply - there is no `MSG` anything in 16 MB of trace, and
+no bus phases at all, only chip registers. IRIX under IRIS therefore never
+learns whether the target answered, stays asynchronous, and prints nothing. Our
+core has a real phase machine, so IRIX's driver runs a path IRIS never
+exercises, and *that* is the path that ends in `SYNC negotiation error`.
+
 ---
 
 ## Not yet proven
