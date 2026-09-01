@@ -2245,6 +2245,57 @@ always @(posedge clk) begin
 	end else
 		idle_flush_cnt <= 0;
 end
+
+// SGI: REQ-SUPPRESSION WATCHDOG, and it is aimed at a specific hardware
+// failure - see docs/27-multiuser-on-hardware.md.
+//
+// `io_busy` gates `req` (see its assign above), and OUTSIDE a data phase it is
+// just `io_rd_d | io_wr | wr_pending | io_ack`. So anything that leaves one of
+// those four terms stuck stops the target answering the bus at all: the
+// initiator's COMMAND phase never transfers, every command times out after
+// 60 s, and - because the target never reaches a data phase - NO sd_rd/sd_wr
+// is ever raised either. On hardware that reads as the FPGA having stopped
+// asking the HPS for blocks entirely, with the MiSTer process's I/O counters
+// frozen, which is exactly what was measured.
+//
+// The other two watchdogs above cannot see this one. SCSI_STALL only arms in a
+// DATA phase, and SCSI_FLUSH_STUCK only when io_wr is the culprit. This prints
+// all four terms so the guilty one names itself.
+//
+// NOTE which of them a SCSI bus reset can clear: `rst` clears io_rd_d, io_wr
+// and wr_pending, but io_ack is an INPUT and survives. A wedge that no bus
+// reset recovers - which is what the board does - therefore points at io_ack.
+reg [31:0] busy_cnt;
+always @(posedge clk) begin
+	if (io_busy && (phase != PHASE_DATA_OUT) && (phase != PHASE_DATA_IN)) begin
+		busy_cnt <= busy_cnt + 1'd1;
+		if (busy_cnt == 32'd200000)
+			$display("SCSI_REQ_STUCK ID=%0d phase=%0d io_rd_d=%b io_wr=%b wr_pending=%b io_ack=%b ca_active=%b req=%b ack=%b cmd=%02h lba=%0d",
+			         ID, phase, io_rd_d, io_wr, wr_pending, io_ack, ca_io_active,
+			         req, ack, cmd[0], lba);
+	end else
+		busy_cnt <= 0;
+end
+
+// SGI: does a SCSI bus reset actually REACH the target?
+//
+// `rst` is the only thing that clears io_rd_d / io_wr / wr_pending, and it is
+// driven from wd33c93.sv's scsi_rst, whose timer is loaded ONLY by the HPC3
+// channel's chip_reset - which itself only pulses on the FALLING EDGE of
+// ch_reset (hpc3_scsi_dma.sv: `if (ctrl_reset && !pio_wdata[6])`). So if
+// IRIX resets the bus some other way - the WD33C93's own Reset command, say -
+// this never fires, and a stuck io_busy term is unrecoverable.
+//
+// IRIX prints "Resetting SCSI bus" every 60 s once it is wedged. If those
+// messages appear and this line does not, the reset is not reaching the
+// target, and that is the bug rather than whatever got stuck first.
+reg rst_d;
+always @(posedge clk) begin
+	rst_d <= rst;
+	if (rst && !rst_d)
+		$display("SCSI_BUS_RESET ID=%0d phase=%0d io_rd_d=%b io_wr=%b wr_pending=%b io_ack=%b",
+		         ID, phase, io_rd_d, io_wr, wr_pending, io_ack);
+end
 `endif
 
 // check whether status byte has been sent
