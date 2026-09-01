@@ -157,13 +157,21 @@ cputest: $(RTL)/cpu/generated/r4300_wrap.v
 WM_W = $(CPUTEST_W) -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK
 WM_OPT = -fno-gate -O0 --unroll-count 2048 --unroll-stmts 20000 	 -finline -flife -flife-post -fconst -fsubst -fsubst-const 	 -fassemble -fcombine -fexpand -fcase -fdedup -freorder -fsplit 	 -fmerge-cond -ftable
 
+# Extra plusargs for either whole-machine target, so a `+define+` does not
+# need the command line spelled out by hand:
+#   make wholemachine2 WM_DEFS=+define+MSG_DEBUG
+# turns on scsi.v's per-message $display, which is the only way to see the
+# bytes IRIX actually puts in a MESSAGE OUT - IRIS cannot show them, its model
+# reads them directly rather than through DMA.
+WM_DEFS =
+
 # A SECOND BUILD DIRECTORY, and it earns its keep. Overwriting a running
 # executable fails with ETXTBSY, so an instrumentation change cannot be
 # compiled while a 28-minute boot is still running out of ./obj_wm - and
 # serialising the two costs half an hour every time. Identical in every other
 # respect; ./obj_wm2/Vsim_top takes the same switches.
 wholemachine2: $(RTL)/cpu/generated/r4300_wrap.v
-	$V -cc --exe --build -j 0 --Mdir ./obj_wm2 --top-module sim_top 	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
+	$V -cc --exe --build -j 0 --Mdir ./obj_wm2 --top-module sim_top 	   $(WM_DEFS) $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
 
 wholemachine: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_wm --top-module sim_top 	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
@@ -204,8 +212,12 @@ gui: $(RTL)/cpu/generated/r4300_wrap.v
 #   make -C verilator cpuonly && ./obj_dir_cpuonly/Vtb_cpuonly
 CPUONLY_V = tb_cpuonly.sv $(RTL)/cpu/r4300_bus.sv $(RTL)/cpu/generated/r4300_wrap.v
 
+# -Wno-PINMISSING: this bench predates the nine dbg_* observability pins on
+# r4300_wrap and deliberately leaves them open - it watches the CPU through the
+# bus, not through the taps. Without it the build stops on nine warnings-as-
+# errors and the bench looks broken when it is only uninterested.
 cpuonly: $(RTL)/cpu/generated/r4300_wrap.v
-	$V -cc --exe --build -j 0 --Mdir ./obj_dir_cpuonly --top-module tb_cpuonly 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vtb_cpuonly $(CPUONLY_V) tb_cpuonly.cpp
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_cpuonly --top-module tb_cpuonly -Wno-PINMISSING 	   -O3 -CFLAGS "-O2 -std=c++17" $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vtb_cpuonly $(CPUONLY_V) tb_cpuonly.cpp
 	./obj_dir_cpuonly/Vtb_cpuonly
 
 # --- HAL2 register file unit test ------------------------------------------

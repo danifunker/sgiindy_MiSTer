@@ -60,6 +60,7 @@ entity cpu is
       dbg_exc               : out std_logic := '0';
       dbg_exc_code          : out std_logic_vector(4 downto 0) := (others => '0');
       dbg_exc_epc           : out std_logic_vector(31 downto 0) := (others => '0');
+      dbg_cop0              : out std_logic_vector(31 downto 0) := (others => '0');   -- SGI
       dbg_exc_bad           : out std_logic_vector(31 downto 0) := (others => '0');
       -- The RETIRING instruction's PC and a one-clock strobe. See dbg_pc2.
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
@@ -3551,6 +3552,7 @@ begin
       dbg_exc                 => dbg_exc,
       dbg_exc_code            => dbg_exc_code_u,
       dbg_exc_epc             => dbg_exc_epc_u,
+      dbg_cop0                => dbg_cop0,
       dbg_exc_bad             => dbg_exc_bad_u,
       CONFIG_K0               => config_K0,             -- SGI
       

@@ -150,6 +150,18 @@ struct Options {
     std::string pcuser;
     bool        exc = false;
     uint64_t    exc_count = 200;
+    // --epc: one line per CHANGE of COP0 EPC. dbg_exc_epc is driven
+    // continuously, not only on an exception, so this needs no RTL - and it is
+    // the only way to see an EPC that is written correctly and then written
+    // again by something else. Two exceptions in one trap is exactly that
+    // shape; see docs/25.
+    bool        epcwatch = false;
+    uint64_t    epc_count = 400;
+    // --cop0: one line per change of the cop0 status word - the signals that
+    // decide which of two exceptions in one trap keeps EPC. Follows the same
+    // arm as --exc.
+    bool        cop0watch = false;
+    uint64_t    cop0_count = 400;
     // Cycle the exception log starts at. --trace-from-pc parks it out of
     // reach and the arm brings it back, so `--trace-from-pc P --exc` means
     // "every exception from the moment P is decoded" instead of "the first
@@ -275,6 +287,10 @@ static void usage()
         "                    With --trace-from-pc it starts at the arm, not at\n"
         "                    cycle 0\n"
         "  --watch-count N   hits per --watch address to print (default 20)\n"
+        "  --epc             one line per change of COP0 EPC (400; --epc-count N).\n"
+        "                    Follows --trace-from-pc's arm like --exc does\n"
+        "  --cop0            one line per change of the cop0 exception-state word\n"
+        "                    (400; --cop0-count N). Same arm as --exc\n"
         "  --pc              print one line per decoded instruction. The last\n"
         "                    64 PCs are ALWAYS printed on exit, which is what\n"
         "                    names a wedge that has stopped touching the bus\n"
@@ -349,6 +365,12 @@ int main(int argc, char **argv)
             opt.trace_from_pc = (uint32_t)strtoul(next("--trace-from-pc"), nullptr, 16); }
         else if (a == "--pc-user")    opt.pcuser = next("--pc-user");
         else if (a == "--exc")        opt.exc = true;
+        else if (a == "--epc")        opt.epcwatch = true;
+        else if (a == "--cop0")       opt.cop0watch = true;
+        else if (a == "--cop0-count") { opt.cop0watch = true;
+                                        opt.cop0_count = strtoull(next("--cop0-count"), nullptr, 0); }
+        else if (a == "--epc-count")  { opt.epcwatch = true;
+                                        opt.epc_count = strtoull(next("--epc-count"), nullptr, 0); }
         else if (a == "--watch-count") opt.watch_count = strtoull(next("--watch-count"), nullptr, 0);
         else if (a == "--exc-count")  { opt.exc = true;
                                         opt.exc_count = strtoull(next("--exc-count"), nullptr, 0); }
@@ -530,6 +552,10 @@ int main(int argc, char **argv)
     bool     exc_pending = false;
     uint64_t exc_cycle   = 0;
     uint32_t exc_code    = 0, exc_bad = 0;
+    uint32_t epc_prev    = 0;
+    uint64_t epcs        = 0;
+    uint32_t cop0_prev   = 0;
+    uint64_t cop0s       = 0;
     uint64_t retired = 0;
 
     // The same, for USER-mode instructions only - anything the CPU decoded
@@ -746,6 +772,42 @@ int main(int argc, char **argv)
                        static_cast<unsigned long long>(exc_cycle),
                        kExcName[exc_code & 31], exc_code, exc_bad,
                        top->dbg_exc_epc);
+        }
+        if (opt.cop0watch && cycle >= opt.exc_from
+            && top->dbg_cop0 != cop0_prev) {
+            cop0s++;
+            if (cop0s <= opt.cop0_count) {
+                uint32_t c = top->dbg_cop0;
+                printf("[%10llu] COP0 %s%s%s%s%s%s%s%s%s%s%s%s%s%s stall=%02x "
+                       "nextEPC_1=..%04x\n",
+                       static_cast<unsigned long long>(cycle),
+                       (c &    1u) ? "exc "        : "",
+                       (c &    2u) ? "excStage1 "  : "",
+                       (c &    4u) ? "savedEXL "   : "",
+                       (c &    8u) ? "EXL "        : "",
+                       (c &   16u) ? "PROVISIONAL ": "",
+                       (c &   32u) ? "dReqSaved "  : "",
+                       (c &   64u) ? "dReq "       : "",
+                       (c &  128u) ? "dUnStall "   : "",
+                       (c &  256u) ? "iReqSaved "  : "",
+                       (c &  512u) ? "iReq "       : "",
+                       (c & 1024u) ? "TLBDATA "    : "",
+                       (c & 2048u) ? "TLBINSTR "   : "",
+                       (c & 4096u) ? "commit "     : "",
+                       (c & (1u << 18)) ? "nEPCkernel " : "",
+                       (c >> 13) & 0x1fu,
+                       ((c >> 19) & 0x1fffu) << 2);
+            }
+            cop0_prev = top->dbg_cop0;
+        }
+        if (opt.epcwatch && cycle >= opt.exc_from
+            && top->dbg_exc_epc != epc_prev) {
+            epcs++;
+            if (epcs <= opt.epc_count)
+                printf("[%10llu] EPC <- %08x   (was %08x)\n",
+                       static_cast<unsigned long long>(cycle),
+                       top->dbg_exc_epc, epc_prev);
+            epc_prev = top->dbg_exc_epc;
         }
         if (opt.exc && top->dbg_exc && cycle >= opt.exc_from) {
             exc_pending = true;

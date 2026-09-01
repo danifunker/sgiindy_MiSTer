@@ -66,6 +66,9 @@ entity cpu_cop0 is
       dbg_exc_code            : out unsigned(4 downto 0) := (others => '0');
       dbg_exc_epc             : out unsigned(31 downto 0) := (others => '0');
       dbg_exc_bad             : out unsigned(31 downto 0) := (others => '0');
+      -- SGI: the handful of signals that decide which exception keeps EPC when
+      -- two of them arrive in one trap. Observability only; see docs/25.
+      dbg_cop0                : out std_logic_vector(31 downto 0) := (others => '0');
 
       -- SGI: Config.K0, the KSEG0 coherency algorithm. Upstream stores the
       -- field and lets software read it back, but nothing acts on it: an N64
@@ -289,6 +292,16 @@ architecture arch of cpu_cop0 is
    
    signal TLB_Instr_fetchReq_saved        : std_logic := '0'; 
    signal TLB_Data_fetchReq_saved         : std_logic := '0'; 
+   -- SGI: "the EXL now set belongs to a fetch-side exception that was taken
+   -- while an OLDER instruction still had a data-TLB translation in flight".
+   -- See the EPC write for why that has to be remembered; the short version is
+   -- that the fetch stage runs ahead of execute, so an instruction-TLB fault
+   -- can be accepted for a YOUNGER instruction than the one in execute, and
+   -- MIPS reports the OLDEST instruction's exception.
+   signal excFetchProvisional             : std_logic := '0';
+   -- The data side's unstall, readable in here. An `out` port is readable in
+   -- VHDL-2008 but not in every tool that compiles this file.
+   signal TLB_dataUnStall_i               : std_logic;
    
    signal TLB_checkMask                   : unsigned(26 downto 0);
    signal TLB_addMask                     : unsigned(23 downto 0);
@@ -590,6 +603,7 @@ begin
          TLB_Instr_fetchDone <= '0';
          TLB_Data_fetchDone  <= '0';
          TLBInvalidate       <= '0';
+         excFetchProvisional <= '0';
       
          DISABLE_BOOTCOUNT_INTERN <= DISABLE_BOOTCOUNT;
       
@@ -827,10 +841,53 @@ begin
                -- every TLB miss taken inside a handler, and losing the
                -- outer EPC there means the handler returns into hyperspace.
                -- cpu-tests: excep/exl_preserves_epc.
-               if (excSavedEXL = '0') then
+               --
+               -- SGI: `excFetchProvisional` IS THE ONE CASE WHERE EXL MUST NOT
+               -- FREEZE IT, and without it IRIX 5.3 dies on every boot.
+               --
+               -- The fetch stage runs ahead of execute, so an instruction-TLB
+               -- fault can be ACCEPTED for an instruction younger than the one
+               -- in execute. It sets EXL. When the older instruction's own
+               -- data-TLB fault arrives - fifty-odd cycles later, because the
+               -- two walks share one TLB - the rule above sees EXL set, treats
+               -- it as a nested exception, and keeps the YOUNGER instruction's
+               -- EPC. MIPS reports the OLDEST instruction's exception; this is
+               -- the exact opposite, and the older instruction is never
+               -- re-executed.
+               --
+               -- `nextEPC_1` and `isDelaySlot_1` are RIGHT throughout - they
+               -- are latched only while `stall = 0`, so the stalled walk
+               -- freezes them at the older instruction's values. The correct
+               -- EPC sits in a register and is never written out.
+               --
+               -- /sbin/init stores its process-table pointer in the delay slot
+               -- of `jal 0x7fc09ae8` at 0x7fc073b8. That store's page and the
+               -- branch target's page miss the TLB together, and the kernel is
+               -- entered with
+               --   BadVAddr = 7fc43ef0 (the store), EPC = 7fc09ae8 (the branch
+               --   target), Cause.BD = 0
+               -- It maps the page, returns to the branch target, and the delay
+               -- slot never runs again: `.bss` reads back zero, init walks a
+               -- NULL pointer, and the kernel panics on the death of pid 1.
+               -- docs/25-lost-store-tlb-order.md has the traces.
+               --
+               -- A GENUINELY nested exception - IRIX takes one on every TLB
+               -- miss inside a handler, which is what the EXL rule exists for
+               -- - must still find EPC frozen. cpu-tests:
+               -- excep/exl_preserves_epc.
+               --
+               -- The second half of the test is what makes a stale flag
+               -- harmless. An exception reported for a USER-mode instruction
+               -- while EXL is set can only be one that was deferred from
+               -- before the trap - a handler runs in kernel space, so its own
+               -- nested exception always has a kernel nextEPC_1 and never
+               -- takes this path. Both halves have to hold.
+               if (excSavedEXL = '0' or (excFetchProvisional = '1' and
+                                         nextEPC_1(31) = '0')) then
                   COP0_14_EPC               <= nextEPC_1;
                   COP0_13_CAUSE_branchDelay <= isDelaySlot_1;
                end if;
+               excFetchProvisional <= '0';
                
                case (COP0_13_CAUSE_exceptionCode(3 downto 0)) is
                   when x"4" | x"5" | x"9" | x"A" | x"C"  => error_exception <= '1';
@@ -1007,6 +1064,29 @@ begin
                tlbMiss1                   <= TLB_ExcInstrMiss;
                excSavedEXL                <= COP0_12_SR_exceptionLevel;  -- SGI
                COP0_12_SR_exceptionLevel  <= '1';
+               -- SGI: EVERY fetch-side exception starts out provisional, and
+               -- the trace is why it cannot be conditioned on the data side
+               -- looking busy right now. `EXETLBDataAccess` is gated on
+               -- `stall = 0`, so an instruction sitting in EXECUTE cannot even
+               -- ASK for its translation while the fetch stage is stalled on
+               -- its own walk. Measured, with the store at 0x7fc073b8 in
+               -- execute and the branch target's fetch missing the TLB:
+               --   236..284  TLBINSTR walk          stall=01 (fetch)
+               --   286       fetch exception taken, EXL set, dReq still CLEAR
+               --   288       the store finally raises dReq
+               --   339       the store's own fault - and EXL is already set
+               -- So the fetch-side fault is ALWAYS first, and testing for an
+               -- outstanding data request at 286 finds nothing.
+               excFetchProvisional        <= '1';
+            elsif (eret = '1') then
+               -- ...and it stops being provisional when the machine RETURNS
+               -- from the trap. An earlier attempt cleared it on the first
+               -- instruction commit instead, and the trace showed that firing
+               -- one cycle after the flag was set - at 207884287, with the
+               -- handler still fifty cycles away - which is why the clear is
+               -- now tied to `eret` and the user-mode test above carries the
+               -- safety.
+               excFetchProvisional        <= '0';
             end if;
             
             if (exception = '0') then
@@ -1440,7 +1520,7 @@ begin
       TLB_useCacheFound    => TLB_dataUseCacheFound, 
       TLB_useCacheLookup   => TLB_dataUseCacheLookup, 
       TLB_Stall            => TLB_dataStall,  
-      TLB_UnStall          => TLB_dataUnStall,
+      TLB_UnStall          => TLB_dataUnStall_i,
       TLB_AddrOutFound     => TLB_dataAddrOutFound,
       TLB_AddrOutLookup    => TLB_dataAddrOutLookup,
       
@@ -1516,6 +1596,25 @@ begin
    -- export, GHDL drops it, and a port assigned only in there reads as a
    -- constant zero in Verilator - which is exactly what happened the first
    -- time this was written.
+   dbg_cop0(0)  <= exception;
+   dbg_cop0(1)  <= exceptionStage1;
+   dbg_cop0(2)  <= excSavedEXL;
+   dbg_cop0(3)  <= COP0_12_SR_exceptionLevel;
+   dbg_cop0(4)  <= excFetchProvisional;
+   dbg_cop0(5)  <= TLB_Data_fetchReq_saved;
+   dbg_cop0(6)  <= TLB_Data_fetchReq;
+   dbg_cop0(7)  <= TLB_dataUnStall_i;
+   dbg_cop0(8)  <= TLB_Instr_fetchReq_saved;
+   dbg_cop0(9)  <= TLB_Instr_fetchReq;
+   dbg_cop0(10) <= '1' when (TLBState = TLBDATA)  else '0';
+   dbg_cop0(11) <= '1' when (TLBState = TLBINSTR) else '0';
+   dbg_cop0(12) <= '1' when (stall4Masked = 0 and executeNew = '1') else '0';
+   dbg_cop0(17 downto 13) <= std_logic_vector(stall);
+   dbg_cop0(18)           <= nextEPC_1(31);
+   dbg_cop0(31 downto 19) <= std_logic_vector(nextEPC_1(14 downto 2));
+
+   TLB_dataUnStall <= TLB_dataUnStall_i;
+
    dbg_exc_code <= COP0_13_CAUSE_exceptionCode;
    dbg_exc_epc  <= COP0_14_EPC(31 downto 0);
    dbg_exc_bad  <= COP0_8_BADVIRTUALADDRESS(31 downto 0);

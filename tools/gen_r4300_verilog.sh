@@ -26,6 +26,25 @@ PRIM="$SRC"
 
 command -v ghdl >/dev/null || { echo "error: ghdl not found (brew install ghdl)" >&2; exit 1; }
 
+# AND CHECK THAT IT ACTUALLY RUNS, not just that it is on PATH. The Debian
+# ghdl-llvm package links its backend against a libLLVM soname that the distro
+# does not ship, so `ghdl` exists, `ghdl --version` dies with
+#   ghdl1-llvm: error while loading shared libraries: libLLVM-18.so.18.1
+# and the fix is a one-line shim:
+#   mkdir -p /tmp/llvmshim
+#   ln -sf /usr/lib/llvm-18/lib/libLLVM.so.18.1 /tmp/llvmshim/libLLVM-18.so.18.1
+#   export LD_LIBRARY_PATH=/tmp/llvmshim
+# Without this check the failure is five minutes late and looks like nothing:
+# the generated file keeps its old timestamp, Verilator reports "Nothing to be
+# done", and the model you then measure is the one from BEFORE your change.
+# That has now cost this project a full verification cycle - see docs/25.
+ghdl --version >/dev/null 2>&1 || {
+    echo "error: ghdl is on PATH but will not run. Try:" >&2
+    echo "  mkdir -p /tmp/llvmshim && ln -sf /usr/lib/llvm-18/lib/libLLVM.so.18.1 \\" >&2
+    echo "      /tmp/llvmshim/libLLVM-18.so.18.1 && export LD_LIBRARY_PATH=/tmp/llvmshim" >&2
+    echo "  ghdl --version    # says what is actually wrong" >&2
+    exit 1; }
+
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR/work" "$WORKDIR/mem" "$SRC" "$OUT"
 

@@ -73,6 +73,7 @@ entity r4300_wrap is
       dbg_exc           : out std_logic;
       dbg_exc_code      : out std_logic_vector(4 downto 0);
       dbg_exc_epc       : out std_logic_vector(31 downto 0);
+      dbg_cop0          : out std_logic_vector(31 downto 0);
       dbg_exc_bad       : out std_logic_vector(31 downto 0);
       dbg_rpc           : out std_logic_vector(31 downto 0);
       dbg_retire        : out std_logic;
@@ -267,6 +268,7 @@ begin
       dbg_exc               => dbg_exc,
       dbg_exc_code          => dbg_exc_code,
       dbg_exc_epc           => dbg_exc_epc,
+      dbg_cop0              => dbg_cop0,
       dbg_exc_bad           => dbg_exc_bad,
       dbg_rpc               => dbg_rpc,
       dbg_retire            => dbg_retire,

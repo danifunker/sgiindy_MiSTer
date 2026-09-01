@@ -207,6 +207,7 @@ module sgi_indy #(
     output logic        dbg_exc,
     output logic  [4:0] dbg_exc_code,
     output logic [31:0] dbg_exc_epc,
+    output logic [31:0] dbg_cop0,
     output logic [31:0] dbg_exc_bad,
     output logic [31:0] dbg_rpc,
     output logic        dbg_retire
@@ -289,6 +290,7 @@ module sgi_indy #(
         .dbg_exc          (dbg_exc),
         .dbg_exc_code     (dbg_exc_code),
         .dbg_exc_epc      (dbg_exc_epc),
+        .dbg_cop0         (dbg_cop0),
         .dbg_exc_bad      (dbg_exc_bad),
         .dbg_rpc          (dbg_rpc),
         .dbg_retire       (dbg_retire),
