@@ -203,11 +203,15 @@ make -C verilator wholemachine
 Run it in WSL `Ubuntu-24.04`. `--disk` (not `--disk-rw`) keeps guest writes in
 memory, so a run cannot damage the image.
 
-## Then: validate on the board, which has NOT been done
+## Then: validate on the board - DONE, three runs out of three
 
-Nothing in this work has run on hardware yet. The board is reachable and the
-deploy path is intact (checked: SSH to `192.168.99.94` works,
-`_Unstable/SGIIndy.rbf` and `games/SGIIndy/` are in place).
+**Done 2026-09-01.** Fit at 12:25, deployed and checked three times
+(`tests/out/hw/tlbfix1.png`, `tlbfix2.png`, `tlbfix3.png`), **all three
+identical**: IRIX 5.3 banners, checks the root filesystem, and stops in `fsck`
+Phase 1 on a board-only SCSI `READ(10)` timeout. No `init died`. The board's
+failure mode no longer varies between runs, which it did before. Full results
+in [25-lost-store-tlb-order.md](25-lost-store-tlb-order.md). The procedure
+below is what was followed and is kept for the next time.
 
 1. `bash scripts/build.sh --log build-tlbfix.log` - ~20 min, detached (see
    `local-toolchain`; `Start-Process` does not work, use `Invoke-CimMethod`).

@@ -3,7 +3,10 @@
 **Work item: [24-fix-lost-store-prompt.md](24-fix-lost-store-prompt.md), which
 followed [23-init-divergence.md](23-init-divergence.md).**
 
-**Status: the defect is FOUND, PROVEN, and FIXED in simulation.** It is in the
+**Status: FOUND, PROVEN, FIXED, and VERIFIED on hardware.** `PANIC: init died`
+is gone - in both simulator configurations and on the board, three deploys out
+of three. IRIX 5.3 now banners and runs `fsck`. The next wall is SCSI and is
+[a different defect](#verified-simulation-and-hardware). It is in the
 CPU's exception ordering, not in the memory path - `r4300_bus.sv`, `ram_arb.sv`
 and `sgi_memmap.sv` are all innocent, and the store never reaches them. Six fix
 attempts; the sixth works, and what had been defeating the previous three was
@@ -357,6 +360,72 @@ The kernel maps the page and returns to the `jal`; the pair re-executes; the
 store lands. The fetch-side fault on `0x7fc09ae8` is discarded, which is
 correct - that fetch was squashed by the trap, and after `eret` the branch
 target is fetched again and faults again, to be handled on its own.
+
+## Verified: simulation and hardware
+
+All of this on 2026-09-01, with the fix as committed in `1a7299a`.
+
+**Both simulator configurations fire the fix at exactly the cycle this document
+predicted**, and both then run past the panic they used to die at:
+
+| configuration | store's fault | the write that was missing | old panic |
+|---|---|---|---|
+| `--no-dcache` | 207,884,339 | `EPC <- 7fc073b4` at **207,884,340** | 215,149,699 |
+| caches on | 235,877,778 | `EPC <- 7fc073b4` at **235,877,779** | 242,603,699 |
+
+and the sequence afterwards is the one predicted above - the kernel returns to
+the `jal`, refaults on the store's page (`207889506`), and only then takes the
+branch target's fault on its own (`207894256`):
+
+```
+[207884286] EXC TLBS   badvaddr=7fc09ae8                 <- the fetch's fault
+[207884288] EPC <- 7fc09ae8                              <- the wrong EPC, as always
+[207884339] EXC TLBS   badvaddr=7fc43ef0 epc=7fc073b4    <- the store's own fault
+[207884340] EPC <- 7fc073b4   (was 7fc09ae8)             <- the jal. The fix.
+[207889506] EXC TLBS   badvaddr=7fc073b4                 <- back at the jal, page still cold
+[207894256] EXC TLBL   badvaddr=7fc09ae8 epc=7fc073b4    <- the target, handled on its own
+```
+
+Both then reach `IRIX Release 5.3 IP22 Version 12200159 System V` and go into
+`fsck`. **`PANIC: init died` does not happen in either.** cpu-tests stays at
+364 runs, 0 against expectation.
+
+**On the board, three deploys, all three identical** (`tests/out/hw/tlbfix1
+.png`, `tlbfix2.png`, `tlbfix3.png`). That is itself worth recording: docs/24
+was emphatic that the board's failure mode varied between runs on the same
+bitstream, and it no longer does. IRIX now banners, checks the root filesystem,
+and starts `fsck` Phase 1 - and then stops on SCSI:
+
+```
+IRIX Release 5.3   Copyright 1987-1994 Silicon Graphics, Inc.
+NOTICE: wd93 SCSI Bus=0 ID=1: SYNC negotiation error, resetting bus
+The root file system, /dev/dsk/dks0d1s0, is being checked automatically.
+  fsck: checking /dev/dsk/dks0d1s0
+  ** Phase 1 - Check Blocks and Sizes
+WARNING: wd93 SCSI Bus=0 ID=1 LUN=0: SCSI cmd=0x28
+timeout after 60 sec.  Resetting SCSI bus                  (x4)
+dks0d1s0: SCSI driver error: Command timed out
+fsck: I/O error
+  CAN NOT READ: BLK 1006
+```
+
+**That is a different wall, and there are two SCSI defects in it, not one:**
+
+* the **SDTR negotiation failure** happens in *both* the simulator and the
+  board, and is harmless in the sense that IRIX gives up and falls back;
+* the **`cmd=0x28` (READ(10)) 60-second timeout is board-only**. The simulator
+  issues the same reads at the same point and they complete - it goes on to
+  `WRITE(10)` (`2a`), i.e. `fsck` actually repairing. So the remaining failure
+  lives on the board's real DMA/DDR3 path, not in `scsi.v`'s protocol logic,
+  and it is not what this fix was about.
+
+The fit that produced these three runs: 38,663 registers at synthesis, 31,643
+ALMs (76%), and a worst slack of **-0.221 ns, TNS -1.645, on the HDMI PLL
+clock**. That is worse than the +0.421 ns the immediately preceding fit got and
+worse than the -83 ps recorded earlier, on a clock that has been marginal
+before. It is the display domain, not the CPU, and a two-register change is not
+a plausible cause - most likely fitter placement noise - but it has not been
+chased and should not be assumed benign.
 
 ## What this retires from the open list
 
