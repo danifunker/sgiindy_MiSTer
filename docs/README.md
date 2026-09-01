@@ -54,6 +54,7 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | **[21-icache-bug.md](21-icache-bug.md)** | `init` dies. Superseded as a diagnosis by 23 below, but its measurements stand - and `cache=off` dying identically is exactly what a lost store predicts |
 | **[22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md)** | The work item that produced 23: diff IRIX's initialisation against IRIS |
 | **[23-init-divergence.md](23-init-divergence.md)** | **OPEN BUG, and now named**: `init`'s table pointer reads back as 0 at one instruction (`0x7fc073b8` stores it, `0x7fc07ca4` faults on it) where IRIS has `0x7fc447a8`. The failing machine's own heap shows the allocation succeeded, so **the store was lost** - and the whole thing reproduces in the whole-machine Verilator model in 28 minutes, no board. Also: the SCSI target fails SDTR negotiation for the PROM *and* IRIX, and the board's kernel sizes the machine 4 MB short |
+| **[24-fix-lost-store-prompt.md](24-fix-lost-store-prompt.md)** | The next work item: find and fix the lost store. RTL work, not analysis - the suspects are down to four files and there is a deterministic 28-minute reproduction that needs no board |
 | **[22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md)** | Work item: trace IRIX's initialisation in IRIS and diff it against ours to name the divergence. IRIS already has a full debugger - do not write one |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
