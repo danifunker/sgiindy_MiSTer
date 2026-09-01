@@ -51,7 +51,9 @@ proved a plan wrong, the doc says so rather than being quietly rewritten.
 | **[15-synthesis-prompt.md](15-synthesis-prompt.md)** | **Work-item prompt** for getting `syn/` through Quartus and reading the size and Fmax. Needs a machine that can run Quartus |
 | **[FEATURES_EVALUATE.md](FEATURES_EVALUATE.md)** | **Deliberately not built**, with the evidence: CD audio (the CD-ROM is data-only), the secondary cache, and why "66 Mhz" is a measurement rather than a clock |
 | **[20-releases.md](20-releases.md)** | **The built bitstreams in `releases/`**, what each one does and does not do, and the one step of the install that fails silently — MiSTer does not create `games/SGIIndy` for you |
-| **[21-icache-bug.md](21-icache-bug.md)** | **OPEN BUG**: `init` dies. On hardware it is NOT the instruction cache - `cache=off` dies identically - so the file leads with the hardware result; the Verilator bisection below it is still accurate about the simulator |
+| **[21-icache-bug.md](21-icache-bug.md)** | `init` dies. Superseded as a diagnosis by 23 below, but its measurements stand - and `cache=off` dying identically is exactly what a lost store predicts |
+| **[22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md)** | The work item that produced 23: diff IRIX's initialisation against IRIS |
+| **[23-init-divergence.md](23-init-divergence.md)** | **OPEN BUG, and now named**: `init`'s table pointer reads back as 0 at one instruction (`0x7fc073b8` stores it, `0x7fc07ca4` faults on it) where IRIS has `0x7fc447a8`. The failing machine's own heap shows the allocation succeeded, so **the store was lost** - and the whole thing reproduces in the whole-machine Verilator model in 28 minutes, no board. Also: the SCSI target fails SDTR negotiation for the PROM *and* IRIX, and the board's kernel sizes the machine 4 MB short |
 | **[22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md)** | Work item: trace IRIX's initialisation in IRIS and diff it against ours to name the divergence. IRIS already has a full debugger - do not write one |
 | [prom-reference/](prom-reference/) | Verbatim IP24 boot PROM analysis: `HARDWARE.md`, `ANALYSIS.md` |
 
