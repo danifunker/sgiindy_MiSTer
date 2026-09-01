@@ -5,7 +5,7 @@
  * .reginfo/.MIPS.abiflags/.data at their own default addresses, which lands a
  * segment at 0x00400000 and gets the load rejected - so the layout is spelled
  * out here rather than left to the default. */
-OUTPUT_FORMAT("elf32-bigmips")
+OUTPUT_FORMAT("elf32-tradbigmips")
 OUTPUT_ARCH(mips)
 ENTRY(_start)
 

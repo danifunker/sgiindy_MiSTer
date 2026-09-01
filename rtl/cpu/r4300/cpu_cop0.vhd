@@ -603,8 +603,19 @@ begin
          TLB_Instr_fetchDone <= '0';
          TLB_Data_fetchDone  <= '0';
          TLBInvalidate       <= '0';
-         excFetchProvisional <= '0';
-      
+         -- excFetchProvisional IS DELIBERATELY NOT DEFAULTED HERE. Everything
+         -- above is a one-clock pulse and wants a default; that flag is STATE
+         -- and has to survive the ~50 cycles between the two faults of one
+         -- trap. Defaulting it here made it a one-cycle pulse, and it died on
+         -- the clock after it was set every time:
+         --   [2036] excStage1 EXL PROVISIONAL  stall=01
+         --   [2037] excStage1 EXL commit       stall=00   <- gone
+         -- (tests/tlborder, and cycles 286/287 of the IRIX boot). That single
+         -- line is why three separate attempts at this fix "did not fire" -
+         -- it sits in a block that reads like a reset and is not one. It is
+         -- set at the fetch-side exception, and cleared in exactly two
+         -- places: when an exception consumes it, and on a real ERET.
+
          DISABLE_BOOTCOUNT_INTERN <= DISABLE_BOOTCOUNT;
       
          if (COP0_12_SR_errorLevel = '1') then
@@ -1006,6 +1017,15 @@ begin
                   else
                      COP0_12_SR_exceptionLevel <= '0';
                   end if;
+                  -- SGI: the provisional flag dies exactly where EXL dies, and
+                  -- for the same reason - it means "this EXL was set by a
+                  -- fetch-side fault we have not returned from yet". This is
+                  -- the ONLY place an ERET is known to have really executed:
+                  -- the enclosing arm is `stall4Masked = 0 and executeNew =
+                  -- '1'`, so a stale `execute_ERET` cannot reach it. Testing
+                  -- `eret` unqualified further down killed the flag one cycle
+                  -- after it was set.
+                  excFetchProvisional <= '0';
                end if;
                
                -- set mode
@@ -1078,16 +1098,17 @@ begin
                -- So the fetch-side fault is ALWAYS first, and testing for an
                -- outstanding data request at 286 finds nothing.
                excFetchProvisional        <= '1';
-            elsif (eret = '1') then
-               -- ...and it stops being provisional when the machine RETURNS
-               -- from the trap. An earlier attempt cleared it on the first
-               -- instruction commit instead, and the trace showed that firing
-               -- one cycle after the flag was set - at 207884287, with the
-               -- handler still fifty cycles away - which is why the clear is
-               -- now tied to `eret` and the user-mode test above carries the
-               -- safety.
-               excFetchProvisional        <= '0';
             end if;
+            -- The clear is NOT here. It is beside the ERET that clears EXL,
+            -- because `eret` is a REGISTERED PIPELINE SIGNAL that holds its
+            -- last decoded value - `execute_ERET <= decodeERET` in cpu.vhd,
+            -- updated only when the execute stage advances. Tested raw, as
+            -- `elsif (eret = '1')` here, it is stale garbage between real
+            -- ERETs and it cleared the flag on the very next cycle:
+            --   [2036] excStage1 EXL PROVISIONAL  stall=01
+            --   [2037] excStage1 EXL commit       stall=00   <- flag gone
+            -- measured on tests/tlborder. That was attempt 5, and it failed
+            -- for the same reason attempt 4 did.
             
             if (exception = '0') then
                if (stall = 0 or exceptionFPU = '1' or TLB_ExcDataRead = '1' or TLB_ExcDataWrite = '1' or TLB_ExcDataDirty = '1') then

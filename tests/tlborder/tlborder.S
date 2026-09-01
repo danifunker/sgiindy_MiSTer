@@ -106,7 +106,13 @@ _start:
     ori     $8, $8, %lo(snippet)
     lui     $9, %hi(snippet_end)
     ori     $9, $9, %lo(snippet_end)
-    li      $10, 0x88040000         /* KSEG0 view of PA_CODE */
+    /* KSEG1 (uncached), not KSEG0. The copy is data and the snippet is then
+     * FETCHED, and there is no cache coherence between the two: with a KSEG0
+     * destination the words sat in the D-cache, the I-cache read the stale
+     * memory underneath - all zeroes, which decode as nops - and the test
+     * quietly executed 8 KB of nops off the end of its own mapping and
+     * faulted on 0x00402000 instead of on the pair it exists to test. */
+    li      $10, 0xA8040000         /* KSEG1 (uncached) view of PA_CODE */
 2:
     lw      $11, 0($8)
     sw      $11, 0($10)
