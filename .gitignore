@@ -94,3 +94,6 @@ __pycache__/
 verilator/obj_wm/
 verilator/obj_wm2/
 verilator/obj_fast/
+
+# de-CRLF working copy of the CPU lowering script (see docs/25)
+tools/.gen_r4300_verilog.unix.sh
