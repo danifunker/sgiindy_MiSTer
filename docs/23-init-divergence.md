@@ -166,6 +166,18 @@ never lands is not a coherency problem.
 direct confirmation and is the one measurement still outstanding. The heap
 layout above is inference from the state at the panic, strong but indirect.)*
 
+### And the sim has no DDR3, which narrows where the store is lost
+
+`sim_top` replaces the DE10-Nano's DDR3 controller with `sim_ram.v`. Everything
+else in the path is the real RTL: `cpu_datacache.vhd`, `r4300_bus.sv`,
+`ram_arb.sv`, `sgi_memmap.sv` are all compiled into the model. **The store is
+lost anyway.** So the defect is not DDR3 timing and not the HPS's traffic - it
+is in the RTL between the CPU and memory, and `docs/21`'s closing guess
+("DDR3 timing, `ram_arb`, or the DMA path") is two-thirds too generous: DDR3 is
+out.
+
+`ram_arb.sv` is still in, and so is the whole primary data cache.
+
 ### One divergence does NOT reproduce, and that is informative
 
 The simulated kernel computes **303**, the same as IRIS. The board computes
