@@ -455,7 +455,7 @@ The driver's command histogram over one boot is five commands and nothing else:
 | `0x04` | 3233 | Disconnect |
 | `0x20` | 3221 | Transfer Info |
 | `0x06` | 3221 | Select-with-ATN |
-| `0x01` | 3221 | (follows the message transfer) |
+| `0x01` | 3221 | **Abort** - and it is what follows the message transfer |
 
 and the negotiation is the `0x06` → `0x20` → `0x01` triple, which runs ~3221
 times a boot:
@@ -473,6 +473,42 @@ Write Reg 18 <- 20                    ; Transfer Info
 **Six bytes is IDENTIFY (1) plus an SDTR extended message (5).** So the
 contract the target has to satisfy is concrete: after Select-with-ATN report
 `0x11` then `0x8E`, accept a six-byte DMA'd MESSAGE OUT, report `0x8A`.
+
+### This corrects a premise `scsi.v` is built on
+
+`rtl/scsi/scsi.v` reasons throughout from "IRIX sends IDENTIFY+SDTR **and then
+a CDB** in one connection", and the whole `cmd_timeout` design follows from it:
+go to COMMAND after MESSAGE OUT and wait, because IRIX's CDB is on its way and
+the PROM's is not. **The trace says otherwise.** IRIX's negotiation is its own
+connection and there is no CDB behind it either:
+
+```
+Select-with-ATN (0x06)  ->  Transfer Info, 6 bytes MESSAGE OUT (0x20)  ->  Abort (0x01)
+```
+
+3221 times a boot, in that exact triple - IRIS decodes `0x01` as `ABORT`
+(`src/wd33c93a.rs`). Commands go out separately, on
+Select-with-ATN-**and-Transfer** (`0x08`), where the MESSAGE OUT is a
+single-byte IDENTIFY and the CDB does follow.
+
+So **"multi-byte MESSAGE OUT means a CDB is coming" is false for IRIX as well
+as for the PROM**, and on this core every one of those 3221 negotiations must
+be running into `cmd_timeout` - 2.6 ms of the target sitting in COMMAND waiting
+for a CDB that was never going to arrive, per negotiation.
+
+What the driver is actually waiting for after its message is the target's
+answer in **MESSAGE IN** - an SDTR of its own, or a MESSAGE REJECT. This target
+presents neither. That is a complete and simple explanation of
+`SYNC negotiation error, resetting bus`, and it is consistent with everything
+else observed: the driver's *chip-level* sequence is identical under IRIS
+(same 3221 aborts, same six bytes), and IRIS stays quiet only because its model
+never presents the phases at all.
+
+**It is still a hypothesis about the RTL, not a fix, and `scsi.v`'s comments
+record that a MESSAGE REJECT was tried once and made things worse.** But it can
+now be tested rather than argued: the contract above is three status bytes, and
+the whole-machine Verilator model reaches the driver's first negotiation
+without a bitstream.
 
 **And this is exactly where IRIS stops being an oracle, in a way that is now
 visible rather than assumed.** Its model swallows the six bytes and never
