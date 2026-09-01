@@ -476,6 +476,13 @@ learns whether the target answered, stays asynchronous, and prints nothing. Our
 core has a real phase machine, so IRIX's driver runs a path IRIS never
 exercises, and *that* is the path that ends in `SYNC negotiation error`.
 
+The **contents** of those six bytes are not observable in IRIS either - the log
+says `dma=true` but no six-byte descriptor ever reaches the HPC3 PDMA channel,
+so the model is reading them directly. They *are* observable on our side:
+`rtl/scsi/scsi.v` already has the `$display` for it behind `+define+MSG_DEBUG`
+(`[TGT%0d] MSG_OUT ... din=%02x extra=%b`), and with the whole-machine
+Verilator model now building, that is a run away rather than a bitstream away.
+
 ---
 
 ## Not yet proven
@@ -588,6 +595,9 @@ Three things that did not exist before and make the next pass cheaper:
   with no location, in `np_rex3.sv`), and `--unroll-count 2048` for the
   128-entry reset loop at `sgi_hpc3.sv:339`. It runs at ~175k cycles/s, which
   is too slow for a whole IRIX boot but ample for the PROM and early kernel.
+* **[`tests/traces/iris-scsi-negotiation.txt`](../tests/traces/iris-scsi-negotiation.txt)**
+  - the driver's side of the SCSI negotiation, so the next person does not have
+  to re-capture 16 MB of device log to read forty lines of it.
 * **`scripts/indy_boot.py`** (on the IRIS branch `irix-init-trace`) - drives an
   IRIS run over plain TCP (monitor 8888, serial console 8881), so it works on
   Windows without the `--ci` Unix socket, and deliberately without `--ci`'s
