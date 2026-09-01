@@ -73,9 +73,10 @@ make -C verilator wholemachine
     --max-cycles 3000000000
 ```
 
-Both of those were run verbatim from a clean `obj_wm/` on 2026-09-01: the target
-builds from scratch in a couple of minutes and the binary boots. `--disk` (not
-`--disk-rw`) keeps guest writes in memory, so a run cannot damage the image. Two runs stopped on the identical cycle (242,603,699), so **A/Bs
+Both of those were run verbatim from a clean `obj_wm/` on 2026-09-01: the
+target builds from scratch in a couple of minutes and the binary boots.
+`--disk` (not `--disk-rw`) keeps guest writes in memory, so a run cannot damage
+the image. Two runs stopped on the identical cycle (242,603,699), so **A/Bs
 against this model are trustworthy** - which is what makes it worth more than
 the board for this particular bug.
 
