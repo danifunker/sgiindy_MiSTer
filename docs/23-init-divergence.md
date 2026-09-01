@@ -1,10 +1,11 @@
 # Where IRIX's initialisation diverges: `init`'s table pointer is NULL
 
 **Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status:
-the divergence is named to a single instruction and a single register; both
-sides were measured at that instruction; and the failing machine's own RAM says
-the allocation succeeded and the store of its result was lost. A bus trace on
-that store is the one confirmation still outstanding.**
+the divergence is named to a single instruction and a single register, both
+sides were measured at it, and the cause is **a lost store** - confirmed three
+ways in a simulation that reproduces the whole failure in 28 minutes. It is not
+DDR3 and it is not the data cache; what is left is `r4300_bus.sv`,
+`ram_arb.sv`, `sgi_memmap.sv` and the CPU's store path below the cache.**
 
 Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 
@@ -162,9 +163,49 @@ zero.** That is a lost store, not a failed `malloc`, and it is why turning every
 cache off in [21-icache-bug.md](21-icache-bug.md) changed nothing: a store that
 never lands is not a coherency problem.
 
-*(A bus trace armed on the store itself - `--trace-from-pc 0x7fc073b8` - is the
-direct confirmation and is the one measurement still outstanding. The heap
-layout above is inference from the state at the panic, strong but indirect.)*
+### The bus trace agrees: the allocator returned `0x7fc447a0`
+
+Arming the trace on the store itself (`--trace-from-pc 0x7fc073b8`) catches the
+kernel, a few hundred cycles later, reading `init`'s saved register context out
+of its u-area page:
+
+```
+[ 235878082] RD 0835d210 RAM  data 000000007fc447a0
+[ 235878107] RD 0835d200 RAM  data 000000007fc447a0
+[ 235878109] RD 0835d208 RAM  data 00000000000017b0
+[ 235877944] RD 0835d2b8 RAM  data 000000007fc48b70     <- init's gp
+[ 235878059] RD 0835d2d8 RAM  data 000000000000ff13     <- SR, as in the crash frame
+```
+
+`gp = 0x7fc48b70` and `SR = 0xff13` are the same values the crash dump carries,
+so this is `init`'s context and nothing else's. **Two register slots in it hold
+`0x7fc447a0`, and `0x17b0` - 6064, which is 6060 rounded up to 8 - sits beside
+them.** The pointer and the size, in registers, immediately after the call.
+
+So the allocator returned a valid pointer, twice over: from the heap's layout at
+the panic, and from `init`'s own registers right after the call. And the word it
+was stored into reads back as zero.
+
+*(The trace run reproduced the plain run's cycle count exactly - 242,603,699 in
+both - so **the model is deterministic** and the two runs are directly
+comparable.)*
+
+### It is not the data cache either
+
+`--no-dcache` panics identically: same `SYNC negotiation error`, same
+`Process [init] 1 generated trap`, same `PANIC: init died`, same faulting
+instruction (`7fc07c9c` → `7fc07ca8` in the user-PC trace), in 215,149,699
+cycles instead of 242,603,699.
+
+**So the store is not lost inside `cpu_datacache.vhd`.** That is the simulation
+counterpart of the board's `cache=off` result, and the two now agree for a
+reason instead of by coincidence. What is left in the path, all of it real RTL
+compiled into the model:
+
+* `rtl/cpu/r4300_bus.sv`
+* `rtl/sgi/ram_arb.sv`
+* `rtl/sgi/sgi_memmap.sv`
+* the CPU's own store path below the cache, in `rtl/cpu/r4300/cpu.vhd`
 
 ### And the sim has no DDR3, which narrows where the store is lost
 
@@ -662,12 +703,15 @@ Verilator model now building, that is a run away rather than a bitstream away.
   *inside* the allocating function, a few instructions above the allocation
   itself. So that function ran, past the read - and since every branch in it
   goes forward to the allocation, the allocation ran too.
-* **The direct evidence that the store was lost.** The heap-hole argument above
-  is inference from the machine's state at the panic - strong, and it rules out
-  a failed `malloc` and a corrupted allocator, but it is not the store itself.
-  A bus trace armed on `0x7fc073b8` (`--trace-from-pc`) shows the physical
-  address and the data of that write, and settles it directly. That run is
-  cheap now: 30 minutes, no board.
+* **The store's own bus transaction.** The allocator's return value is
+  confirmed (heap layout, and `init`'s saved registers), and the D-cache is
+  ruled out - but nobody has yet watched the write itself land, or fail to.
+  With the D-cache off every store goes straight to the bus, so
+  `--no-dcache` plus a `--watch` on the physical address of `init`'s `.bss`
+  page is the measurement that names the guilty module. Getting that physical
+  address is the only fiddly part: `init`'s data segment is **not** physically
+  contiguous, so it cannot be computed from the `.data` page - take it from a
+  trace instead.
 * **Determinism.** The panic itself reproduces: a fresh run on the board on
   2026-09-01 at 00:21 produced the identical message, and this time completed
   the dump (`tests/hardware/irix53-init-died-20260901.png`):
@@ -723,13 +767,14 @@ Verilator model now building, that is a run away rather than a bitstream away.
 
 Everything above says where to put the probe, and the probes are small.
 
-1. **Confirm the lost store directly, in simulation.** `--trace-from-pc
-   0x7fc073b8` arms the bus trace on that one store, so the trace carries the
-   physical address it lands on and the data it carries. That closes the last
-   gap in the argument above, and it needs no board. Then chase that physical
-   address: a store that reaches the D-cache but whose line is never written
-   back, or a writeback that goes to the wrong address, are different bugs with
-   different fixes and the trace distinguishes them.
+1. **Catch the store on the bus, in simulation, with `--no-dcache`.** With the
+   data cache bypassed every store is a bus transaction, and the panic still
+   happens (measured), so the store *must* appear - or must not, which is the
+   finding. Find the physical page of `init`'s `.bss` from a trace (it cannot be
+   computed: the data segment is not physically contiguous), then `--watch` it.
+   Whether the write never appears, appears with the wrong data, or appears at
+   the wrong address picks between `r4300_bus.sv`, `ram_arb.sv` and
+   `sgi_memmap.sv`.
 2. **Chase divergence A on its own.** `physical mem: 48 megabytes` against
    `MEM_MB = 64` is a discrepancy that needs no `init` to investigate: it is
    settled by comparing MEMCFG0/MEMCFG1 after the PROM's memory sizing between
