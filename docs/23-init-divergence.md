@@ -673,4 +673,36 @@ python tools/misterdeploy/efsread.py IMAGE get /sbin/init ./init
 
 # the IRIS oracle (in ../iris, branch irix-init-trace)
 python scripts/indy_boot.py --config iris-diff.toml --launch --boot --wait-login
+
+# what init's first heap allocation returns.  IRIS: 0x7fc447a8.  Board: the
+# word reads back as 0.
+python scripts/indy_boot.py --config iris-diff.toml --launch --boot \
+    --bp 0x7fc073b8 --at-break regs "m 0x7fc40000 2" "m 0xffffffff881c5ef8 32"
+
+# the driver's side of the SCSI negotiation
+python scripts/indy_boot.py --config iris-diff.toml --launch --boot \
+    --trace-scsi scsi-init.log --trace-seconds 180
 ```
+
+The board's kernel `var` struct, live, without stopping anything - it is at a
+KSEG0 address, so it is just physical memory:
+
+```sh
+ssh <mister> python3 /media/fat/sgidbg/guestmem.py 0x881c5ef8 0x80
+```
+
+And the whole machine in Verilator - read-only on the disk image, so it cannot
+damage it, and it dumps all 64 MB of guest RAM at exit for offline searching:
+
+```sh
+make -C verilator wholemachine
+./verilator/obj_wm/Vsim_top \
+    --prom boot.rom --no-gfx --ram-mb 64 \
+    --disk 1=/path/to/SGIIndy53.img \
+    --type-on "Option?" "1\r" --stop-on "init died" \
+    --ramdump 0x88000000:0x4000000:ram.bin --max-cycles 3000000000
+```
+
+At ~175k cycles/s this is an overnight job for a full IRIX boot, but it reaches
+the PROM's memory sizing and the driver's first SCSI negotiation in minutes -
+which is where both of the other two divergences live.
