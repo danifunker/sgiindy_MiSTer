@@ -103,12 +103,17 @@ with the flag **set on every fetch-side TLB exception and cleared only on
   stale flag harmless on its own, which is what protects
   `cpu-tests: excep/exl_preserves_epc`.
 
-**Check the result first.** Two runs were launched; the logs are
-`N1-nodcache.log` and `N2-dcache.log` in the session scratchpad, and the
-verdict is one line:
+**Check the result first, and if the logs are gone just re-run it** - the
+command is at the bottom of this file and the answer arrives about 25 minutes
+in. The runs launched at the end of the session wrote `N1-nodcache.log` and
+`N2-dcache.log` into that session's own scratchpad under
+
+    C:/Users/spam/AppData/Local/Temp/claude/C--Temp-mistercore-sgiindy-MiSTer/<session-id>/scratchpad/
+
+which is per-session and may not survive. Either way the verdict is one line:
 
 ```
-grep -E 'armed|EPC <-|EXC |PANIC' N1-nodcache.log | head
+grep -aE 'armed|EPC <-|EXC |PANIC' N1-nodcache.log | head
 ```
 
 **Success is `EPC <- 7fc073b4` immediately after the exception at cycle
