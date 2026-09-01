@@ -60,6 +60,38 @@ this is expected to hurt IRIX specifically.
 links are not proven and this document does not claim them. See
 [Not yet proven](#not-yet-proven).
 
+**But B is worse than "a NOTICE at boot", and the second board run tonight
+showed it.** `tests/out/hw/initdiff2.png`, 2026-09-01 00:38, same bitstream,
+same disk, is not the `init` panic at all - it is the SCSI path failing
+outright:
+
+```
+NOTICE: wd93 SCSI Bus=0 ID=1: SYNC negotiation error, resetting bus
+...
+The root file system, /dev/dsk/dks0d1s0, is being checked automatically.
+  fsck: checking /dev/dsk/dks0d1s0
+  ** Phase 1 - Check Blocks and Sizes
+WARNING: wd93 SCSI Bus=0 ID=1 LUN=0: SCSI cmd=0x28
+timeout after 60 sec.  Resetting SCSI bus            (x4)
+dks0d1s0: SCSI driver error: Command timed out
+fsck: I/O error
+  CAN NOT READ: BLK 1006
+  CONTINUE?  yes
+WARNING: wd93 SCSI Bus=0 ID=1 LUN=0: SCSI cmd=0x28
+timeout after 60 sec.  Resetting SCSI bus            (and on, and on)
+```
+
+`cmd=0x28` is READ(10). **Ordinary disk reads are timing out after a full 60
+seconds and the driver is resetting the bus over and over.** So the SCSI target
+does not merely decline to negotiate: under IRIX it sometimes stops answering
+commands altogether.
+
+**That also settles the determinism question, and not in the direction
+`docs/22` assumed.** Two runs tonight, one bitstream, one disk: run 1 was
+`init died`, run 2 was SCSI command timeouts in `fsck`. `init died` is *not*
+what this core does every time, and the common factor across both runs is the
+SCSI path, not `init`.
+
 ---
 
 ## How `init` dies, instruction by instruction
@@ -303,13 +335,45 @@ the same kernel binary on the same disk:
 0xffffffff881c5f30: 0x00002c00
 ```
 
-In IRIX that field is machine-sized, and the board's own dump header says
-`physical mem: 48 megabytes` where this core is built for
-`MEM_MB = 64`. **So the two kernels disagree about the machine before `init`
-ever runs.** That is a first-order initialisation divergence in its own right
-and it is worth chasing independently of the NULL - not least because a kernel
-with a wrong idea of which pages exist is one plausible way for a store to a
-freshly allocated heap page to go nowhere.
+That field is machine-sized in IRIX, so the same struct was read off the board
+directly - it lives at a KSEG0 address, which is just physical memory, so
+`tools/misterdeploy/guestmem.py` can read it from the ARM with the machine up:
+
+```
+$ python3 guestmem.py 0x881c5ef8 0x80          # on the board
+  881c5ef8  00 00 01 97 ...                    # +0x00: 407
+  881c5f18  00 00 00 ea 88 23 d3 70 ...        # +0x20: 234
+  881c5f28  00 00 00 20 00 00 00 1f 00 00 28 00
+  881c5f38  00 00 04 00 ...                    # +0x38: 0x2800 = 10240
+  881c5f68  ... 00 00 02 9c                    # +0x78: 668
+```
+
+Side by side, same kernel binary, same disk, same PROM:
+
+| offset | board | IRIS |
+|---|---:|---:|
+| `+0x00` | 407 | 509 |
+| `+0x20` (what `init` uses) | **234** | **303** |
+| `+0x30` | 32 | 32 |
+| `+0x34` | 31 | 31 |
+| `+0x38` | 10240 | 11264 |
+| `+0x40` | 1024 | 1024 |
+| `+0x78` | 668 | 806 |
+
+**Every machine-scaled field is smaller on the board and every fixed constant
+matches.** `+0x38` reads like a page count: 10240 pages is 40 MB against IRIS's
+11264 pages = 44 MB, a difference of exactly **1024 pages = 4 MB**.
+
+Two things make this solid rather than suggestive. It is **cross-run
+confirmed**: 234 appears both in the 2026-08-31 crash dump and in this live
+read of a different boot on 2026-09-01. And it happens **before `init` runs at
+all**, in the kernel's own sizing.
+
+**So the two machines disagree about how much memory they have, by 4 MB, at
+kernel initialisation.** That is a first-order divergence in its own right and
+worth chasing independently of the NULL - not least because a kernel with a
+wrong idea of which pages exist is one plausible way for a store to a freshly
+allocated heap page to go nowhere.
 
 **Result 4 - IRIS reaches full multiuser on this image.** The oracle run got
 all the way through `lboot`'s automatic reconfiguration to `inetd`, `sendmail`,
@@ -383,11 +447,18 @@ about, and it is why IRIS cannot be the oracle for this particular divergence.
   it). A plausible chain exists - a reset corrupts or truncates a read, `init`
   reads a bad 128-byte record, gets a bad count, and the allocation fails - but
   it is a hypothesis, not a measurement.
-* **Whether the allocation failed or never ran.** The faulting loop is in the
-  function at `0x7fc07c4c`; the allocation is in a *different* function
-  containing `0x7fc073b8`. `init` walking the table before the function that
-  allocates it has run would produce the identical crash. Distinguishing these
-  needs the board to be caught in the act.
+* **~~Whether the allocation failed or never ran.~~ Resolved: it ran.** The
+  faulting loop is in the function at `0x7fc07c4c` and the allocation is in a
+  different function, so "`init` walked the table before the allocator ever
+  ran" was a live alternative. It is ruled out by the count. The value in the
+  crashing process was **234**; the value compiled into the binary is **200**;
+  and 234 can only have been written by the `/dev/kmem` block that sits
+  *inside* the allocating function, a few instructions above the allocation
+  itself. So that function ran, past the read - and since every branch in it
+  goes forward to the allocation, the allocation ran too.
+* **Why the allocation returned NULL** - lost store, corrupted allocator state,
+  or a genuine `brk` failure. This is the open question, and experiment 1 below
+  settles it.
 * **Determinism.** The panic itself reproduces: a fresh run on the board on
   2026-09-01 at 00:21 produced the identical message, and this time completed
   the dump (`tests/out/hw/initdiff1.png`):
@@ -401,11 +472,19 @@ about, and it is why IRIS cannot be the oracle for this particular divergence.
   [Press reset to restart the machine.]
   ```
 
-  That is two independent occurrences. What is **not** yet confirmed across runs
-  is the register-level detail - the trap frame quoted above comes from the
-  2026-08-31 dump only. [21-icache-bug.md](21-icache-bug.md) records two runs of
-  one bitstream failing in completely different places, so treat anything finer
-  than "init died" as single-run until a second dump agrees.
+  That is two independent occurrences of the panic (2026-08-31 and
+  2026-09-01 00:21). **But the very next run of the same bitstream on the same
+  disk did something else entirely** - SCSI READ(10) timeouts in `fsck`,
+  `tests/out/hw/initdiff2.png` - so `docs/22`'s "dies in the same place every
+  time" does not hold, and [21-icache-bug.md](21-icache-bug.md)'s warning
+  stands. The register-level trap frame quoted above comes from the 2026-08-31
+  dump only; treat anything finer than "init died" as single-run until a second
+  dump agrees.
+
+  What *is* confirmed across runs is the `var` struct: 234 in the 2026-08-31
+  crash dump and 234 again in a live read on 2026-09-01, and the SYNC
+  negotiation NOTICE, which appears in the 2026-08-31 putbuf and on screen in
+  the 2026-09-01 run.
   (The disk's `/var/adm/SYSLOG` *does* contain boots of this image that reached
   full multiuser userland - `inetd`, `sendmail`, `timed`, `prngd` - but those
   entries **cannot be attributed to the board**: a headless IRIS run of the
@@ -435,10 +514,16 @@ Everything above says where to put the probe, and the probes are small.
    the board and IRIS. **The whole-machine Verilator model now builds** (see
    below) and reaches the PROM's memory sizing in seconds, so this one does not
    even need the board.
-3. **Fix the SCSI target's SDTR answer on its own merits**, whatever it does to
-   this panic - **but read the two measured traps in `scsi.v`'s comments first**,
-   because both obvious changes there have already cost the PROM its boot once
-   each.
+3. **Treat the SCSI target as the top-priority defect, not a footnote.** Run 2
+   is the argument: READ(10) timing out after 60 seconds with repeated bus
+   resets is not a cosmetic negotiation complaint, it is the disk not working.
+   Fix the SDTR answer on its own merits, and find why a command sometimes
+   never completes - **but read the two measured traps in `scsi.v`'s comments
+   first**, because both obvious changes there have already cost the PROM its
+   boot once each. The whole-machine Verilator model is now available for this
+   and `rtl/scsi/sgi_scsi.sv` also builds standalone with `-fno-gate`
+   (see `docs/22` and the toolchain notes), which is the right unit for a target-side question -
+   IRIS cannot answer it, having no bus-level target at all.
 
 ## Tooling this produced
 
