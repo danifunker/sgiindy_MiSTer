@@ -1,9 +1,10 @@
 # Where IRIX's initialisation diverges: `init`'s table pointer is NULL
 
 **Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status:
-the divergence is named to a single instruction and a single register, both
-sides were measured at that instruction. What makes the register differ is not
-yet proven.**
+the divergence is named to a single instruction and a single register; both
+sides were measured at that instruction; and the failing machine's own RAM says
+the allocation succeeded and the store of its result was lost. A bus trace on
+that store is the one confirmation still outstanding.**
 
 Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 
@@ -33,14 +34,15 @@ blocks SIGSEGV the kernel kills it to break the trap loop and panics on the
 death of pid 1 - `why = 2` (CLD_KILLED), `what = 0x9` (SIGKILL), exactly as
 printed on the screen.
 
-**The allocation was for 4680 bytes, by pid 1, at the start of the boot, on a
-machine with tens of megabytes free.** It should not have been able to fail, and
-nothing else had failed - `init` had just read kernel memory through
-`/dev/kmem` successfully. The leading hypothesis is therefore **not** "malloc
-failed" but **a lost store**: `.bss` starts as zero, so a write to that word
-that never lands is indistinguishable from an allocator returning NULL. That
-would also explain why turning every cache off changes nothing, which is the
-fact [21-icache-bug.md](21-icache-bug.md) could not account for.
+**It is a lost store, not a failed `malloc`.** The whole failure reproduces in
+the whole-machine Verilator model in 28 minutes, and a dump of all 64 MB of
+guest RAM at the panic shows **a hole in `init`'s heap at exactly the address
+and exactly the size of that allocation, with 78 live pointers above it and one
+inside**. The allocator handed the block out and carried on; only the copy of
+the pointer in `.bss[0]` is zero. `.bss` starts as zero, so a write that never
+lands is indistinguishable from an allocator returning NULL - and a lost store
+is not a coherency problem, which is exactly why turning every cache off in
+[21-icache-bug.md](21-icache-bug.md) changed nothing.
 
 **Two further divergences, both measured, neither proven to be the cause:**
 
@@ -97,6 +99,80 @@ commands altogether.
 `init died`, run 2 was SCSI command timeouts in `fsck`. `init died` is *not*
 what this core does every time, and the common factor across both runs is the
 SCSI path, not `init`.
+
+---
+
+## The whole failure reproduces in Verilator, in 28 minutes, and the RAM dump settles it
+
+Booting the same image in the whole-machine model - read-only, so it cannot
+damage anything - reproduces **all of it** from cold in 1669 seconds:
+
+```
+                         Running power-on diagnostics...
+sc0,1,0: SYNC negotiation error, resetting SCSI bus          <- the PROM's
+...
+Option? 1
+IRIX Release 5.3 IP22 Version 12200159 System V
+NOTICE: wd93 SCSI Bus=0 ID=1: SYNC negotiation error, resetting bus   <- IRIX's
+WARNING: Process [init] 1 generated trap, but has signal 11 held or ignored
+Process has been killed to prevent infinite loop
+PANIC: init died
+--- stop-on after 242603699 cycles, 22211343 bus transactions ---
+last 64 USER-mode PCs (oldest first):
+  [ 238192176] 7fc07ca0
+  [ 238192177] 7fc07ca4        <- the faulting store
+  [ 238192178] 7fc07ca8   (repeated, the pipeline replaying behind the trap)
+```
+
+Same instruction, same panic, on a machine where everything is observable.
+
+### The allocation succeeded. The store of its result did not.
+
+`--ramdump` wrote all 64 MB of guest RAM at the moment of the panic, and the
+heap in it answers the open question.
+
+`init`'s own `.data` page is in there twice: a pristine copy from the file with
+the compiled-in count of **200**, and the live one with **303** - the count this
+kernel computed. So in simulation `init` asks for `calloc(303, 20)` = **6060
+bytes**, and if that returned `0x7fc447a8` (which is what IRIS returns) the
+block runs to **`0x7fc45f54`**. IRIS's register `a3` at that same instruction is
+`0x7fc45f54`, so that arithmetic is not a guess.
+
+Now count every pointer in the failing machine's RAM that lands in `init`'s
+heap:
+
+| where | live pointers |
+|---|---:|
+| below `0x7fc447a8` (`.bss`/`.sbss`) | 8 |
+| **inside `0x7fc447a8`..`0x7fc45f54`** - the first block | **1** |
+| above `0x7fc45f54` - later allocations | 78 |
+
+and the lowest live heap pointer above the block is **`0x7fc46010`**, sitting
+just past `0x7fc45f54`.
+
+**There is a 6060-byte hole in the heap, at exactly the address and exactly the
+size of the allocation, and everything after it is allocated and in use.** If
+`calloc` had returned NULL, later allocations would have been handed that space
+and the hole would be full of live objects. It is not. The allocator handed the
+block out, advanced past it, and kept working - `init`'s malloc is fine, and 78
+later pointers prove it.
+
+**So the allocation succeeded and only the copy of its result in `.bss[0]` is
+zero.** That is a lost store, not a failed `malloc`, and it is why turning every
+cache off in [21-icache-bug.md](21-icache-bug.md) changed nothing: a store that
+never lands is not a coherency problem.
+
+*(A bus trace armed on the store itself - `--trace-from-pc 0x7fc073b8` - is the
+direct confirmation and is the one measurement still outstanding. The heap
+layout above is inference from the state at the panic, strong but indirect.)*
+
+### One divergence does NOT reproduce, and that is informative
+
+The simulated kernel computes **303**, the same as IRIS. The board computes
+**234**. So **divergence A is board-only**: it does not appear in a model that
+replaces DDR3 and `ram_arb` with `sim_ram.v`, which points at the real memory
+path rather than at the RTL's logic. It also means the wrong count is **not**
+what kills `init` - the sim panics identically with the right one.
 
 ---
 
@@ -574,9 +650,12 @@ Verilator model now building, that is a run away rather than a bitstream away.
   *inside* the allocating function, a few instructions above the allocation
   itself. So that function ran, past the read - and since every branch in it
   goes forward to the allocation, the allocation ran too.
-* **Why the allocation returned NULL** - lost store, corrupted allocator state,
-  or a genuine `brk` failure. This is the open question, and experiment 1 below
-  settles it.
+* **The direct evidence that the store was lost.** The heap-hole argument above
+  is inference from the machine's state at the panic - strong, and it rules out
+  a failed `malloc` and a corrupted allocator, but it is not the store itself.
+  A bus trace armed on `0x7fc073b8` (`--trace-from-pc`) shows the physical
+  address and the data of that write, and settles it directly. That run is
+  cheap now: 30 minutes, no board.
 * **Determinism.** The panic itself reproduces: a fresh run on the board on
   2026-09-01 at 00:21 produced the identical message, and this time completed
   the dump (`tests/hardware/irix53-init-died-20260901.png`):
@@ -632,18 +711,13 @@ Verilator model now building, that is a run away rather than a bitstream away.
 
 Everything above says where to put the probe, and the probes are small.
 
-1. **Decide between "lost store" and "allocator really failed."** They are
-   distinguishable without a debugger on the board: the allocator's return value
-   is in `v0` at `0x7fc073b8` and it is *also* still in `v0` for the two
-   instructions after it. Under IRIS the answer is `0x7fc447a8`, eight bytes
-   past `.bss`; the same address will be handed out on the board if `brk`
-   worked. So read `0x7fc43ef0` **and** the word at `0x7fc447a8-8` out of the
-   board's memory: a heap that exists with a header in it, behind a `.bss` slot
-   that is still zero, is a lost store and nothing else.
-   `tools/misterdeploy/guestmem.py` reads guest memory from the ARM while the
-   machine is up, and after the panic the machine sits at
-   `[Press reset to restart the machine.]` with its memory intact - which is a
-   far better moment to read it than during the boot.
+1. **Confirm the lost store directly, in simulation.** `--trace-from-pc
+   0x7fc073b8` arms the bus trace on that one store, so the trace carries the
+   physical address it lands on and the data it carries. That closes the last
+   gap in the argument above, and it needs no board. Then chase that physical
+   address: a store that reaches the D-cache but whose line is never written
+   back, or a writeback that goes to the wrong address, are different bugs with
+   different fixes and the trace distinguishes them.
 2. **Chase divergence A on its own.** `physical mem: 48 megabytes` against
    `MEM_MB = 64` is a discrepancy that needs no `init` to investigate: it is
    settled by comparing MEMCFG0/MEMCFG1 after the PROM's memory sizing between
