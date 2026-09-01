@@ -506,9 +506,38 @@ never presents the phases at all.
 
 **It is still a hypothesis about the RTL, not a fix, and `scsi.v`'s comments
 record that a MESSAGE REJECT was tried once and made things worse.** But it can
-now be tested rather than argued: the contract above is three status bytes, and
-the whole-machine Verilator model reaches the driver's first negotiation
-without a bitstream.
+now be tested rather than argued - and the test is already running.
+
+### The negotiation failure reproduces in simulation, in about ten minutes
+
+Booting the same disk image in the whole-machine Verilator model, read-only,
+the **PROM's own POST** prints it before IRIX is even loaded:
+
+```
+                         Running power-on diagnostics...
+
+sc0,1,0: SYNC negotiation error, resetting SCSI bus
+Cannot open video() for output
+
+System Maintenance Menu
+```
+
+Two things follow, and both matter more than the panic hunt.
+
+**It is not IRIX-specific.** `sc0,1,0:` is the PROM's own naming, so the PROM
+negotiates, fails, and resets the bus too. It then recovers and carries on to
+the menu - which is why nobody noticed: the PROM boots anyway. `scsi.v`'s
+comments treat "the PROM prints SYNC negotiation error" as the symptom of a
+*change* that broke it. **It is the symptom of the code as it stands, with a
+disk attached.**
+
+**And it is now a ten-minute local test.** No bitstream, no board, no 2 GB
+image push: `make -C verilator wholemachine` and the invocation at the bottom
+of this document reach the failure from a cold start in about ten minutes,
+read-only on the image. Anyone changing the MESSAGE OUT arm can now see the
+effect on the PROM *and* on IRIX before committing to a Quartus fit - which is
+exactly the loop that was missing when the two previous attempts each cost the
+PROM its boot.
 
 **And this is exactly where IRIS stops being an oracle, in a way that is now
 visible rather than assumed.** Its model swallows the six bytes and never
