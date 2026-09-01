@@ -140,6 +140,26 @@ cputest: $(RTL)/cpu/generated/r4300_wrap.v
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
+
+# --- whole-machine headless harness (builds on Verilator 5.020) ------------
+# The same sim_top as `cputest`, but with the three flags that Verilator 5.020
+# needs to get through this design. Each was found by building it, not guessed:
+#   -fno-gate          V3Gate.cpp:693 "No pending substitutions" on scsi.v
+#   -O0                every level above it dies in a later pass with an
+#                      internal fault that prints no location (np_rex3.sv)
+#   --unroll-count     sgi_hpc3.sv:339 resets a 128-entry array in a for loop,
+#                      which is BLKLOOPINIT unless the loop is unrolled
+# plus -Wno-MULTIDRIVEN for the dual-port RAM in the generated CPU.
+# NOTE: rtl/cpu/generated/r4300_wrap.v must be current - a stale one is missing
+# the nine dbg_* ports sgi_indy.sv connects and fails with PINNOTFOUND.
+#   make -C verilator wholemachine
+#   ./obj_wm/Vsim_top --prom ../boot.rom --no-gfx --disk 1=disk.img
+WM_W = $(CPUTEST_W) -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK
+WM_OPT = -fno-gate -O0 --unroll-count 2048 --unroll-stmts 20000 	 -finline -flife -flife-post -fconst -fsubst -fsubst-const 	 -fassemble -fcombine -fexpand -fcase -fdedup -freorder -fsplit 	 -fmerge-cond -ftable
+
+wholemachine: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_wm --top-module sim_top 	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
+
 # --- interactive harness ---------------------------------------------------
 # Same sim_top, same C++ device models as `cputest`, plus SDL2 + OpenGL2 +
 # Dear ImGui from the vendored MiSTer sim framework.

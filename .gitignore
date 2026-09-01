@@ -89,3 +89,7 @@ c5_pin_model_dump.txt
 
 # Python bytecode from tools/prom
 __pycache__/
+
+# whole-machine Verilator build dirs (make -C verilator wholemachine)
+verilator/obj_wm/
+verilator/obj_fast/
