@@ -3,15 +3,15 @@
 **Work item: [24-fix-lost-store-prompt.md](24-fix-lost-store-prompt.md), which
 followed [23-init-divergence.md](23-init-divergence.md).**
 
-**Status: the defect is FOUND and PROVEN. The fix is NOT yet working.** It is
-in the CPU's exception ordering, not in the memory path - `r4300_bus.sv`,
-`ram_arb.sv` and `sgi_memmap.sv` are all innocent, and the store never reaches
-them. Four fix attempts have each been disproved by measurement; the fifth was
-still building when the session ended. **Nothing has run on hardware yet.**
-[26-resume-tlb-epc-fix.md](26-resume-tlb-epc-fix.md) is the work item that
-carries it forward and lists what each attempt ruled out.
+**Status: the defect is FOUND, PROVEN, and FIXED in simulation.** It is in the
+CPU's exception ordering, not in the memory path - `r4300_bus.sv`, `ram_arb.sv`
+and `sgi_memmap.sv` are all innocent, and the store never reaches them. Six fix
+attempts; the sixth works, and what had been defeating the previous three was
+one line that reads like a reset and is not - see
+[the pulse](#the-flag-was-a-one-cycle-pulse-which-is-why-three-attempts-did-nothing)
+below.
 
-Written 2026-09-01.
+Written 2026-09-01, updated the same day with the fix.
 
 ---
 
@@ -241,22 +241,74 @@ register and was never written out.
 The fix is one term plus the flag that qualifies it:
 
 ```vhdl
-if (excSavedEXL = '0' or excFetchProvisional = '1') then
+if (excSavedEXL = '0' or (excFetchProvisional = '1' and
+                          nextEPC_1(31) = '0')) then
 ```
 
-`excFetchProvisional` is set whenever a fetch-side TLB exception is accepted,
-and cleared as soon as the machine **executes a kernel instruction** -
-`stall4Masked = 0 and executeNew = '1' and pcOld1(31) = '1'`. That is precisely
-"the handler has started and software has seen this trap".
+`excFetchProvisional` means "the `EXL` now set was set by a fetch-side fault we
+have not returned from". It is **set** when a fetch-side TLB exception is
+accepted, and **cleared in exactly two places**: when an exception consumes it
+(immediately after the `EPC` write above), and on a *real* `ERET`.
 
-Between the two faults nothing but user PCs executes - the exception vector is
-not fetched until cycle 359, twenty cycles *after* the store's fault - so the
-flag survives exactly the window it is meant to. A genuinely nested exception,
-taken inside a running handler, always sees it clear, so the `EXL` rule keeps
-protecting the outer `EPC` exactly as before (cpu-tests:
-`excep/exl_preserves_epc`).
+The second half of the test, `nextEPC_1(31) = '0'`, is what makes a stale flag
+harmless: the exception being reported belongs to a **user-mode** instruction.
+A handler runs in kernel space, so its own nested exception always has a kernel
+`nextEPC_1` and can never take this path. The `EXL` rule therefore keeps
+protecting the outer `EPC` exactly as before - cpu-tests
+`excep/exl_preserves_epc` passes, and the suite stays at 364 runs, 0 against
+expectation.
 
-Two earlier attempts are recorded below because each ruled something out.
+### The flag was a one-cycle pulse, which is why three attempts did nothing
+
+**This is the part worth reading.** Attempts 4, 5 and 6 all put a correct
+condition in a correct place and all did nothing, and the traces kept saying
+the flag "was not set" when it plainly had been. The reason was one line at the
+top of the `rising_edge(clk93)` process in `cpu_cop0.vhd`:
+
+```vhdl
+error_exception     <= '0';
+error_TLB           <= '0';
+TLB_Instr_fetchDone <= '0';
+TLB_Data_fetchDone  <= '0';
+TLBInvalidate       <= '0';
+excFetchProvisional <= '0';     -- <- cleared EVERY CLOCK
+```
+
+Everything else in that block is a genuine one-clock pulse and wants a default.
+`excFetchProvisional` is **state** and has to survive the ~50 cycles between
+the two faults of a single trap. Defaulted there, it was set by the fetch-side
+exception and gone on the very next clock, every time:
+
+```
+[2036] COP0 excStage1 EXL PROVISIONAL  stall=01
+[2037] COP0 excStage1 EXL commit       stall=00     <- gone
+[2043] COP0 exc savedEXL EXL           stall=05     <- the store's fault
+```
+
+and with the default removed:
+
+```
+[2036] COP0 excStage1 EXL PROVISIONAL          stall=01
+[2037] COP0 excStage1 EXL PROVISIONAL commit   stall=00   <- survives
+[2043] COP0 exc savedEXL EXL PROVISIONAL       stall=05
+[2044] EPC <- 00400014   (was 00500000)                   <- the jal. Correct.
+```
+
+**That block reads exactly like a reset branch and is not one** - it is inside
+`if (rising_edge(clk93))`, several lines below it, with no `if reset` anywhere
+near. Three fix attempts were spent looking for something that was *clearing*
+the flag, when nothing was clearing it: it was never being held.
+
+The clear on `ERET` moved too, and for a related reason. It was first written
+as a bare `elsif (eret = '1')` next to the set. But `eret` is `execute_ERET`,
+a **registered pipeline signal** that holds its last decoded value
+(`execute_ERET <= decodeERET` in `cpu.vhd`, updated only when the execute stage
+advances), so tested raw it is stale between real `ERET`s. It now sits beside
+the `ERET` that clears `EXL`, whose enclosing arm is
+`stall4Masked = 0 and executeNew = '1'` - the only place an `ERET` is known to
+have really executed.
+
+Earlier attempts are recorded below because each ruled something out.
 
 ### The arbiter is NOT the place, and that took a run to establish
 
@@ -345,8 +397,28 @@ be worth adding regardless, but it would have *passed* both before and after
 this fix, because with no competing fetch miss the existing logic already gets
 `EPC` right - `nextEPC_1` and `isDelaySlot_1` were correct the whole time.
 
-The regression guard for this one is the whole-machine boot, which is now 28
-minutes and deterministic.
+The regression guard for this one is **`tests/tlborder/`**, which reproduces
+the exact condition - a `jal` to an invalid page with a store to another
+invalid page in its delay slot - bare-metal, at **cycle 2043**, in about a
+second:
+
+```sh
+tests/tlborder/build.sh
+./verilator/obj_wm/Vsim_top --elf tests/out/tlborder/tlborder.elf \
+    --no-gfx --max-cycles 12000 --trace-from-pc 0x00400018 \
+    --exc --exc-count 6 --epc --epc-count 20 --cop0 --cop0-count 40
+```
+
+Pass is `EPC <- 00400014` (the `jal`) after the store's fault; fail is the EPC
+staying at `00500000` (the branch target). It is what found the one-cycle pulse
+above, after three attempts had been spent on 25-minute round trips. The
+whole-machine boot, 28 minutes and deterministic, remains the end-to-end check.
+
+The test itself had three bugs worth knowing about, since two of them are traps
+anything else loading an ELF here will hit - `ld` needs `-T` and the BFD name
+is `elf32-tradbigmips`, and code copied through KSEG0 and then *fetched* is
+read by the I-cache from the stale memory under the D-cache. See the header of
+`tests/tlborder/build.sh`.
 
 ## What this does NOT explain
 

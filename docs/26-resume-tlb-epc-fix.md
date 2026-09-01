@@ -1,10 +1,30 @@
 # Work item: finish the TLB/EPC fix and validate it on hardware
 
+**SUPERSEDED 2026-09-01, later the same day. THE FIX WORKS IN SIMULATION.**
+Attempt 5, which this document was written to carry forward, failed - and so
+did a sixth. Both failed for the same reason, which no trace was pointed at:
+`excFetchProvisional` was being assigned `'0'` **every clock**, by a line
+sitting in a block of one-shot pulse defaults that reads exactly like a reset
+branch and is not one. With that line removed the flag survives the window and
+`EPC <- 00400014` lands on the store's fault. See
+[25-lost-store-tlb-order.md](25-lost-store-tlb-order.md), which has been
+updated with the whole mechanism, and commit `1a7299a`.
+
+`tests/tlborder/` also **works now** and is what found it, at cycle 2043
+instead of 207,884,339. The three bugs in it were not the `PHDRS` this document
+guessed at; they are written up in the header of `tests/tlborder/build.sh`.
+
+What is left from this document is the **board validation** below, which is
+still entirely undone, and the two independent defects it records (SCSI SDTR,
+and the 4 MB memory-sizing discrepancy), which are untouched.
+
+The original text follows, with the attempt table corrected.
+
+---
+
 Paste everything below the line as the opening message of a fresh session. This
 follows [25-lost-store-tlb-order.md](25-lost-store-tlb-order.md), which found
-and proved the defect. **The analysis is finished and is not in doubt. What is
-not finished is the fix: four attempts, each disproved by measurement, and the
-fifth is in flight.**
+and proved the defect.
 
 ---
 
@@ -78,11 +98,24 @@ attempt 3.
 | 1 | reorder cop0's TLB arbiter (data before instruction) | **bit-identical boot**, panic at the same cycle | the two arms are never both eligible at a decision; the arbiter never gets a choice |
 | 2 | `if (excSavedEXL = '0' or exceptionStage1 = '1')` | did not fire | `exceptionStage1` is cleared at cycle 287, ~50 cycles before the store's fault |
 | 3 | `excFetchProvisional`, set only when a data request is outstanding | condition always false | `dReq` does not exist until cycle 288, two cycles *after* the fetch fault |
-| 4 | flag set unconditionally, cleared on first instruction commit | flag set at 286, **cleared at 287** | a commit-based clear fires ~70 cycles before the handler exists |
+| 4 | flag set unconditionally, cleared on first instruction commit | flag set at 286, **cleared at 287** | nothing, as it turned out - see 7 |
+| 5 | flag cleared on `eret` instead, plus a `nextEPC_1(31) = '0'` guard | flag set at 2036, **cleared at 2037** | nothing - same one-cycle death |
+| 6 | `eret` clear moved beside the `ERET` that clears `EXL`, properly qualified | flag set at 2036, **cleared at 2037** | that `eret` was NOT what cleared it; a real correction, but not the bug |
+| **7** | **removed the per-clock default `excFetchProvisional <= '0'`** | **`EPC <- 00400014` at 2044** | **the flag was never state at all - it was a one-cycle pulse** |
 
-**Attempt 5 is what is committed now.** Its two verification runs were
-launched at 11:13 as the session ended, so the verdict was not seen - assume
-nothing about it and check, or just re-run:
+Attempts 4, 5 and 6 were all defeated by the same line, and the trace read the
+same way each time ("the flag is not set when it is needed"). The instrument
+that finally separated "something clears it" from "it is never held" was
+`tests/tlborder`, because it made the experiment cost seconds instead of 25
+minutes - the eret hypothesis in attempt 6 was disproved by simply removing
+that clear and seeing the flag die anyway, which left exactly one assignment
+standing.
+
+**Attempt 5 was what was committed when this was written; it does not work.**
+Its two verification runs were launched at 11:13 as the session ended, and when
+re-run they showed the flag dying one cycle after it was set. Kept here because
+the condition itself was right and survives into the working fix - only the
+`eret` clear and the per-clock default had to go:
 
 ```vhdl
 if (excSavedEXL = '0' or (excFetchProvisional = '1' and
@@ -211,23 +244,24 @@ wall:
 
 ## Nearly-finished work worth ten minutes
 
-**`tests/tlborder/`** is a bare-metal reproduction of this exact condition -
-`jal` to an invalid page with a store to another invalid page in its delay
-slot - that would turn a 25-minute IRIX boot into a **one-second** check. The
-`.S` assembles and links and the snippet disassembles correctly. It fails at
-load:
+**DONE, and it paid for itself immediately** - it is what found the one-cycle
+pulse. `tests/tlborder/` reproduces the condition bare-metal at **cycle 2043**.
+None of the three bugs in it was the `PHDRS` guessed at here:
 
-```
-ELF load failed: segment 2 at vaddr 00400000 -> phys 00400000 (232 bytes)
-is outside RAM [08000000, 0c000000)
-```
+* `tlborder.ld` was **never passed to `ld`** - the link used `-Ttext` and the
+  default script, which is what emitted the second `PT_LOAD` at `0x00400000`.
+* the script said `OUTPUT_FORMAT("elf32-bigmips")`, which binutils 2.42 rejects
+  outright ("target elf32-bigmips not found"). The name here is
+  **`elf32-tradbigmips`**. That is almost certainly why it was abandoned for
+  `-Ttext` in the first place.
+* the test copied its snippet to `PA_CODE` through **KSEG0**, so the words sat
+  in the D-cache while the I-cache fetched the stale zeroes underneath. It
+  executed 8 KB of `nop`s off the end of its own mapping and faulted on
+  `0x00402000` - a plausible-looking wrong answer. KSEG1 fixes it.
 
-`ld` emits a second `PT_LOAD` for the ELF headers at its default text address;
-`PHDRS` alone did not suppress it. Untried: `-N` (omagic), or giving the
-headers to the text segment with `. = 0x88001000 + SIZEOF_HEADERS;` and
-`:text FILEHDR PHDRS`. **cpu-tests cannot host this case at all** - that suite
-runs unmapped from KSEG0, so its fetches never miss the TLB, which is exactly
-why ten thorough TLB tests never caught this.
+**cpu-tests cannot host this case at all** - that suite runs unmapped from
+KSEG0, so its fetches never miss the TLB, which is exactly why ten thorough
+TLB tests never caught this.
 
 ## Traps paid for this session
 
