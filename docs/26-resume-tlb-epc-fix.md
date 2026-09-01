@@ -80,8 +80,9 @@ attempt 3.
 | 3 | `excFetchProvisional`, set only when a data request is outstanding | condition always false | `dReq` does not exist until cycle 288, two cycles *after* the fetch fault |
 | 4 | flag set unconditionally, cleared on first instruction commit | flag set at 286, **cleared at 287** | a commit-based clear fires ~70 cycles before the handler exists |
 
-**Attempt 5 is what is in the tree now** and was still building when the
-session ended:
+**Attempt 5 is what is committed now.** Its two verification runs were
+launched at 11:13 as the session ended, so the verdict was not seen - assume
+nothing about it and check, or just re-run:
 
 ```vhdl
 if (excSavedEXL = '0' or (excFetchProvisional = '1' and
