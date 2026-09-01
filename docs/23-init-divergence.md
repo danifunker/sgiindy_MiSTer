@@ -863,6 +863,12 @@ make -C verilator wholemachine
     --ramdump 0x88000000:0x4000000:ram.bin --max-cycles 3000000000
 ```
 
-At ~175k cycles/s this is an overnight job for a full IRIX boot, but it reaches
-the PROM's memory sizing and the driver's first SCSI negotiation in minutes -
-which is where both of the other two divergences live.
+That is 28 minutes to the panic. The two variants used above, same command plus:
+
+```sh
+    --trace-from-pc 0x7fc073b8 --trace-count 600   # arm the bus trace on the store
+    --no-dcache                                    # bypass the primary data cache
+```
+
+The model is deterministic - the plain run and the traced run stopped on the
+same cycle, 242,603,699 - so A/Bs against it are trustworthy.
