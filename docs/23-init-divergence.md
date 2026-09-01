@@ -1,8 +1,9 @@
 # Where IRIX's initialisation diverges: `init`'s table allocation returns NULL
 
-**Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status of
-this document: the divergence is named and the failing instruction is identified
-down to the opcode. The step that makes the pointer NULL is not yet proven.**
+**Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status:
+the divergence is named to a single instruction and a single register, and both
+sides were measured at that instruction. What makes the register differ is not
+yet proven.**
 
 Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 
@@ -10,22 +11,40 @@ Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 
 ## The short version
 
-Two divergences were found. They are independent findings and only one of them
-is the thing that kills `init`.
+**The divergence is one instruction and one register.**
 
-**1. The proximate cause of the panic, named exactly.** `/sbin/init` faults at
-its own instruction `0x7fc07ca4`, which is `sw zero, 12(v0)` with `v0 == 0`.
-`v0` is a table pointer that lives in the first word of `init`'s `.bss`
-(`0x7fc43ef0`). There is exactly one instruction in the whole of `init` that
-writes that pointer, and it stores the return value of an allocator called with
-`(count, 20)`. **So the allocation returned NULL, `init` did not check it, and
-it walked off a null pointer.** `init` blocks SIGSEGV, so the kernel could not
-deliver the signal, killed the process to break the trap loop, and panicked
-because the dead process was pid 1. That is `why = 2` (CLD_KILLED),
-`what = 0x9` (SIGKILL), exactly as printed.
+`/sbin/init` stores the result of its first heap allocation at
+**`0x7fc073b8`** (`sw v0, 0x3ef0(at)`), into the first word of its own `.bss`.
+Stopping both machines on that exact instruction:
 
-**2. A real, separate device-level divergence.** Immediately before that, the
-board's kernel logged
+| | `v0` at `0x7fc073b8` | outcome |
+|---|---|---|
+| **IRIS** | `0x7fc447a8` | boots to full multiuser |
+| **this core** | `0` | `init` walks off the null pointer and the kernel panics |
+
+`init` reads that pointer back at `0x7fc07ca4` (`sw zero, 12(v0)`), faults on
+the null, and because it blocks SIGSEGV the kernel kills it to break the trap
+loop and panics on the death of pid 1 - `why = 2` (CLD_KILLED), `what = 0x9`
+(SIGKILL), exactly as printed on the screen.
+
+**The allocation was for 4680 bytes, by pid 1, at the start of the boot, on a
+machine with tens of megabytes free.** It should not have been able to fail, and
+nothing else had failed - `init` had just read kernel memory through
+`/dev/kmem` successfully. The leading hypothesis is therefore **not** "malloc
+failed" but **a lost store**: `.bss` starts as zero, so a write to that word
+that never lands is indistinguishable from an allocator returning NULL. That
+would also explain why turning every cache off changes nothing, which is the
+fact [21-icache-bug.md](21-icache-bug.md) could not account for.
+
+**Two further divergences, both measured, neither proven to be the cause:**
+
+**A. The kernel sizes the machine differently.** Same kernel binary, same disk:
+`init` reads a machine-derived count of **303** from `/dev/kmem` under IRIS and
+**234** on the board, and the board's own dump header says `physical mem: 48
+megabytes` where the core is built for `MEM_MB = 64`. This happens *before*
+`init` runs.
+
+**B. SCSI synchronous-transfer negotiation fails.** The board's kernel logged
 
 ```
 <5>NOTICE: wd93 SCSI Bus=0 ID=1: SYNC negotiation error, resetting bus
@@ -35,12 +54,10 @@ board's kernel logged
 "negotiation" message at all** (measured: zero matches in both the guest console
 log and the emulator's own log). Our SCSI target does not implement SDTR, and
 [`rtl/scsi/scsi.v`](../rtl/scsi/scsi.v) already says in its own comments that
-this is expected to hurt IRIX specifically. So this *is* a genuine divergence in
-device behaviour, it *is* on the initialisation path, and it *is* visible to the
-guest.
+this is expected to hurt IRIX specifically.
 
-**What is not established is that (2) causes (1).** They are both true; the
-causal link is not proven and this document does not claim it. See
+**Neither A nor B is shown to cause the NULL.** All three are true; the causal
+links are not proven and this document does not claim them. See
 [Not yet proven](#not-yet-proven).
 
 ---
@@ -163,21 +180,66 @@ and its context is unambiguous:
 ```
 
 A two-argument allocator called with `(nelem, size)` whose result is stored
-straight into the table pointer. **The allocation returned NULL.**
+straight into the table pointer.
 
-The element count is itself read from a file a few instructions earlier:
+### The allocation definitely ran, and it asked for 4680 bytes
+
+The whole enclosing function, from its prologue, settles the "did it even run"
+question:
 
 ```
+0x7fc072fc: addiu sp, sp, -0x648
+0x7fc0732c: addiu a0, zero, 8
+0x7fc07330: jal   0x7fc12320       ; sysmp-shaped: kernel address of `var`
+0x7fc07334: addiu a1, zero, 2
+0x7fc0733c: beq   v0, at, 0x7fc073a0   ; failed?  -> jump PAST, to the alloc
+0x7fc07344: lui   a0, 0x7fc0
+0x7fc07348: addiu a0, a0, 0x620    -> "/dev/kmem"
+0x7fc0734c: jal   0x7fc0aa10       ; open("/dev/kmem", 0)
+0x7fc07354: bltz  v0, 0x7fc073a0   ; failed?  -> jump PAST, to the alloc
+0x7fc07364: jal   0x7fc12370       ; lseek(fd, kernel_addr, 0)
+0x7fc0736c: bne   v0, s0, 0x7fc07398   ; failed? -> skip the read
 0x7fc07378: jal   0x7fc123a0       ; read(fd, sp+0x7c, 128)
 0x7fc0737c: addiu a2, zero, 0x80
-0x7fc07384: bne   v0, at, ...      ; only if it read exactly 128 bytes
-0x7fc0738c: lw    t6, 0x9c(sp)     ; count = word at offset 0x20 of that record
+0x7fc07384: bne   v0, at, 0x7fc07398   ; not 128? -> skip
+0x7fc0738c: lw    t6, 0x9c(sp)     ; count = word at +0x20 of the kernel record
 0x7fc07394: sw    t6, 0(at)        ; *(0x7fc40000) = count
+0x7fc07398: jal   0x7fc0f790       ; close(fd)
+0x7fc073a0: <the allocation, above>     <-- every path above lands here
 ```
 
-The count compiled into the binary is **200** (`0xc8` at file offset `0x36000`);
-the value in the crashing process was **234**. So the count had been replaced
-from that 128-byte record before the allocation ran.
+`init` is reading the kernel's process-table size straight out of `/dev/kmem`.
+**Every early exit branches *forward* to `0x7fc073a0`, the allocation itself.**
+There is no path through this function that skips it. So "the allocation never
+ran" is ruled out: it ran, and it returned NULL.
+
+It also tells us the `/dev/kmem` path *succeeded* on the board. The count
+compiled into the binary is **200** (`0xc8` at file offset `0x36000`); the value
+in the crashing process was **234**. 234 can only have come from the kernel
+record, so `sysmp`, `open`, `lseek` and a 128-byte `read` of kernel memory all
+worked moments before the allocation did not.
+
+### And that makes "out of memory" very hard to believe
+
+`calloc(234, 20)` is **4680 bytes**. This is `init`, pid 1, at the very start of
+the boot, on a machine whose own dump header says it has 48 MB. A 4.6 KB
+allocation does not fail on such a machine for want of memory, and nothing else
+had failed - the process had just read kernel memory successfully.
+
+So the interesting possibilities are narrower than "malloc failed":
+
+* **The store was lost.** `0x7fc073b8` writes the pointer into `init`'s `.bss`;
+  `0x7fc07c8c` reads it back later. `.bss` starts as zero, so *a dropped write
+  to that word is indistinguishable from an allocator that returned NULL* - and
+  it produces exactly this crash. This is the hypothesis that fits a core whose
+  memory path is not yet proven, and it is the one to test first.
+* The allocator's own bookkeeping was corrupted, so it took a failure path.
+* `brk`/`sbrk` returned an error for some reason other than exhaustion.
+
+Note what the first of these would mean for
+[21-icache-bug.md](21-icache-bug.md): a lost *store* is not an instruction-cache
+problem and would not be fixed by turning the caches off, which is exactly the
+observed behaviour.
 
 ---
 
@@ -205,6 +267,68 @@ does not.
 **Result 2 - IRIS never reports a SCSI negotiation problem.** Zero matches for
 "negotiation" in either the guest console log or IRIS's own log, across the
 whole boot.
+
+**Result 3 - the same instruction, side by side.** Booting the pristine image
+with a PC breakpoint armed on `0x7fc073b8` - *the* store of the allocator's
+return value - from before the CPU was started, IRIS stops there with:
+
+```
+PC: 0x000000007fc073b8
+v0  ($02): 0x000000007fc447a8     <- the allocation's return value
+a0  ($04): 0x000000007fc447a8
+gp  ($28): 0x000000007fc48b70     <- same gp as the board's crash frame
+CP0 Status: 0x0000ff11 (K:U IE)   <- user mode, as expected
+
+> m 0x7fc40000 2
+0x000000007fc40000: 0x0000012f     <- the element count: 303
+> m 0x7fc447a8 4
+0x000000007fc447a8: 0x00000000     <- freshly zeroed, as calloc promises
+```
+
+**`v0 = 0x7fc447a8` on IRIS where the board had `v0 = 0`.** That is the
+divergence, at one named instruction, in one register. `0x7fc447a8` is eight
+bytes past the end of `init`'s `.bss` (`0x7fc447a0`) - the very start of the
+heap, plus a malloc header - exactly where the first allocation in a fresh
+process belongs.
+
+**A second divergence falls out of the same stop: the element count.** IRIS's
+`init` reads **303**; the board's read **234**. Both come from the same field
+(offset `0x20`) of the same kernel `var` struct, read out of `/dev/kmem`, from
+the same kernel binary on the same disk:
+
+```
+> m 0xffffffff881c5ef8 32          (the kernel address init lseek'd to)
+0xffffffff881c5ef8: 0x000001fd
+0xffffffff881c5f18: 0x0000012f      <- +0x20: 303, what init uses
+0xffffffff881c5f30: 0x00002c00
+```
+
+In IRIX that field is machine-sized, and the board's own dump header says
+`physical mem: 48 megabytes` where this core is built for
+`MEM_MB = 64`. **So the two kernels disagree about the machine before `init`
+ever runs.** That is a first-order initialisation divergence in its own right
+and it is worth chasing independently of the NULL - not least because a kernel
+with a wrong idea of which pages exist is one plausible way for a store to a
+freshly allocated heap page to go nowhere.
+
+**Result 4 - IRIS reaches full multiuser on this image.** The oracle run got
+all the way through `lboot`'s automatic reconfiguration to `inetd`, `sendmail`,
+`timed` and `prngd`, read back out of the running image with `efsread.py`:
+
+```
+Aug 31 21:16:48 5E:IRIS lboot: Automatically reconfiguring the operating system
+Aug 31 21:17:22 5E:IRIS lboot: Reboot to start using the reconfigured kernel
+Aug 31 21:17:26 5B:IRIS sendmail: starting
+Aug 31 21:17:30 5D:IRIS timed[171]: This machine is master
+Aug 31 21:17:41 5D:IRIS prngd[617]: prngd 0.9.29 started up for user root
+Aug 31 21:18:00 3B:IRIS xdm[760]: Server for display :0 terminated unexpectedly: 1
+```
+
+`init` did not fault; the only failure is `xdm`, which is expected because
+`--headless` fits no Newport. Note that **no login prompt appears on the serial
+line**: the PROM's `console` variable in a fresh NVRAM selects the graphics
+head, so `getty`'s prompt goes to a console that headless IRIS does not have.
+The machine is up regardless - `SYSLOG` is how you see it, not the console.
 
 ---
 
@@ -264,30 +388,57 @@ about, and it is why IRIS cannot be the oracle for this particular divergence.
   containing `0x7fc073b8`. `init` walking the table before the function that
   allocates it has run would produce the identical crash. Distinguishing these
   needs the board to be caught in the act.
-* **Determinism.** [21-icache-bug.md](21-icache-bug.md) records two runs of one
-  bitstream failing in completely different places, and the same disk's
-  `/var/adm/SYSLOG` shows boots of this image that reached full multiuser
-  userland, `inetd`, `sendmail` and an X session. So `init died` is **not** the
-  only outcome this core produces, and no conclusion here should be drawn from
-  a single run.
+* **Determinism.** The panic itself reproduces: a fresh run on the board on
+  2026-09-01 at 00:21 produced the identical message, and this time completed
+  the dump (`tests/out/hw/initdiff1.png`):
 
-## The obvious next experiment
+  ```
+  PANIC: init died (why = 2, what = 0x9)
+  Dumping to dev 0x2000011 at block 0, space: 0x27de pages
+  Dumping unmapped memory from page 0x0 to page 0x295..........
+  Dumping kernel pages....
+  Dump complete.
+  [Press reset to restart the machine.]
+  ```
 
-Everything above says where to put the probe, and it is a small one:
+  That is two independent occurrences. What is **not** yet confirmed across runs
+  is the register-level detail - the trap frame quoted above comes from the
+  2026-08-31 dump only. [21-icache-bug.md](21-icache-bug.md) records two runs of
+  one bitstream failing in completely different places, so treat anything finer
+  than "init died" as single-run until a second dump agrees.
+  (The disk's `/var/adm/SYSLOG` *does* contain boots of this image that reached
+  full multiuser userland - `inetd`, `sendmail`, `timed`, `prngd` - but those
+  entries **cannot be attributed to the board**: a headless IRIS run of the
+  same image produces a byte-for-byte similar block, `xdm` failing on
+  `Display :0` included, because headless IRIS has no Newport either. Do not
+  read them as the core succeeding.)
 
-1. On the board, arrange to catch `init` at `0x7fc073b8` - the single store -
-   and record `v0`. That answers "did the allocator return NULL, or did this
-   code never run" in one measurement.
-2. If it returned NULL, walk into the allocator at `0x7fc10b40` and find
-   whether the `brk`/`sbrk` under it failed, or whether the count fed to it
-   (`*(0x7fc40000)`, 234 on the board against 200 compiled in) was already
-   wrong - which would point straight back at the 128-byte record read at
-   `0x7fc07378`, and therefore at the disk path.
-3. Independently of `init`: make the SCSI target answer SDTR the way a real
-   disk does, and check whether `wd93` stops resetting the bus. That is worth
-   doing on its own merits whatever it does to this panic - **but note the two
-   measured traps in `scsi.v`'s comments before touching it**, because both
-   obvious changes there have already cost the PROM its boot once each.
+## The obvious next experiments
+
+Everything above says where to put the probe, and the probes are small.
+
+1. **Decide between "lost store" and "allocator really failed."** They are
+   distinguishable without a debugger on the board: the allocator's return value
+   is in `v0` at `0x7fc073b8` and it is *also* still in `v0` for the two
+   instructions after it. Under IRIS the answer is `0x7fc447a8`, eight bytes
+   past `.bss`; the same address will be handed out on the board if `brk`
+   worked. So read `0x7fc43ef0` **and** the word at `0x7fc447a8-8` out of the
+   board's memory: a heap that exists with a header in it, behind a `.bss` slot
+   that is still zero, is a lost store and nothing else.
+   `tools/misterdeploy/guestmem.py` reads guest memory from the ARM while the
+   machine is up, and after the panic the machine sits at
+   `[Press reset to restart the machine.]` with its memory intact - which is a
+   far better moment to read it than during the boot.
+2. **Chase divergence A on its own.** `physical mem: 48 megabytes` against
+   `MEM_MB = 64` is a discrepancy that needs no `init` to investigate: it is
+   settled by comparing MEMCFG0/MEMCFG1 after the PROM's memory sizing between
+   the board and IRIS. **The whole-machine Verilator model now builds** (see
+   below) and reaches the PROM's memory sizing in seconds, so this one does not
+   even need the board.
+3. **Fix the SCSI target's SDTR answer on its own merits**, whatever it does to
+   this panic - **but read the two measured traps in `scsi.v`'s comments first**,
+   because both obvious changes there have already cost the PROM its boot once
+   each.
 
 ## Tooling this produced
 
