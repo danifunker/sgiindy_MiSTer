@@ -2018,12 +2018,36 @@ reg [7:0] msg_byte;
 // Select-and-Transfer - so the target completes and frees the bus instead of
 // waiting for a CDB that never comes.
 //
-// A REAL DISK WOULD ANSWER MESSAGE REJECT AND GO TO COMMAND, and that was
-// built and then taken out again: the reject reaches the driver, and then
-// nothing sends a command, the target sits in COMMAND phase, and the PROM
-// times out and prints "SYNC negotiation error" - the exact failure the
-// message phases were built to remove. What is missing is on the initiator
-// side, not here. See docs/13-scsi-dma-plan.md.
+// THAT READING IS TRUE OF THE PROM AND FALSE OF IRIX, which sends
+// IDENTIFY+SDTR and then a CDB in one connection, so this is very probably why
+// a drive never finishes attaching under IRIX. Going to COMMAND
+// unconditionally instead costs the PROM its boot; the MESSAGE OUT arm below
+// carries that measurement and what it rules out.
+//
+// A real disk would also answer MESSAGE REJECT to a message it does not
+// implement. That was built here once and made things worse
+// (docs/13-scsi-dma-plan.md); IRIS does not send one either - it swallows the
+// message and reports COMMAND phase - so this target does the same.
+// SGI: how long the target will hold the bus in COMMAND phase without being
+// sent a single CDB byte. See the PHASE_CMD_IN arm: it is how a connection
+// that carried only messages is released, because the initiator on this bus
+// has no way to release it.
+//
+// 2^17 clocks is around 2.6 ms at 50 MHz. It has to be long enough that an
+// initiator which IS sending a command is never cut off - IRIX's driver has
+// the CDB programmed before it starts the connection and delivers it in
+// microseconds - and short enough to be invisible next to the PROM's own
+// timeout, which is what this replaces. Anything in the tens of microseconds
+// to low milliseconds satisfies both by orders of magnitude.
+reg [16:0] cmd_wait;
+wire       cmd_timeout = cmd_wait[16];
+always @(posedge clk) begin
+	// Any byte arriving, or any phase that is not "waiting for a first CDB
+	// byte", puts this back to zero.
+	if(rst || (phase != PHASE_CMD_IN) || stb_adv || (cmd_cnt != 4'd0)) cmd_wait <= 17'd0;
+	else if(!cmd_timeout) cmd_wait <= cmd_wait + 17'd1;
+end
+
 reg msg_extra;
 always @(posedge clk) begin
 	if(rst || (phase == PHASE_IDLE)) msg_extra <= 1'b0;
@@ -2817,12 +2841,53 @@ always @(posedge clk) begin
 `ifdef MSG_DEBUG
 			$display("[TGT%0d] MSG_OUT atn=%b req=%b ack=%b stb_adv=%b din=%02x extra=%b", ID, atn, req, ack, stb_adv, din, msg_extra);
 `endif
-			if(stb_adv && !atn) phase <= msg_extra ? PHASE_MESSAGE_OUT : PHASE_CMD_IN;
+			// GOING TO COMMAND UNCONDITIONALLY HERE BREAKS THE PROM, AND THAT
+			// IS NOW MEASURED TWICE. The reasoning for it is sound and still
+			// worth reading: an ordinary SCSI-2 initiator sends IDENTIFY, then
+			// SDTR, then the CDB in ONE connection, so ending the connection
+			// after a multi-byte MESSAGE OUT throws that command away - and
+			// IRIS does exactly the permissive thing, swallowing IDENTIFY
+			// (+SDTR) and reporting COMMAND phase (src/wd33c93a.rs,
+			// `let _msg = self.receive_data(..)` then REQ_CMD_PHASE).
+			//
+			// It still fails here, because IRIS has no bus-level target: its
+			// chip model IS the target, so it never has to answer the question
+			// this line asks. The IP24 PROM negotiates in an exchange of its
+			// own and sends NO CDB behind it, so a target that goes to COMMAND
+			// sits waiting for one and the PROM prints `SYNC negotiation
+			// error`. docs/13-scsi-dma-plan.md recorded that the first time,
+			// with MESSAGE REJECT; 2026-08-31 reproduced it without the
+			// reject, and reporting Command Phase 0x20 to the initiator (which
+			// is kept, in wd33c93.sv - it is right regardless) did not save it
+			// either.
+			//
+			// SO THE DISCRIMINATOR IS NOT THE MESSAGE LENGTH. Both initiators
+			// send IDENTIFY+SDTR; only one follows with a CDB. The message
+			// cannot tell them apart - but WAITING CAN, and that is what a
+			// real disk does anyway: it goes to COMMAND and waits. IRIX's CDB
+			// is already on its way and arrives within microseconds; the PROM
+			// sends nothing, and `cmd_timeout` below frees the bus for it.
+			//
+			// The initiator cannot end a connection on this bus - `assign bsy
+			// = (phase != PHASE_IDLE)` is driven by the target alone, and
+			// wd33c93.sv only reads it - so without that timeout a PROM with
+			// no CDB to send leaves the target holding BSY forever.
+			if(stb_adv && !atn) phase <= PHASE_CMD_IN;
 		end
 
 		else if(phase == PHASE_CMD_IN) begin
+			// NOBODY IS SENDING A COMMAND: LET THE BUS GO. Reached only when
+			// the connection opened with a MESSAGE OUT and no CDB followed,
+			// which is the IP24 PROM finishing its synchronous-transfer
+			// negotiation. A real initiator ends such a connection itself;
+			// this bus gives it no way to (see the MESSAGE OUT arm above), so
+			// the target has to notice. The counter is reset by every byte, so
+			// this can only fire before the first one - once a CDB has started
+			// arriving the timeout is out of the picture and a slow initiator
+			// is never cut off mid-command.
+			if(cmd_timeout) phase <= PHASE_IDLE;
 			// check if a full command is in the buffer
-			if(cmd_cpl) begin
+			else if(cmd_cpl) begin
 				$display("New command on target %d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", ID, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9]);
 				// is this a supported and valid command?
 				// (CDROM: media-dependent commands CHECK with the no-disc

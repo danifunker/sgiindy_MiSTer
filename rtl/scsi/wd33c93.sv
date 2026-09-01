@@ -144,6 +144,9 @@ module wd33c93 #(
     // Only the ones this stage can produce. The full list, with the IRIX
     // wd93.h names beside each, is in IRIS's src/wd33c93a.rs.
     localparam logic [7:0] S_RESET          = 8'h00;
+    // Reset with advanced features enabled - see the Reset command below for
+    // why answering the wrong one of these two misconfigures the driver.
+    localparam logic [7:0] S_RESET_EAF      = 8'h01;
     localparam logic [7:0] S_SELECT_OK      = 8'h11;
     localparam logic [7:0] S_XFER_DATA_OUT  = 8'h18;  // target wants DATA OUT
     localparam logic [7:0] S_XFER_DATA_IN   = 8'h19;  // target is sending DATA IN
@@ -172,6 +175,8 @@ module wd33c93 #(
     // Values from IRIS's src/wd33c93a.rs, which matches IRIX's wd93.h.
     localparam logic [7:0] CP_DISCONNECTED = 8'h00;
     localparam logic [7:0] CP_SELECTED     = 8'h10;
+    // IDENTIFY (and anything after it) has gone out; COMMAND is next.
+    localparam logic [7:0] CP_IDENTIFY_SENT = 8'h20;
     localparam logic [7:0] CP_CMD_START    = 8'h30;   // +n as CDB bytes go out
     // A clean disconnect sets BOTH of these. The PROM's SCSI interrupt handler
     // at 0xBFC1E304 reads COMMAND_PHASE, and on status 0x85 prints "illegal
@@ -339,10 +344,21 @@ module wd33c93 #(
 
     integer i;
 
+    // Latched from Own ID's EAF bit by the Reset command, the way the part
+    // does it. Nothing reads it yet - the transfer paths here already behave
+    // as a 93A - but the driver's view of the chip now depends on this bit
+    // being remembered rather than assumed, so it is kept where the rest of
+    // the advanced-feature behaviour will hang off it.
+    logic advanced_mode;
+
     always_ff @(posedge clk) begin
         if (reset) begin
             for (i = 0; i < 32; i = i + 1) reg_file[i] <= 8'h00;
+            // A POWER-ON reset clears Own ID too; the ID below is only a sane
+            // value to answer with before the driver programs one, and it
+            // leaves EAF clear, which is the correct state until asked for.
             reg_file[R_OWN_ID] <= {5'b0, HOST_ID};
+            advanced_mode      <= 1'b0;
             ar          <= 5'h00;
             state       <= ST_IDLE;
             dbr         <= 1'b0;
@@ -372,9 +388,13 @@ module wd33c93 #(
             // Ahead of the register access below, so a driver that resets the
             // channel and issues a command in the same breath gets the reset.
             if (chip_reset) begin
+                // A hardware reset, unlike the Reset COMMAND below, clears Own
+                // ID as well - so advanced features go off with it and the
+                // status is the plain 0x00 either way.
                 for (i = 0; i < 32; i = i + 1) reg_file[i] <= 8'h00;
                 reg_file[R_OWN_ID] <= {5'b0, HOST_ID};
                 reg_file[R_SCSI_STATUS] <= S_RESET;
+                advanced_mode <= 1'b0;
                 ar          <= 5'h00;
                 state       <= ST_IDLE;
                 dbr         <= 1'b0;
@@ -441,7 +461,37 @@ module wd33c93 #(
                                     lci <= 1'b0;
                                     case (din)
                                         C_RESET: begin
-                                            reg_file[R_SCSI_STATUS] <= S_RESET;
+                                            // A SOFTWARE RESET IS NOT A POWER-ON
+                                            // RESET, AND THE DIFFERENCE IS HOW THE
+                                            // DRIVER LEARNS WHICH PART IT HAS.
+                                            //
+                                            // The Reset command clears registers
+                                            // 0x01..0x16 and the Command register,
+                                            // but PRESERVES Own ID (0x00) - and then
+                                            // reports back through SCSI Status which
+                                            // of the two reset flavours happened:
+                                            // 0x01 if Own ID's EAF bit (0x08, Enable
+                                            // Advanced Features) was set, 0x00 if it
+                                            // was not. That is the handshake by
+                                            // which a driver turns the 93A's
+                                            // advanced features on and confirms they
+                                            // took: write Own ID with EAF, Reset,
+                                            // read the status back.
+                                            //
+                                            // This model used to answer 0x00
+                                            // unconditionally and clear nothing,
+                                            // which tells IRIX its request did not
+                                            // take however it asks. The rule is
+                                            // IRIS's (src/wd33c93a.rs, BSD-3-Clause,
+                                            // (c) 2026 Dominik Behr), whose comment
+                                            // states it outright and which boots
+                                            // this same IRIX.
+                                            for (i = 1; i <= 8'h16; i = i + 1)
+                                                reg_file[i] <= 8'h00;
+                                            reg_file[R_COMMAND]     <= 8'h00;
+                                            reg_file[R_SCSI_STATUS] <=
+                                                reg_file[R_OWN_ID][3] ? S_RESET_EAF : S_RESET;
+                                            advanced_mode <= reg_file[R_OWN_ID][3];
                                             int_pending <= 1'b1;
                                             state       <= ST_IDLE;
                                             scsi_sel    <= 1'b0;
@@ -646,8 +696,24 @@ module wd33c93 #(
                         // target knows how long the message was without
                         // parsing it. ACK goes up in the next state, so
                         // dropping ATN here is in time.
-                        if ((phase == PH_MSG_OUT) && (xfer_count <= 24'd1))
+                        if ((phase == PH_MSG_OUT) && (xfer_count <= 24'd1)) begin
                             scsi_atn <= 1'b0;
+                            // AND RECORD THAT THE MESSAGE WENT OUT. The
+                            // Command Phase register is how a driver knows
+                            // where in the connection the chip is, and 0x20 is
+                            // "IDENTIFY sent, COMMAND phase next" - the value
+                            // IRIS reports here (command_phase::IDENTIFY_SENT
+                            // beside REQ_CMD_PHASE, src/wd33c93a.rs). This
+                            // model never produced 0x20 at all: it went from
+                            // 0x10 SELECTED straight to 0x30 COMMAND_START as
+                            // the CDB began, so the one moment the driver asks
+                            // about after negotiating had no answer.
+                            // docs/13-scsi-dma-plan.md records that the
+                            // missing piece after MESSAGE OUT was on the
+                            // initiator side and unidentified. This is a
+                            // candidate for it.
+                            reg_file[R_CMD_PHASE] <= CP_IDENTIFY_SENT;
+                        end
                         state <= ST_XFER_ACK;
                     end
                 end
@@ -692,6 +758,11 @@ module wd33c93 #(
                         PH_DATA_IN:  reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;
                         PH_COMMAND:  reg_file[R_SCSI_STATUS] <= S_XFER_CMD_OUT;
                         PH_STATUS:   reg_file[R_SCSI_STATUS] <= S_XFER_STATUS_IN;
+                        // A completed MESSAGE OUT normally does not land here:
+                        // the target moves to COMMAND as the last ACK falls,
+                        // so `phase` is already PH_COMMAND by now and the arm
+                        // above is the one taken. Command Phase was set to
+                        // 0x20 back where ATN was dropped.
                         PH_MSG_OUT:  reg_file[R_SCSI_STATUS] <= S_XFER_MSG_OUT;
                         PH_MSG_IN:   reg_file[R_SCSI_STATUS] <= S_XFER_MSG_IN;
                         default:     reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;

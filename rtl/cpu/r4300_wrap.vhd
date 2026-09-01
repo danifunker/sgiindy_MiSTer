@@ -198,6 +198,47 @@ begin
       INSTRCACHEON          => INSTRCACHEON,
       DATACACHEON           => DATACACHEON,
       DATACACHESLOW         => "0000",
+      -- THE PRIMARY CACHES ON AN R4400 ARE COHERENT WITH EACH OTHER, AND THIS
+      -- CORE HAS NO MECHANISM FOR THAT AT ALL. cpu.vhd wires the instruction
+      -- cache and the data cache to the same bus arbiter and to nothing else:
+      -- no snoop, no cross-invalidate, no writeback-before-fill interlock.
+      --
+      -- On the real part the two are kept coherent through the secondary
+      -- cache, which is inclusive: a line filled into L1-D invalidates any
+      -- L1-I copy, and a line filled into L1-I first evicts and writes back a
+      -- dirty L1-D copy. Software is entitled to rely on it, and it does -
+      -- IRIX's userspace loader patches relocations into a page through
+      -- ordinary stores and then jumps into it WITHOUT any cache flush. With
+      -- no coherency those patched words sit dirty in the data cache while the
+      -- instruction cache fills the stale, unrelocated copy from memory, and
+      -- executes it. That is the `rld` failure in docs/21-icache-bug.md: a
+      -- store through a pointer that was relocated in one cache and read back
+      -- unrelocated from the other, `TLBS badvaddr=0000000c`.
+      --
+      -- It also explains why --no-icache "fixed" it and made the bug look like
+      -- an instruction-cache fault. Without the I-cache the incoherency is
+      -- still there, but it is TRANSIENT: the fetch re-reads memory every time
+      -- and comes right as soon as the dirty line is written back. With the
+      -- I-cache on, one stale word is latched and stays wrong forever, because
+      -- nothing ever invalidates it.
+      --
+      -- Write-through LOOKS like half of that contract for free - a dirty
+      -- data-cache line would never exist, so an instruction-cache fill would
+      -- always read current memory - and cpu_datacache.vhd has the input for
+      -- it. IT DOES NOT WORK. Setting this to '1' builds and fits cleanly and
+      -- then WEDGES THE MACHINE partway through the IRIX installer's copy:
+      -- alive.py reports zero bytes moving at both the PROM's data area and
+      -- the bottom of RAM, and the disk stops being written.
+      --
+      -- The reason is one line, cpu_datacache.vhd's
+      --    write_done <= wb_done when (force_wb = '1') else ...
+      -- Every store then waits on a writeback completion, and some path here
+      -- never raises one, so the pipeline stalls forever. The mode is
+      -- unfinished upstream; it is not a switch this core can simply turn on.
+      --
+      -- So the coherency fix, when it is made, has to be the real thing: a
+      -- tag-matched snoop, in both directions. Measured 2026-08-31; do not
+      -- spend another build finding this out.
       DATACACHEFORCEWEB     => '0',
       -- TLB-mapped data accesses go through the data cache too, honouring the
       -- entry's coherency field. Upstream leaves this off, which is safe on a

@@ -1,9 +1,54 @@
-# OPEN BUG: the instruction cache hands out a wrong word, and it kills `init`
+# OPEN BUG: `init` dies, and on HARDWARE it is not the instruction cache
 
-**Status: open. Isolated to one component, reproducible in five minutes,
-with a working oracle that disagrees.** Found 2026-08-31, after the two CP0
-bugs in [09-cpu-validation.md](09-cpu-validation.md) were fixed and IRIX 5.3
-started running userland for the first time.
+**Status: open.** Found 2026-08-31 in simulation, where the bisection below
+points squarely at the instruction cache. **Reproduced on a DE10-Nano the same
+evening, where the workaround that saves it in Verilator does NOT save it.**
+Read the hardware box first; the rest of this file is the simulation case and
+is still accurate about the simulator.
+
+## ON HARDWARE, 2026-08-31: same panic, and turning the caches off changes nothing
+
+IRIX 5.3 now boots on the board from an installed disk
+(`games/SGIIndy/SGIIndy53.img`, an installed root with `sash` in its volume
+header), fscks, mounts, starts `init` - and panics with a message that is
+**byte for byte** the simulator's:
+
+```
+PANIC: init died (why = 2, what = 0x9)
+Dumping to dev 0x2000011 at block 0, space: 0x27de pages
+```
+
+`tests/hardware/irix53-init-died-20260831.png`. That is the first time hardware
+and Verilator have failed in the same place, and it makes the board a usable
+test rig for this bug - roughly ten minutes a run.
+
+**And then the bisection does not transfer.** With `cache=off` in the OSD -
+verified applied (`SGIINDY.CFG` byte 1 = `0x08`) and verified effective (the
+same boot is visibly slower, still mid-dump where the cached run had finished) -
+**`init` dies identically.** In simulation `--no-icache` survives this exact
+panic and reaches `ec0: no carrier`.
+
+With every cache in the machine bypassed there is no cache incoherency left to
+blame, so **whatever kills `init` on the board is something the simulator does
+not model**: DDR3 timing, `ram_arb`, or the DMA path are where to look. The
+I/D coherency gap described below is real and worth fixing on its own merits -
+it is a genuine architectural defect - but it is not sufficient to explain the
+hardware failure, and a fix for it should not be expected to clear this panic.
+
+**Method note, learned the hard way today:** this failure is not
+deterministic. Two runs of one bitstream failed at completely different points
+(`Creating miniroot devices` in one, deep in package installation in the
+other), and a conclusion drawn from a single run was wrong. `scripts/bootrate.sh`
+exists for exactly this. Run it more than once before believing anything.
+
+---
+
+## The simulation case (accurate for Verilator)
+
+**Isolated to one component, reproducible in five minutes, with a working
+oracle that disagrees.** Found 2026-08-31, after the two CP0 bugs in
+[09-cpu-validation.md](09-cpu-validation.md) were fixed and IRIX 5.3 started
+running userland for the first time.
 
 This file is the whole case: the symptom, the bisection, everything already
 ruled out with the measurement that ruled it out, and the leads that are left.
