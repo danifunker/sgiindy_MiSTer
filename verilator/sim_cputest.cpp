@@ -126,6 +126,7 @@ struct Options {
     // a PROM text address a PC watch, and the cheapest way to answer "is this
     // routine reached at all" without a trace of four million transactions.
     std::vector<uint32_t> watch;
+    uint64_t watch_count = 20;
     std::string fbdump;
     std::string viddump;
     bool        fbindex = false;
@@ -149,6 +150,13 @@ struct Options {
     std::string pcuser;
     bool        exc = false;
     uint64_t    exc_count = 200;
+    // Cycle the exception log starts at. --trace-from-pc parks it out of
+    // reach and the arm brings it back, so `--trace-from-pc P --exc` means
+    // "every exception from the moment P is decoded" instead of "the first
+    // 200 exceptions of the boot", which on a running kernel is timer
+    // interrupts and nothing else. An explicit --pc-from after
+    // --trace-from-pc still wins; one before it does not.
+    uint64_t    exc_from = 0;
     // --trace-from-pc HEX: arm the bus trace the first time the CPU decodes
     // this PC. A cycle number cannot be known in advance for anything that
     // happens after a kernel has booted, and this is how a line fill for a
@@ -263,7 +271,10 @@ static void usage()
         "  --pc-user FILE    write every user-mode PC to FILE, one per line and\n"
         "                    nothing else, for diffing two runs against each other\n"
         "  --exc             one line per exception the CPU accepts: ExcCode,\n"
-        "                    BadVAddr and EPC (first 200; --exc-count N)\n"
+        "                    BadVAddr and EPC (first 200; --exc-count N).\n"
+        "                    With --trace-from-pc it starts at the arm, not at\n"
+        "                    cycle 0\n"
+        "  --watch-count N   hits per --watch address to print (default 20)\n"
         "  --pc              print one line per decoded instruction. The last\n"
         "                    64 PCs are ALWAYS printed on exit, which is what\n"
         "                    names a wedge that has stopped touching the bus\n"
@@ -333,9 +344,12 @@ int main(int argc, char **argv)
         else if (a == "--trace-from-pc") { opt.trace = true; opt.trace_from_pc_set = true;
             // Park the start cycle out of reach until the PC is seen.
             opt.trace_from = ~0ull;
+            opt.exc_from   = ~0ull;
+            opt.pc_from    = ~0ull;
             opt.trace_from_pc = (uint32_t)strtoul(next("--trace-from-pc"), nullptr, 16); }
         else if (a == "--pc-user")    opt.pcuser = next("--pc-user");
         else if (a == "--exc")        opt.exc = true;
+        else if (a == "--watch-count") opt.watch_count = strtoull(next("--watch-count"), nullptr, 0);
         else if (a == "--exc-count")  { opt.exc = true;
                                         opt.exc_count = strtoull(next("--exc-count"), nullptr, 0); }
         else if (a == "--pc")         opt.pctrace = true;
@@ -506,6 +520,16 @@ int main(int argc, char **argv)
     int      pcring_at = 0;
     uint64_t pcs = 0, pcs_traced = 0;
     uint64_t excs = 0;
+    // See the exception log below: the line is emitted one clock after the
+    // acceptance, because that is when EPC is valid.
+    static const char *const kExcName[32] = {
+        "Int","TLBMod","TLBL","TLBS","AdEL","AdES","IBE","DBE",
+        "Sys","Bp","RI","CpU","Ov","Tr","?","FPE",
+        "?","?","?","?","?","?","?","?",
+        "?","?","?","?","?","?","?","?"};
+    bool     exc_pending = false;
+    uint64_t exc_cycle   = 0;
+    uint32_t exc_code    = 0, exc_bad = 0;
     uint64_t retired = 0;
 
     // The same, for USER-mode instructions only - anything the CPU decoded
@@ -645,25 +669,32 @@ int main(int argc, char **argv)
             }
 
             if (opt.trace && cycle >= opt.trace_from && traced < opt.trace_count) {
-                printf("[%10llu] %s %08x %-14s data %016llx be %02x\n",
+                // HOLE is the one that matters to a lost store: the cycle was
+                // acknowledged, the address and the data on it are the CPU's,
+                // and main memory never saw it, because MEMCFG has no bank
+                // covering that address. It is indistinguishable from a good
+                // write on the three signals above.
+                printf("[%10llu] %s %08x %-14s data %016llx be %02x %s\n",
                        static_cast<unsigned long long>(cycle),
                        top->bus_we ? "WR" : "RD", a, reg_name(a),
                        static_cast<unsigned long long>(
                            top->bus_we ? top->bus_wdata : top->bus_rdata),
-                       top->bus_be);
+                       top->bus_be,
+                       top->bus_hole ? "HOLE" : top->bus_mem ? "ram" : "dev");
                 traced++;
             }
             for (uint32_t w : opt.watch) {
                 if ((a & ~7u) == w) {
                     watch_hits[w]++;
-                    if (watch_hits[w] <= 20)
+                    if (watch_hits[w] <= opt.watch_count)
                         printf("[%10llu] WATCH %08x %s %08x data %016llx be %02x"
-                               "  hit %llu\n",
+                               " %-4s hit %llu\n",
                                static_cast<unsigned long long>(cycle), w,
                                top->bus_we ? "WR" : "RD", a,
                                static_cast<unsigned long long>(
                                    top->bus_we ? top->bus_wdata : top->bus_rdata),
                                top->bus_be,
+                               top->bus_hole ? "HOLE" : top->bus_mem ? "ram" : "dev",
                                static_cast<unsigned long long>(watch_hits[w]));
                 }
             }
@@ -699,18 +730,28 @@ int main(int argc, char **argv)
         // One line per exception the CPU accepts, under --exc. ExcCode is what
         // separates a TLB miss from an address error from a reserved
         // instruction, and from the console all three are "generated trap".
-        if (opt.exc && top->dbg_exc) {
-            static const char *const kExc[32] = {
-                "Int","TLBMod","TLBL","TLBS","AdEL","AdES","IBE","DBE",
-                "Sys","Bp","RI","CpU","Ov","Tr","?","FPE",
-                "?","?","?","?","?","?","?","?",
-                "?","?","?","?","?","?","?","?"};
+        // ONE CYCLE LATE, DELIBERATELY. cpu_cop0.vhd raises dbg_exc on the
+        // clock it ACCEPTS the exception, and writes EPC on the clock after
+        // that (`if (exception = '1') then COP0_14_EPC <= nextEPC_1`). Printed
+        // on the pulse itself, `epc=` is therefore the PREVIOUS exception's -
+        // which reads as a plausible address and is wrong, the worst kind of
+        // instrument. Cause and BadVAddr settle with the pulse, so they are
+        // captured there and the line is emitted one clock later with an EPC
+        // that belongs to it.
+        if (exc_pending) {
+            exc_pending = false;
             excs++;
             if (excs <= opt.exc_count)
                 printf("[%10llu] EXC %-6s code=%02x badvaddr=%08x epc=%08x\n",
-                       static_cast<unsigned long long>(cycle),
-                       kExc[top->dbg_exc_code & 31], top->dbg_exc_code,
-                       top->dbg_exc_bad, top->dbg_exc_epc);
+                       static_cast<unsigned long long>(exc_cycle),
+                       kExcName[exc_code & 31], exc_code, exc_bad,
+                       top->dbg_exc_epc);
+        }
+        if (opt.exc && top->dbg_exc && cycle >= opt.exc_from) {
+            exc_pending = true;
+            exc_cycle   = cycle;
+            exc_code    = top->dbg_exc_code;
+            exc_bad     = top->dbg_exc_bad;
         }
 
         // The PC of whatever entered decode this clock. Recorded on every
@@ -723,6 +764,8 @@ int main(int argc, char **argv)
             if (opt.trace_from_pc_set && top->dbg_pc == opt.trace_from_pc &&
                 opt.trace_from > cycle) {
                 opt.trace_from = cycle;
+                if (opt.exc_from == ~0ull) opt.exc_from = cycle;
+                if (opt.pc_from  == ~0ull) opt.pc_from  = cycle;
                 fprintf(stderr, "[%10llu] trace armed at PC %08x\n",
                         static_cast<unsigned long long>(cycle), top->dbg_pc);
             }

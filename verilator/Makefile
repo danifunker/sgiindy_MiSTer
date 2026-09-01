@@ -157,6 +157,14 @@ cputest: $(RTL)/cpu/generated/r4300_wrap.v
 WM_W = $(CPUTEST_W) -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK
 WM_OPT = -fno-gate -O0 --unroll-count 2048 --unroll-stmts 20000 	 -finline -flife -flife-post -fconst -fsubst -fsubst-const 	 -fassemble -fcombine -fexpand -fcase -fdedup -freorder -fsplit 	 -fmerge-cond -ftable
 
+# A SECOND BUILD DIRECTORY, and it earns its keep. Overwriting a running
+# executable fails with ETXTBSY, so an instrumentation change cannot be
+# compiled while a 28-minute boot is still running out of ./obj_wm - and
+# serialising the two costs half an hour every time. Identical in every other
+# respect; ./obj_wm2/Vsim_top takes the same switches.
+wholemachine2: $(RTL)/cpu/generated/r4300_wrap.v
+	$V -cc --exe --build -j 0 --Mdir ./obj_wm2 --top-module sim_top 	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
+
 wholemachine: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_wm --top-module sim_top 	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/.." $(WM_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vsim_top $(CPUTEST_V) $(CURDIR)/sim_cputest.cpp $(CURDIR)/sim_devices.cpp
 

@@ -186,6 +186,14 @@ module sgi_indy #(
     output logic [63:0] bus_rdata_o,
     output logic        bus_ack_o,
     output logic        bus_unclaimed,
+    // WHO ANSWERED. A write main memory took and a write that was dropped
+    // because MEMCFG has no bank covering it are the same three signals on
+    // the tap above - same address, same data, same ack - and only the second
+    // one is a lost store. `bus_mem_o` says the RAM model took the cycle;
+    // `bus_hole_o` says sgi_memmap declined it and it was retired here with
+    // zeros. Observability only; nothing on hardware reads either.
+    output logic        bus_mem_o,
+    output logic        bus_hole_o,
     output logic  [5:0] cpu_error,
     output logic  [4:0] irq_lines_o,   // Cause.IP[6:2], as INT2 drives them
     output logic [39:0] int2_state_o,  // see sgi_ioc.sv
@@ -888,5 +896,7 @@ module sgi_indy #(
     assign bus_be_o    = bus_be;
     assign bus_rdata_o = bus_rdata;
     assign bus_ack_o   = bus_ack;
+    assign bus_mem_o   = cpu_ram_ack;
+    assign bus_hole_o  = mem_hole_ack;
 
 endmodule
