@@ -1,7 +1,7 @@
 # Where IRIX's initialisation diverges: `init`'s table pointer is NULL
 
 **Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status:
-the divergence is named to a single instruction and a single register, and both
+the divergence is named to a single instruction and a single register, both
 sides were measured at that instruction. What makes the register differ is not
 yet proven.**
 
@@ -561,18 +561,36 @@ Verilator model now building, that is a run away rather than a bitstream away.
   [Press reset to restart the machine.]
   ```
 
-  That is two independent occurrences of the panic (2026-08-31 and
-  2026-09-01 00:21). **But the very next run of the same bitstream on the same
-  disk did something else entirely** - SCSI READ(10) timeouts in `fsck`,
-  `tests/hardware/irix53-scsi-timeouts-20260901.png` - so `docs/22`'s "dies in the same place every
-  time" does not hold, and [21-icache-bug.md](21-icache-bug.md)'s warning
-  stands. The register-level trap frame quoted above comes from the 2026-08-31
-  dump only; treat anything finer than "init died" as single-run until a second
-  dump agrees.
+  **And a second dump does agree - byte for byte.** The board's swap held the
+  new dump, so booting that image in IRIS made `savecore` extract it, and the
+  two `analysis.0` reports are 4122 bytes each and differ in **exactly one
+  line**: when `savecore` ran.
 
-  What *is* confirmed across runs is the `var` struct: 234 in the 2026-08-31
-  crash dump and 234 again in a live read on 2026-09-01, and the SYNC
-  negotiation NOTICE, which appears in the 2026-08-31 putbuf and on screen in
+  ```
+  $ diff analysis-20260831.txt analysis-20260901.txt
+  14c14
+  <     Mon Aug 31 20:48:47 2026
+  ---
+  >     Mon Aug 31 21:54:47 2026
+  ```
+
+  The crash times themselves differ - `18:45:34` against `18:45:33` - which is
+  what proves they are two events and not one report read twice (the guest's
+  clock is reset to filesystem time on every boot, so both land in the same
+  second-ish). Every register, `EPC=7fc07ca4`, `CAUSE=8`, `BADVADDR=0` and the
+  whole stack trace are identical.
+
+  **So when this core produces `init died`, it produces it at the same
+  instruction with the same register state, on two different days.** That is
+  deterministic. What is *not* deterministic is which failure the machine picks:
+  the run in between those two was SCSI READ(10) timeouts in `fsck`
+  (`tests/hardware/irix53-scsi-timeouts-20260901.png`), so `docs/22`'s "dies in
+  the same place every time" is still wrong and
+  [21-icache-bug.md](21-icache-bug.md)'s warning still stands.
+
+  Also confirmed across runs: the `var` struct count, 234 in the 2026-08-31
+  crash dump and 234 again in a live read of a different boot on 2026-09-01;
+  and the SYNC negotiation NOTICE, in the 2026-08-31 putbuf and on screen in
   the 2026-09-01 run.
   (The disk's `/var/adm/SYSLOG` *does* contain boots of this image that reached
   full multiuser userland - `inetd`, `sendmail`, `timed`, `prngd` - but those
