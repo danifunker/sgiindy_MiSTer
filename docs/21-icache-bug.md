@@ -1,5 +1,17 @@
 # OPEN BUG: `init` dies, and on HARDWARE it is not the instruction cache
 
+> **2026-09-01: [23-init-divergence.md](23-init-divergence.md) supersedes the
+> diagnosis in this file, though not its measurements.** `init` dies of a NULL
+> pointer - a table pointer in its own `.bss` reads back as zero, and it walks
+> off it - at one named instruction, `0x7fc07ca4`, with the same registers on
+> two different days. IRIS stopped at the matching store has a valid pointer
+> there. That also explains the thing this file could not: **a lost store is
+> not a cache-coherency problem, so turning the caches off would not fix it.**
+> Two further divergences are measured there: the board's kernel sizes the
+> machine 4 MB smaller than IRIS's, and its SCSI target fails IRIX's
+> synchronous-transfer negotiation. And the failure is *not* the same every
+> time - the run after the panic was SCSI READ(10) timeouts in `fsck` instead.
+
 **Status: open.** Found 2026-08-31 in simulation, where the bisection below
 points squarely at the instruction cache. **Reproduced on a DE10-Nano the same
 evening, where the workaround that saves it in Verilator does NOT save it.**
