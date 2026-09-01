@@ -62,15 +62,37 @@ dks0d1s0: SCSI driver error: Command timed out
 fsck: I/O error       CAN NOT READ: BLK 1006
 ```
 
+**It is NOT about accumulated corruption, and that was worth finding out.**
+The first reading here was that the board's image had rotted over days of
+crashed runs. It has not: a **pristine image plus exactly one unclean reset**
+wedges just the same, in the same place, at the **same block - `BLK 1006`**.
+So the trigger is a specific read pattern `fsck` Phase 1 issues, and it is
+reproducible on demand:
+
+> restore the pristine image -> boot (clean, no fsck, reaches multiuser) ->
+> reset the board -> boot -> fsck runs -> wedge.
+
+That image is kept on the board as
+`/media/fat/games/SGIIndy/SGIIndy53-wedged-fsck.img`. It is a far better
+reproducer than the old `SGIIndy53-dirty-20260901.img` beside it, because it is
+one reset away from a known-good filesystem rather than an unknown pile of
+damage.
+
 **The one hard measurement, and it is the useful one:** while wedged, the
 MiSTer process's I/O counters are frozen solid across 5 s - `rchar`, `wchar`,
 `read_bytes`, `write_bytes` all identical - and its file position is pinned at
 byte 2,858,496 (LBA 5583).
 
+`scripts/diskio.sh` is that check, packaged:
+
 ```sh
-# on the MiSTer, PID from: ps w | grep MiSTer
-head -1 /proc/<pid>/fdinfo/5 ; grep -E '^(rchar|read_bytes|write_bytes)' /proc/<pid>/io
+bash scripts/diskio.sh --seconds 10
+#   VERDICT: FROZEN over 10s - the core has stopped asking the HPS.
 ```
+
+**Read `read_bytes`/`write_bytes`, not `rchar`.** `rchar` climbs at a flat
+~400 KB/min on an idle board - that is MiSTer polling its input devices, not
+disk - and reading it as progress will tell you a wedged machine is healthy.
 
 So **the FPGA stops asking the HPS for blocks entirely**. `sd_rd` is never
 asserted again. The ARM side is innocent; the wedge is inside the SCSI RTL.
@@ -158,11 +180,43 @@ The PROM's Command Monitor has a **`single`** command - see
 [03-boot-prom.md](03-boot-prom.md), which lists the 27-command dispatch table.
 From the boot menu choose **5** (Enter Command Monitor), then `single`.
 
-There is no person at the keyboard, and there does not need to be:
-`tools/misterdeploy/ws_send.py` drives the guest over the MiSTer Remote ws API,
-with `text:<string>` for whole strings and `kbdRaw:<n>` for raw uinput codes
-(`space`=57, `enter`=28, `1`..`5`=2..6). In the simulator, `--type-on` is
-repeatable and does the same job.
+In the **simulator** this is easy and is the recommended route: `--type-on` is
+repeatable, and the PROM stops at `Option?` on its own there, so
+
+```sh
+--type-on "Option?" "5\r" --type-on ">>" "single\r"
+```
+
+**On hardware it did NOT work in this session, and the reason matters.** The
+board **auto-boots**: its NVRAM carries a saved boot configuration, so the PROM
+never stops at the System Maintenance menu the way the simulator does. Three
+attempts to interrupt it failed:
+
+* tapping **space** across the window (`ws_send.py kbdRaw:57`) - the machine
+  booted straight through;
+* tapping **Esc** (`kbdRaw:1`, which is the key the SGI prompt actually asks
+  for) over t+8..t+30 s - likewise;
+* tapping Esc from **before** `launch_unstable_core.py` was even called
+  (it only returns once the core is already up, so the window has passed) -
+  likewise.
+
+So either the keystrokes are not reaching the guest at all, or there is no
+prompt to interrupt because autoboot is configured. **That is untested and is
+the first thing to establish**, e.g. by typing `hinv` at a `>>` prompt reached
+some other way, per [08-resume-prompt.md](08-resume-prompt.md).
+
+The **serial console** route was tried too and produced **0 bytes**:
+`scripts/setopt.sh gfx=none` (which is what moves the console off the frame
+buffer and onto the SCC), relaunch, then `scripts/console.sh --baud 9600`.
+Nothing came out at 9600. 19200 was not tried, and the PROM does switch rate
+partway through POST, so that is the obvious next thing rather than a
+conclusion.
+
+The clean fix is probably **NVRAM**: `setenv OSLoadOptions single` persists
+(see below), so it only has to be typed once - but typing it once still needs
+the Command Monitor, which is the same problem. Blanking the NVRAM so the PROM
+falls back to the menu (the state the simulator is in) would break that
+circle.
 
 `setenv` persists in NVRAM ([17-nvram-persistence.md](17-nvram-persistence.md)),
 so `OSLoadOptions` can be set once instead of typed every boot.
