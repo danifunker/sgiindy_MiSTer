@@ -67,7 +67,7 @@ links are not proven and this document does not claim them. See
 [Not yet proven](#not-yet-proven).
 
 **But B is worse than "a NOTICE at boot", and the second board run tonight
-showed it.** `tests/out/hw/initdiff2.png`, 2026-09-01 00:38, same bitstream,
+showed it.** `tests/hardware/irix53-scsi-timeouts-20260901.png`, 2026-09-01 00:38, same bitstream,
 same disk, is not the `init` panic at all - it is the SCSI path failing
 outright:
 
@@ -514,7 +514,7 @@ Verilator model now building, that is a run away rather than a bitstream away.
   settles it.
 * **Determinism.** The panic itself reproduces: a fresh run on the board on
   2026-09-01 at 00:21 produced the identical message, and this time completed
-  the dump (`tests/out/hw/initdiff1.png`):
+  the dump (`tests/hardware/irix53-init-died-20260901.png`):
 
   ```
   PANIC: init died (why = 2, what = 0x9)
@@ -528,7 +528,7 @@ Verilator model now building, that is a run away rather than a bitstream away.
   That is two independent occurrences of the panic (2026-08-31 and
   2026-09-01 00:21). **But the very next run of the same bitstream on the same
   disk did something else entirely** - SCSI READ(10) timeouts in `fsck`,
-  `tests/out/hw/initdiff2.png` - so `docs/22`'s "dies in the same place every
+  `tests/hardware/irix53-scsi-timeouts-20260901.png` - so `docs/22`'s "dies in the same place every
   time" does not hold, and [21-icache-bug.md](21-icache-bug.md)'s warning
   stands. The register-level trap frame quoted above comes from the 2026-08-31
   dump only; treat anything finer than "init died" as single-run until a second
