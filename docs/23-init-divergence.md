@@ -1,4 +1,4 @@
-# Where IRIX's initialisation diverges: `init`'s table allocation returns NULL
+# Where IRIX's initialisation diverges: `init`'s table pointer is NULL
 
 **Work item: [22-iris-init-diff-prompt.md](22-iris-init-diff-prompt.md). Status:
 the divergence is named to a single instruction and a single register, and both
@@ -14,18 +14,24 @@ Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 **The divergence is one instruction and one register.**
 
 `/sbin/init` stores the result of its first heap allocation at
-**`0x7fc073b8`** (`sw v0, 0x3ef0(at)`), into the first word of its own `.bss`.
-Stopping both machines on that exact instruction:
+**`0x7fc073b8`** (`sw v0, 0x3ef0(at)`), into the first word of its own `.bss`,
+and reads it back later at `0x7fc07ca4`:
 
-| | `v0` at `0x7fc073b8` | outcome |
-|---|---|---|
-| **IRIS** | `0x7fc447a8` | boots to full multiuser |
-| **this core** | `0` | `init` walks off the null pointer and the kernel panics |
+| | the table pointer | measured | outcome |
+|---|---|---|---|
+| **IRIS** | `0x7fc447a8` | `v0` at the store, `0x7fc073b8`, under the debugger | boots to full multiuser |
+| **this core** | `0` | the value read back at `0x7fc07ca4`, from the crash dump | `init` walks off it and the kernel panics |
 
-`init` reads that pointer back at `0x7fc07ca4` (`sw zero, 12(v0)`), faults on
-the null, and because it blocks SIGSEGV the kernel kills it to break the trap
-loop and panics on the death of pid 1 - `why = 2` (CLD_KILLED), `what = 0x9`
-(SIGKILL), exactly as printed on the screen.
+**Read that table carefully: the two sides were measured at different ends of
+the same word.** IRIS was stopped at the store and asked what the allocator
+returned. The board was not - what the crash dump proves is that the word came
+back zero when `init` used it. Whether the store wrote a zero or the store never
+landed is exactly the open question, and experiment 1 below is how to close it.
+
+`init` faults on the null at `0x7fc07ca4` (`sw zero, 12(v0)`), and because it
+blocks SIGSEGV the kernel kills it to break the trap loop and panics on the
+death of pid 1 - `why = 2` (CLD_KILLED), `what = 0x9` (SIGKILL), exactly as
+printed on the screen.
 
 **The allocation was for 4680 bytes, by pid 1, at the start of the boot, on a
 machine with tens of megabytes free.** It should not have been able to fail, and
