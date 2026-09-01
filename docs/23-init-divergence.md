@@ -19,16 +19,15 @@ Written 2026-09-01. Nothing in `rtl/` was changed to produce it.
 **`0x7fc073b8`** (`sw v0, 0x3ef0(at)`), into the first word of its own `.bss`,
 and reads it back later at `0x7fc07ca4`:
 
-| | the table pointer | measured | outcome |
+| | at the store `0x7fc073b8` | read back at `0x7fc07ca4` | outcome |
 |---|---|---|---|
-| **IRIS** | `0x7fc447a8` | `v0` at the store, `0x7fc073b8`, under the debugger | boots to full multiuser |
-| **this core** | `0` | the value read back at `0x7fc07ca4`, from the crash dump | `init` walks off it and the kernel panics |
+| **IRIS** | `v0 = 0x7fc447a8` (debugger) | - | boots to full multiuser |
+| **this core, in Verilator** | `0x7fc447a0` (bus trace of `init`'s saved registers) | `0` | `PANIC: init died` |
+| **this core, on the board** | not measured | `0` (crash dump) | `PANIC: init died` |
 
-**Read that table carefully: the two sides were measured at different ends of
-the same word.** IRIS was stopped at the store and asked what the allocator
-returned. The board was not - what the crash dump proves is that the word came
-back zero when `init` used it. Whether the store wrote a zero or the store never
-landed is exactly the open question, and experiment 1 below is how to close it.
+**The middle row is the finding.** In the failing machine the allocator returned
+a perfectly good pointer, and the word it was written into reads back as zero.
+Nothing wrote a zero there: the store never landed.
 
 `init` faults on the null at `0x7fc07ca4` (`sw zero, 12(v0)`), and because it
 blocks SIGSEGV the kernel kills it to break the trap loop and panics on the
