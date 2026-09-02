@@ -182,6 +182,19 @@ checks the walker against a decode_did transcription - 1.89M pixel
 samples, zero mismatches - and the full PROM-boot replay guards the
 DID-off path.
 
+**Build 14 board result (2026-09-02): the login screen is on the MONITOR,
+in colour, through the mrext screenshot API - the same channel that
+showed black.** The boot console renders through the new stage too (blue
+gradient, textport bezel, colour cursor - the DID-off path). At the
+login screen the beacon's word 14 confirms the mechanism live:
+`did_en=1 walk=RUN did=11 mode=0004ac` - X enabled the DID table and the
+bulk of the screen decodes through DID 11's entry (8bpp CI, CMAP page
+21), which is precisely what a hardwired DID 0 could never have shown.
+
+Fit note: build 14's worst-case setup is -0.166 ns, same
+outside-the-core-domains path family as builds 12/13; every listed clock
+domain is positive (min +2.4 ns).
+
 ## Still open
 
 * The CD-ROM `cmd=0xc9` CDB-length disagreement and the `sd_lba`
