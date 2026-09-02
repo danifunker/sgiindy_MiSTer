@@ -217,7 +217,11 @@ module sgi_indy #(
     output logic [63:0] dbg_scsi_bcn [7],
     // The HPC3 SCSI0 DMA channel's live state (docs/29), a separate beacon
     // word - the engine lives in sgi_hpc3, not sgi_scsi.
-    output logic [63:0] dbg_hpc3_dma
+    output logic [63:0] dbg_hpc3_dma,
+    // Interrupt-delivery diagnostics (docs/29): whether the SCSI interrupt
+    // reaches the CPU, and what the CPU is doing. Word 0 = INT2 state + the
+    // raw SCSI IRQ lines + IP2..6; word 1 = the CPU decode PC and cop0 state.
+    output logic [63:0] dbg_int_bcn [2]
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -785,6 +789,15 @@ module sgi_indy #(
     );
 
     assign irq_lines_o = irq_lines;
+
+    // SGI: interrupt-delivery beacon words (docs/29). scsi_irq/scsi_dma_irq
+    // are the two sources ORed onto INT2 L0 bit 1; irq_lines[0] is IP2, the
+    // level INT2 drives to the CPU for LOCAL0. int2_state is
+    // {map_stat, L1_MASK, l1_stat, L0_MASK, l0_stat} (sgi_ioc.sv), so
+    // int2_state[1] is the SCSI source and int2_state[9] its L0 mask bit.
+    assign dbg_int_bcn[0] = { 8'hE2, scsi_irq, scsi_dma_irq, irq_lines[4:0],
+                              9'b0, int2_state_o };
+    assign dbg_int_bcn[1] = { dbg_pc, dbg_cop0 };
 
     // The Dallas RTC and the NVRAM the PROM keeps its environment in. Also
     // inside HPC3's window - it is the battery-backed-RAM chip select.

@@ -244,6 +244,7 @@ module sim_top
         .dbg_retire    (dbg_retire),
         .dbg_scsi_bcn  (),
         .dbg_hpc3_dma  (),
+        .dbg_int_bcn   (),
         .irq_lines_o   (irq_lines),
         .int2_state_o  (int2_state)
     );

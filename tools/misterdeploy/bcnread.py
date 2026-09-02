@@ -37,7 +37,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 9
+NWORDS = 11
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
            "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
@@ -82,9 +82,37 @@ def dec_hpc3(w):
                " ".join(flags) or "-"))
 
 
+def dec_int(w9, w10):
+    # w9: [55]scsi_irq [54]scsi_dma_irq [53:49]irq_lines(IP6..IP2) [39:0]int2_state
+    # int2_state: [7:0]l0_stat [15:8]L0_MASK [23:16]l1_stat [31:24]L1_MASK [39:32]map_stat
+    i2 = bits(w9, 39, 0)
+    l0_stat = bits(i2, 7, 0)
+    l0_mask = bits(i2, 15, 8)
+    ip = bits(w9, 53, 49)  # {IP6,IP5,IP4,IP3,IP2}
+    scsi_src = bits(l0_stat, 1, 1)
+    scsi_msk = bits(l0_mask, 1, 1)
+    ip2 = bits(ip, 0, 0)
+    # w10: [63:32]dbg_pc [31:0]dbg_cop0
+    pc = bits(w10, 63, 32)
+    cop0 = bits(w10, 31, 0)
+    excl = bits(cop0, 3, 3)
+    execng = bits(cop0, 12, 12)
+    stall = bits(cop0, 17, 13)
+    lines = []
+    lines.append("int: scsi_irq=%d scsi_dma_irq=%d | L0_stat=%02x L0_MASK=%02x "
+                 "(scsi src=%d msk=%d) IP2=%d ip=%s"
+                 % (bits(w9, 55, 55), bits(w9, 54, 54), l0_stat, l0_mask,
+                    scsi_src, scsi_msk, ip2, format(ip, "05b")))
+    lines.append("cpu: pc=0x%08x EXL=%d exec=%d stall=%d cop0=0x%08x"
+                 % (pc, excl, execng, stall, cop0))
+    return lines
+
+
 def dec(ws):
     w0, w1, w2, w3, w4, w5, w6, w7 = ws[:8]
     w8 = ws[8] if len(ws) > 8 else 0
+    w9 = ws[9] if len(ws) > 9 else 0
+    w10 = ws[10] if len(ws) > 10 else 0
     out = []
     magic = bits(w0, 63, 48)
     if magic != 0xBEC0:
@@ -107,6 +135,8 @@ def dec(ws):
     out.append(dec_target(w3, w4, "id1:"))
     out.append(dec_target(w5, w6, "id6:"))
     out.append(dec_hpc3(w8))
+    if len(ws) > 10:
+        out.extend(dec_int(w9, w10))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",

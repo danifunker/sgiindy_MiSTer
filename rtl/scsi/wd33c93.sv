@@ -169,10 +169,17 @@ module wd33c93 #(
     // wrong one. `0x80 | phase` made a MESSAGE OUT request arrive as 0x86, and
     // the PROM answered a status it did not recognise by disconnecting.
     localparam logic [7:0] S_SERVICE_REQ    = 8'h88;
-    // The transfer-count-exhausted-mid-data-phase codes 0x18 (DATA OUT) /
-    // 0x19 (DATA IN) are S_XFER_DATA_OUT/IN above. The pause interrupt in
-    // ST_SAT_PHASE reports those - see the comment there for why not the
-    // 0x48/0x49 unexpected-phase group (docs/29).
+    // DMA-transfer pause codes, taken from IRIS by CODE PATH, not by the
+    // misleading constant names. src/wd33c93a.rs: a READ (data_direction_in,
+    // opcode 0x28) pushes its data with send_data_chunked and on a DMA pause
+    // raises UNEXPECTED_SEND_DATA=0x49; a WRITE uses receive_data_chunked and
+    // raises UNEXPECTED_RECV_DATA=0x48. So READ->0x49, WRITE->0x48 - the
+    // opposite of what the "SEND/RECV" names suggest, and the group is
+    // 0x48/0x49, not the 0x18/0x19 xfer-count group. IRIX's unex_info() resume
+    // path keys on these. (docs/29: two board fits proved 0x48-for-read and
+    // 0x19-for-read both leave IRIX unable to resume.)
+    localparam logic [7:0] S_PAUSE_READ  = 8'h49;   // READ  (chip DATA IN)
+    localparam logic [7:0] S_PAUSE_WRITE = 8'h48;   // WRITE (chip DATA OUT)
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
@@ -935,25 +942,16 @@ module wd33c93 #(
                         if (&sat_pause_cnt) begin
                             cip         <= 1'b0;
                             dbr         <= 1'b0;
-                            // TRANSFER-COUNT EXHAUSTED, TARGET STILL IN THE
-                            // DATA PHASE. The SBIC's own code for this is
-                            // 0x19 "xfer done, target sending DATA IN" / 0x18
-                            // "... DATA OUT" (IRIS ST_TR_DATAIN/OUT), NOT the
-                            // 0x48/0x49 unexpected-phase group - those are
-                            // IRIS's DMA-chain-EOX pause, a different trigger,
-                            // and the board proved the difference: with 0x48
-                            // the wd33c93 raised the interrupt (intp=1) but
-                            // IRIX never serviced it and hung, because the DMA
-                            // descriptor carried no XIE (beacon: dstate=IDLE
-                            // eox, xie=0), so IRIX is watching the chip status,
-                            // and 0x48 is not the code its count-done path
-                            // reads. 0x18|phase gives the right value for both
-                            // data directions (0x18 DATA OUT=000, 0x19 DATA
-                            // IN=001), and the pause only fires in a data
-                            // phase. docs/29.
+                            // DMA transfer paused with the target still in the
+                            // data phase (the segment's DMA chain is spent but
+                            // the SCSI command has more data). Report it the
+                            // way IRIS does BY CODE PATH: READ (chip DATA IN)
+                            // -> 0x49, WRITE (chip DATA OUT) -> 0x48. IRIX's
+                            // unex_info() then reloads the map and resumes with
+                            // another SELECT_ATN_XFER (the resume arm below).
                             reg_file[R_SCSI_STATUS] <=
-                                (phase == PH_DATA_IN) ? S_XFER_DATA_IN
-                                                      : S_XFER_DATA_OUT;
+                                (phase == PH_DATA_IN) ? S_PAUSE_READ
+                                                      : S_PAUSE_WRITE;
                             int_pending <= 1'b1;
                             // dma_in_data is left alone: the data phase is
                             // still open, and the resume path below re-enters
