@@ -19,15 +19,15 @@ Ethernet contract. Written 2026-09-02.
   (the CID clip with real occlusion - this week's new draw path - confirmed
   live). Do not reopen the docs/33 video work.
 
-* **THE TWO COMMITS BELOW ARE NOT ON MAIN AND NOT ON THE BOARD.** They live on
-  branch `claude/modest-robinson-cad59e` (a worktree this session ran in),
-  which is `main` + 2, linear and fast-forwardable. **Before anything else,
-  get them onto `main`** (`git checkout main && git merge --ff-only
-  claude/modest-robinson-cad59e`, or cherry-pick the two SHAs). Then fit.
+* **The SCSI fix is ON MAIN and pushed, but NOT ON THE BOARD.** `main` is at
+  `b3ee1e5` and includes everything below; the board still runs build 15, which
+  predates it. So the SCSI fix is committed + sim-verified but has never been
+  fitted - closing that gap is item 1. (We commit straight to `main` and push;
+  no branch dance.)
   - `917dce7` scsi: the docs/29 leftovers (per-target sd_lba/sd_buff_din, the
     mid-CDB timeout, S_UNKNOWN_GROUP 0x87, the S_DISCONNECT 0x85 status).
     **Sim-verified: `run-scsi`, `run-scsiwr` (ALL PASS), `run-cdrom` all pass.**
-    Never fitted.
+    Never fitted - this is what item 1 does.
   - `7123efb` hw-cputest: the CPU throughput `bench` group. A boot.rom test,
     already run on the board - no core change, no fit needed for it.
 
@@ -56,9 +56,8 @@ Work these in order unless evidence reorders them.
 
 ### 1. Land the SCSI fit - FIRST ACTION
 
-The four docs/29 SCSI fixes are committed and sim-verified but have never run
-on hardware. Fit HEAD (after merging to main), deploy, and confirm on the
-board:
+The four docs/29 SCSI fixes are committed to `main` (`917dce7`) and sim-verified
+but have never run on hardware. Fit HEAD, deploy, and confirm on the board:
 
 * **Sim-verify first, no excuses:** `make -C verilator cputest` then the three
   ratchets (`run-scsi`, `run-scsiwr`, `run-cdrom`) via LF copies. They passed
