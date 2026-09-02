@@ -36,7 +36,11 @@ module np_xmap9 #(
     // does not take its colours from the RAMDAC's cursor registers - those are
     // the BT445's own hardware cursor, which Newport does not use - it indexes
     // CMAP at (this << 5) | value. See np_vc2.sv and IRIS's compositor.rs.
-    output logic  [7:0] curs_cmap
+    output logic  [7:0] curs_cmap,
+    // And the page the POPUP planes' two bits index, register 4, the same
+    // (this << 5) | value shape - IRIS's compositor gives popup priority
+    // over everything but the cursor.
+    output logic  [7:0] pup_cmap
 );
 
     logic  [7:0] config_reg;
@@ -78,6 +82,7 @@ module np_xmap9 #(
 
     assign look_mode = mode_table[look_did];
     assign curs_cmap = curs_cmap_msb;
+    assign pup_cmap  = pup_cmap_msb;
 
     integer i;
     always_ff @(posedge clk) begin

@@ -442,7 +442,7 @@ wire        txda, txdb;
 wire [63:0] scsi_bcn [7];
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
-wire [63:0] vdma_bcn [3];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
+wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
 
 sgi_indy u_core
 (
@@ -693,9 +693,10 @@ ddr3_mux u_mem
 // target 1 A/B, target 6 A/B, target 1 sticky); word 8 is the HPC3 SCSI0 DMA
 // channel state; words 9-10 are the interrupt-delivery diagnostics (docs/29).
 // Runs on pll_locked alone - a guest reset must not stop the reporting.
-// Build 12 (ver=6) adds words 11-13: the MC VDMA engine, its descriptor
-// addresses, and REX3's beat counters (docs/33).
-localparam int BCN_WORDS = 14;
+// Build 12 (ver=6) added words 11-13: the MC VDMA engine, its descriptor
+// addresses, and REX3's beat counters. Build 14 (ver=7) adds word 14: the
+// display-interpretation word - DID and mode entry in use (docs/33).
+localparam int BCN_WORDS = 15;
 reg  [5:0]  bcn_div;
 reg  [3:0]  bcn_idx;
 reg  [31:0] bcn_beat;
@@ -704,7 +705,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h06, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h07, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -718,6 +719,7 @@ assign bcn_src[10] = int_bcn[1];
 assign bcn_src[11] = vdma_bcn[0];
 assign bcn_src[12] = vdma_bcn[1];
 assign bcn_src[13] = vdma_bcn[2];
+assign bcn_src[14] = vdma_bcn[3];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin

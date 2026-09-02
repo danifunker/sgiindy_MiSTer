@@ -37,7 +37,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 14
+NWORDS = 15
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
            "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
@@ -139,6 +139,26 @@ def dec_vdma(w11, w12, w13):
     return lines
 
 
+DID_STATES = ["IDLE", "LPTR", "E0", "E1", "RUN", "NEXT", "?6", "?7"]
+
+
+def dec_disp(w14):
+    # w14 (newport dbg_disp): [63:56]=4D [55]=DID_EN [54:52]=walker state
+    #   [51:47]=did in use [46:23]=xmap mode entry [22:21]=pup [20]=ovl_on
+    #   [19]=direct [18:6]=cmap index
+    mode = bits(w14, 46, 23)
+    return ["disp: did_en=%d walk=%s did=%d | mode=%06x (bufsel=%d ovlbsel=%d "
+            "cmap_pg=%d pixmode=%d pixsize=%d auxmode=%d auxpg=%d) | "
+            "pup=%d ovl=%d direct=%d cidx=0x%04x"
+            % (bits(w14, 55, 55), DID_STATES[bits(w14, 54, 52)],
+               bits(w14, 51, 47), mode,
+               bits(mode, 0, 0), bits(mode, 1, 1), bits(mode, 7, 3),
+               bits(mode, 9, 8), bits(mode, 11, 10), bits(mode, 18, 16),
+               bits(mode, 23, 19),
+               bits(w14, 22, 21), bits(w14, 20, 20), bits(w14, 19, 19),
+               bits(w14, 18, 6))]
+
+
 def dec(ws):
     w0, w1, w2, w3, w4, w5, w6, w7 = ws[:8]
     w8 = ws[8] if len(ws) > 8 else 0
@@ -170,6 +190,8 @@ def dec(ws):
         out.extend(dec_int(w9, w10))
     if len(ws) > 13 and bits(w0, 47, 40) >= 6:
         out.extend(dec_vdma(ws[11], ws[12], ws[13]))
+    if len(ws) > 14 and bits(w0, 47, 40) >= 7:
+        out.extend(dec_disp(ws[14]))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",

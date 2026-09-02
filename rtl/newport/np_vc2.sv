@@ -105,7 +105,16 @@ module np_vc2 #(
     // (xmap cursor_cmap_msb << 5) | value (rex3.rs, compositor.rs); the DAC's
     // own cursor registers belong to its hardware cursor, which Newport does
     // not use. Checking the reference before building saved a wrong feature.
-    output logic  [1:0] cursor_pix
+    output logic  [1:0] cursor_pix,
+
+    // ---- the display ID --------------------------------------------------
+    // The 5-bit DID for the pixel at `pix_x`/`pix_y`, from the DID table in
+    // this SRAM - the per-window mechanism X uses to give every window its
+    // own XMAP mode. Zero when DC_CONTROL's DID enable is clear, which is
+    // the whole-screen-entry-0 world the PROM console lives in.
+    output logic  [4:0] did,
+    // {DID enable, walker state} for the DDR3 beacon (docs/33).
+    output logic  [3:0] dbg_did
 );
 
     localparam logic [4:0] R_VIDEO_ENTRY   = 5'h00;
@@ -280,6 +289,53 @@ module np_vc2 #(
 
     wire [14:0] ram_ra = host_ram_rd ? ram_addr : fetch_a;
 
+    // ---- the DID table walker --------------------------------------------
+    // decode_did in IRIS's disp.rs, as a per-line walk instead of a frame
+    // buffer of DIDs. The table: `ram[DID_ENTRY_PTR + y]` points at line y's
+    // run list; the first word's low five bits are the DID from x = 0, and
+    // every further word is {x[10:0], did[4:0]} - the current DID runs until
+    // x, then the entry's DID takes over. An x of 0x7FF is end-of-line, and
+    // a line pointer of 0xFFFF means no more lines.
+    //
+    // The walk shares the CURSOR's read port: the cursor's four reads run
+    // first at each line end, this walker's three follow, and both are done
+    // hundreds of blank pixels before the line needs either. Mid-line, the
+    // walker fetches one entry per run boundary - the port is otherwise idle
+    // during display, and the lookahead entry is fetched while the previous
+    // run is still drawing.
+    wire        did_en   = regs[R_DC_CONTROL][3];
+    wire [14:0] did_base = regs[R_DID_ENTRY][14:0];
+
+    typedef enum logic [2:0] {
+        DID_IDLE, DID_LPTR, DID_E0, DID_E1, DID_RUN, DID_NEXT
+    } did_state_t;
+    did_state_t  dids;
+    logic        did_ph;         // 0 = address presented, 1 = data captured
+    logic [10:0] did_y;          // the display row being walked
+    logic [14:0] did_eptr;
+    logic  [4:0] did_cur, did_nxt;
+    logic [10:0] did_nxt_x;
+    logic        did_kick;       // a new line wants its walk
+    logic        did_line_ok;    // the walk reached the run stage
+    // A line pointer of 0xFFFF ends the TABLE, not the line: IRIS's
+    // decode_did stops walking the frame there, so every later row keeps
+    // DID 0 until the next frame restarts the walk from row zero.
+    logic        did_frame_end;
+
+    // The walker's address, held for both phases of a fetch.
+    logic [14:0] did_a;
+    always_comb begin
+        case (dids)
+            DID_LPTR:  did_a = did_base + {4'b0, did_y};
+            default:   did_a = did_eptr;    // DID_E0/E1/NEXT
+        endcase
+    end
+
+    assign did = (did_en && did_line_ok) ? did_cur : 5'd0;
+    logic [2:0] dids_bits;
+    assign dids_bits = dids;
+    assign dbg_did   = {did_en, dids_bits};
+
     logic [15:0] pix_div_ctr;
     logic        pix_phase;
     wire         pix_tick = ce_pix && pix_phase;
@@ -368,7 +424,13 @@ module np_vc2 #(
         // 128-word glyph and it is still the right trade: the alternative is
         // interfering with a timing generator whose exactness is asserted, to
         // the pixel, by tests/run-newport.sh.
-        curs_q <= ram[curs_a[AW-1:0]];
+        //
+        // THE DID WALKER RIDES THIS SAME PORT when the cursor is not using
+        // it - the cursor's four reads and the walker's never overlap in
+        // time by construction (cursor first at line end, walker after, both
+        // gated on `curs_rd`), so the mux costs nothing and the third copy
+        // of the array it would otherwise take is not spent.
+        curs_q <= ram[(curs_rd ? curs_a[AW-1:0] : did_a[AW-1:0])];
 
         if (reset) begin
             for (i = 0; i < 32; i = i + 1) regs[i] <= 16'h0;
@@ -396,6 +458,16 @@ module np_vc2 #(
             curs_cap_i   <= 2'd0;
             curs_row_ok  <= 1'b0;
             curs_row_i   <= 6'd0;
+            dids         <= DID_IDLE;
+            did_ph       <= 1'b0;
+            did_y        <= 11'd0;
+            did_eptr     <= 15'd0;
+            did_cur      <= 5'd0;
+            did_nxt      <= 5'd0;
+            did_nxt_x    <= 11'h7FF;
+            did_kick     <= 1'b0;
+            did_line_ok  <= 1'b0;
+            did_frame_end <= 1'b0;
         end else begin
             // ---- host access ---------------------------------------------
             if (host_idx_wr) index <= host_idx;
@@ -441,6 +513,10 @@ module np_vc2 #(
                     curs_step   <= curs_next_ok ? 3'd1 : 3'd0;
                     curs_row_ok <= curs_next_ok;
                     curs_row_i  <= curs_cy6;
+                    // The DID walk for the next line starts here too; its
+                    // reads queue behind the cursor's on the shared port.
+                    did_kick    <= 1'b1;
+                    did_y       <= y_ctr + 11'd1;
 `ifdef VC2_CURSOR_DEBUG
                     dbg_line_pix <= 16'd0;
                     if (y_ctr > 11'd35 && y_ctr < 11'd75)
@@ -464,6 +540,90 @@ module np_vc2 #(
             if (curs_cap) curs_w[curs_cap_i] <= curs_q;
             if (curs_rd)  curs_step <= (curs_step == 3'd4) ? 3'd0
                                                           : curs_step + 3'd1;
+
+            // ---- the DID walk ---------------------------------------------
+            // Each fetch is two phases on the shared port: present the
+            // address (waiting out the cursor), capture `curs_q` the cycle
+            // after. The line pointer, the first entry, and one lookahead
+            // run all land during blanking; mid-line only the lookahead
+            // refresh after each run boundary touches the port.
+            case (dids)
+                DID_IDLE: ;
+                DID_LPTR:
+                    if (!did_ph) begin
+                        if (!curs_rd) did_ph <= 1'b1;
+                    end else begin
+                        did_ph <= 1'b0;
+                        if (curs_q == 16'hFFFF) begin
+                            did_frame_end <= 1'b1;
+                            dids          <= DID_IDLE;
+                        end else begin
+                            did_eptr <= curs_q[14:0];
+                            dids     <= DID_E0;
+                        end
+                    end
+                DID_E0:
+                    if (!did_ph) begin
+                        if (!curs_rd) did_ph <= 1'b1;
+                    end else begin
+                        did_ph   <= 1'b0;
+                        did_cur  <= curs_q[4:0];
+                        did_eptr <= did_eptr + 15'd1;
+                        dids     <= DID_E1;
+                    end
+                DID_E1:
+                    if (!did_ph) begin
+                        if (!curs_rd) did_ph <= 1'b1;
+                    end else begin
+                        did_ph      <= 1'b0;
+                        did_nxt_x   <= curs_q[15:5];
+                        did_nxt     <= curs_q[4:0];
+                        did_eptr    <= did_eptr + 15'd1;
+                        did_line_ok <= 1'b1;
+                        dids        <= DID_RUN;
+                    end
+                // The switch lands on the same tick the position counter
+                // reaches the entry's x, so `did` changes exactly at that
+                // pixel. 0x7FF is the table's end-of-line mark and sits past
+                // any visible x, so it simply never matches.
+                DID_RUN:
+                    if (ce_pix && de && (x_ctr + 11'd1 == did_nxt_x)) begin
+                        did_cur <= did_nxt;
+                        dids    <= DID_NEXT;
+                    end
+                DID_NEXT:
+                    if (!did_ph) begin
+                        if (!curs_rd) did_ph <= 1'b1;
+                    end else begin
+                        did_ph   <= 1'b0;
+                        did_eptr <= did_eptr + 15'd1;
+                        // A run shorter than its own fetch takes effect the
+                        // moment it is seen; anything longer becomes the
+                        // lookahead.
+                        if (curs_q[15:5] != 11'h7FF
+                            && curs_q[15:5] <= x_ctr + 11'd1) begin
+                            did_cur <= curs_q[4:0];
+                        end else begin
+                            did_nxt_x <= curs_q[15:5];
+                            did_nxt   <= curs_q[4:0];
+                            dids      <= DID_RUN;
+                        end
+                    end
+                default: dids <= DID_IDLE;
+            endcase
+
+            // A new line restarts the walk outright; after the case so it
+            // wins over whatever state the old line's walk was left in.
+            // Row zero also lifts the table's end mark for the new frame.
+            if (did_kick) begin
+                did_kick    <= 1'b0;
+                did_ph      <= 1'b0;
+                did_line_ok <= 1'b0;
+                did_nxt_x   <= 11'h7FF;
+                if (did_y == 11'd0) did_frame_end <= 1'b0;
+                dids        <= (did_en && (did_y == 11'd0 || !did_frame_end))
+                               ? DID_LPTR : DID_IDLE;
+            end
 
             // ---- the generator -------------------------------------------
             // `fetch_wait` covers the one cycle between presenting an address
@@ -493,6 +653,9 @@ module np_vc2 #(
                         // cursor vertically - VT_VPOS_VC_N - which is what
                         // makes CURSOR_Y safe to write at any time.
                         regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
+                        // Row zero's DID walk has no line-end to hang off.
+                        did_kick   <= 1'b1;
+                        did_y      <= 11'd0;
                         vt         <= VT_FRAME_PTR0;
                     end
 
@@ -515,6 +678,8 @@ module np_vc2 #(
                         // cursor vertically - VT_VPOS_VC_N - which is what
                         // makes CURSOR_Y safe to write at any time.
                         regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
+                            did_kick   <= 1'b1;
+                            did_y      <= 11'd0;
                             vt         <= VT_FRAME_PTR0;
                         end else begin
                             lines_left <= ram_q;

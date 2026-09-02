@@ -212,11 +212,51 @@ int main(int argc, char **argv)
     set_reg(VC2_CURSOR_X, CURS_X + 31);
     set_reg(VC2_CURSOR_Y, CURS_Y + 31);
 
+    // ---- the DID table ---------------------------------------------------
+    // The per-window display-ID mechanism, exactly the shape IRIS's
+    // decode_did walks: a per-line pointer table, each line a run list of
+    // {x[10:0], did[4:0]} entries, 0x7FF ending a line and a line pointer of
+    // 0xFFFF ending the table for the rest of the frame. The lines exercise
+    // the corners: a ONE-PIXEL run (x=100 then x=101, the immediate-apply
+    // path in the walker's lookahead), a mid-line switch, a single-run line,
+    // and the table-end mark.
+    const uint16_t DID_TAB = 0x3000, LIST_A = 0x3400, LIST_B = 0x3410,
+                   LIST_C  = 0x3420;
+    const uint16_t VC2_DID_ENTRY = 0x05;
+    auto de_entry = [](int x, int d) {
+        return (uint16_t)(((x & 0x7FF) << 5) | (d & 0x1F));
+    };
+    {
+        std::vector<uint16_t> tab;
+        for (int y = 0; y < V_VIS; y++)
+            tab.push_back(y < 100 ? LIST_A : y < 200 ? LIST_B
+                        : y < 250 ? LIST_C : 0xFFFF);
+        load_ram(DID_TAB, tab);
+        load_ram(LIST_A, {de_entry(0, 1), de_entry(100, 2), de_entry(101, 3),
+                          de_entry(500, 4), de_entry(0x7FF, 0)});
+        load_ram(LIST_B, {de_entry(0, 5), de_entry(0x7FF, 0)});
+        load_ram(LIST_C, {de_entry(0, 6), de_entry(300, 7), de_entry(0x7FF, 0)});
+    }
+    set_reg(VC2_DID_ENTRY, DID_TAB);
+
+    // The reference: IRIS's decode_did, transcribed. Fills the DID every
+    // displayed pixel must carry.
+    auto ref_did = [&](int y, int x) -> int {
+        if (y >= 250) return 0;                    // past the 0xFFFF mark
+        struct Run { int x, d; };
+        std::vector<Run> runs;
+        if (y < 100)      runs = {{100, 1}, {101, 2}, {500, 3}, {1 << 20, 4}};
+        else if (y < 200) runs = {{1 << 20, 5}};
+        else              runs = {{300, 6}, {1 << 20, 7}};
+        for (auto &r : runs) if (x < r.x) return r.d;
+        return 0;
+    };
+
     set_reg(VC2_VIDEO_ENTRY, a_ftab);
     set_reg(VC2_CONFIG, 0x0001);          // release soft reset
-    // Video timing enable, and the cursor on at 32x32: bit 7 enables, bit 9
-    // would select 64x64.
-    set_reg(VC2_DC_CONTROL, 0x0004 | 0x0080);
+    // Video timing enable, the cursor on at 32x32 (bit 7; bit 9 would be
+    // 64x64), and the DID table walker on (bit 3).
+    set_reg(VC2_DC_CONTROL, 0x0004 | 0x0080 | 0x0008);
 
     // Run for four frames' worth of pixel clocks plus slack.
     const int PIX_DIV = 2;
@@ -230,6 +270,7 @@ int main(int argc, char **argv)
     // Where the cursor was seen, and with what value. Sampled on the last
     // frame only, so the first frame's start-up has no say in it.
     uint64_t curs_pixels = 0, curs_wrong_value = 0, curs_outside = 0;
+    uint64_t did_pixels = 0, did_wrong = 0;
     int curs_x_min = 1 << 20, curs_x_max = -1;
     int curs_y_min = 1 << 20, curs_y_max = -1;
     uint64_t curs_row_hits[40] = {0};
@@ -247,6 +288,19 @@ int main(int argc, char **argv)
         // THE CURSOR IS SAMPLED AGAINST VC2'S OWN COORDINATES, not the
         // testbench's x/y - those count emitted pixels and the cursor is
         // placed in frame buffer coordinates, which is what pix_x/pix_y are.
+        // The DID is sampled the same way the cursor is: against VC2's own
+        // coordinates, on settled frames only.
+        if (ce && de && frames >= 2) {
+            int want_did = ref_did(dut->pix_y, dut->pix_x);
+            did_pixels++;
+            if (dut->did != want_did) {
+                did_wrong++;
+                if (did_wrong <= 5)
+                    printf("     did mismatch at (%d,%d): got %d want %d\n",
+                           (int)dut->pix_x, (int)dut->pix_y,
+                           (int)dut->did, want_did);
+            }
+        }
         if (ce && de && frames >= 2 && dut->cursor_pix) {
             int px = dut->pix_x, py = dut->pix_y;
             curs_pixels++;
@@ -311,6 +365,11 @@ int main(int argc, char **argv)
     check("the marked row reads 3 and every other reads 1, so plane 1 is "
           "where the format says and no row is offset",
           curs_wrong_value == 0);
+
+    printf("     did: %llu pixels sampled, %llu wrong\n",
+           (unsigned long long)did_pixels, (unsigned long long)did_wrong);
+    check("every displayed pixel carries the DID its table run says",
+          did_pixels > 0 && did_wrong == 0);
 
     printf(fail ? "VC2: FAIL\n" : "VC2: PASS\n");
     delete dut;

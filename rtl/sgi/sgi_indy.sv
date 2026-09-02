@@ -224,8 +224,9 @@ module sgi_indy #(
     output logic [63:0] dbg_int_bcn [2],
     // VDMA / Newport pixel-DMA diagnostics (docs/33). Word 0 = the MC DMA
     // engine's mode/cause/state/beat count; word 1 = the live descriptor
-    // addresses {memadr, gio_adr}; word 2 = REX3's beat counters.
-    output logic [63:0] dbg_vdma_bcn [3]
+    // addresses {memadr, gio_adr}; word 2 = REX3's beat counters; word 3 =
+    // the display-interpretation word (DID + mode entry in use).
+    output logic [63:0] dbg_vdma_bcn [4]
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -859,6 +860,7 @@ module sgi_indy #(
     assign dbg_vdma_bcn[1] = mc_dma_addrs;
     assign dbg_vdma_bcn[2] = { 16'h4E44, 14'b0, np_vblank, mc_dma_int,
                                np_nd_dbg };
+    assign dbg_vdma_bcn[3] = np_disp_dbg;
 
     // The Dallas RTC and the NVRAM the PROM keeps its environment in. Also
     // inside HPC3's window - it is the battery-backed-RAM chip select.
@@ -887,6 +889,7 @@ module sgi_indy #(
     logic        gfx_absent_ack;
     logic        np_vblank;
     logic [31:0] np_nd_dbg;
+    logic [63:0] np_disp_dbg;
 
     // With no board fitted the window still answers zero rather than being
     // left unclaimed: REX3's STATUS reads busy forever if an unclaimed cycle
@@ -932,6 +935,7 @@ module sgi_indy #(
         .gfx_irq   (),
         .vblank_irq (np_vblank),
         .dbg_nd    (np_nd_dbg),
+        .dbg_disp  (np_disp_dbg),
         .dbg_raw_index (dbg_raw_index)
     );
 

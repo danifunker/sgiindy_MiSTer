@@ -107,6 +107,10 @@ module newport #(
     // starved the whole machine (docs/33).
     output logic        vblank_irq,
     output logic [31:0] dbg_nd,       // np_rex3's VDMA beat counters
+    // The display-interpretation beacon word (docs/33): the live DID and the
+    // mode entry the visible pixel is being read through, plus the walker
+    // state - a sampled answer to "what is the screen being decoded AS".
+    output logic [63:0] dbg_disp,
 
     // ---- bring-up instrument, not a feature ------------------------------
     // On hardware the screen came up black with a perfect raster, and a black
@@ -213,6 +217,7 @@ module newport #(
     // ---- video timing --------------------------------------------------------
     logic        vc2_hsync, vc2_vsync, vc2_de, vc2_hblank, vc2_vblank, vc2_vint;
     logic [10:0] vc2_x, vc2_y;
+    logic  [3:0] vc2_dbg_did;
 
     np_vc2 #(.RAM_WORDS(VC2_RAM_WORDS), .PIX_DIV(PIX_DIV)) u_vc2 (
         .clk    (clk),
@@ -232,7 +237,9 @@ module newport #(
         .pix_x  (vc2_x),
         .pix_y  (vc2_y),
         .vert_int (vc2_vint),
-        .cursor_pix (vc2_cursor)
+        .cursor_pix (vc2_cursor),
+        .did      (vc2_did),
+        .dbg_did  (vc2_dbg_did)
     );
 
     // ---- the rasteriser --------------------------------------------------------
@@ -278,29 +285,35 @@ module newport #(
     );
 
     // ---- the display chain -----------------------------------------------------
-    logic  [4:0] did;
+    logic  [4:0] vc2_did, did_q;
     logic  [1:0] vc2_cursor, cursor_q;
-    logic  [7:0] xmap0_curs_cmap;
+    logic  [7:0] xmap0_curs_cmap, xmap0_pup_cmap;
     logic [23:0] xmap0_mode, xmap1_mode;
     logic [12:0] cmap_index;
     logic [23:0] cmap0_rgb, cmap1_rgb;
 
-    // The display ID selects a mode-table entry per pixel. The DID generator
-    // is not built; the PROM loads a table that says "entry 0 for the whole
-    // scanline", so a constant zero is what that table would produce.
-    assign did = 5'd0;
+    // The display ID selects a mode-table entry per pixel. It comes from
+    // VC2's DID table walker - the per-window mechanism X uses to give every
+    // window its own pixel mode. It is delayed one pixel, exactly as the
+    // cursor is, so it pairs with the frame buffer word it describes.
+    always_ff @(posedge clk) begin
+        if (reset)       did_q <= 5'd0;
+        else if (ce_pix) did_q <= vc2_did;
+    end
 
     np_xmap9 #(.REVISION(8'd3)) u_xmap0 (
         .clk (clk), .reset (reset),
         .sel (xmap0_sel), .we (dcb_we), .crs (dcb_crs),
         .wdata (dcb_wdata), .rdata (xmap0_rdata),
-        .look_did (did), .look_mode (xmap0_mode), .curs_cmap (xmap0_curs_cmap)
+        .look_did (did_q), .look_mode (xmap0_mode),
+        .curs_cmap (xmap0_curs_cmap), .pup_cmap (xmap0_pup_cmap)
     );
     np_xmap9 #(.REVISION(8'd3)) u_xmap1 (
         .clk (clk), .reset (reset),
         .sel (xmap1_sel), .we (dcb_we), .crs (dcb_crs),
         .wdata (dcb_wdata), .rdata (xmap1_rdata),
-        .look_did (did), .look_mode (xmap1_mode), .curs_cmap ()
+        .look_did (did_q), .look_mode (xmap1_mode),
+        .curs_cmap (), .pup_cmap ()
     );
 
     // CMAP 0's revision carries the board revision in [6:4] and the frame
@@ -366,25 +379,104 @@ module newport #(
         else if (ce_pix)  cursor_q <= vc2_cursor;
     end
 
-    // The mode table entry: [1] overlay enable, [7:3] colour map page,
-    // [9:8] pixel mode (0 = colour index), [11:10] pixel size.
-    wire  [1:0] pix_mode = xmap0_mode[9:8];
-    wire  [1:0] pix_size = xmap0_mode[11:10];
-    wire  [4:0] cmap_msb = xmap0_mode[7:3];
-    wire [23:0] fb_rgb   = pix_word[23:0];
+    // The mode table entry, per IRIS's ModeEntry: [0] buffer select,
+    // [1] overlay buffer select, [7:3] colour map page, [9:8] pixel mode
+    // (0 = colour index), [11:10] pixel size, [18:16] auxiliary pixel mode,
+    // [23:19] the overlay's colour map page.
+    wire        m_buf_sel  = xmap0_mode[0];
+    wire        m_ovl_bsel = xmap0_mode[1];
+    wire  [4:0] m_msb_cmap = xmap0_mode[7:3];
+    wire  [1:0] pix_mode   = xmap0_mode[9:8];
+    wire  [1:0] pix_size   = xmap0_mode[11:10];
+    wire  [2:0] m_aux_mode = xmap0_mode[18:16];
+    wire  [4:0] m_aux_cmap = xmap0_mode[23:19];
 
-    // 12bpp indexes only the top page of the map; every other index size uses
-    // the mode table's page directly.
-    // THE CURSOR TAKES PRIORITY OVER THE PIXEL UNDER IT, and it indexes the
-    // map somewhere else entirely: (XMAP's cursor page << 5) | its two bits,
-    // which is what IRIS's compositor does. Zero is transparent, so a cursor
-    // that is off, or off this pixel, changes nothing.
-    wire [12:0] cmap_index_fb = (pix_size == 2'd2)
-                              ? {cmap_msb[4], 12'h0} | {5'b0, fb_rgb[7:0]}
-                              : {cmap_msb, fb_rgb[7:0]};
-    assign cmap_index = (cursor_q != 2'd0)
-                      ? {xmap0_curs_cmap, 5'b0} | {11'b0, cursor_q}
-                      : cmap_index_fb;
+    wire [23:0] fb_rgb = pix_word[23:0];
+    wire [23:0] fb_aux = pix_word[55:32];
+
+    // The main pixel, extracted by size with the buffer select - the double
+    // buffer's second copy sits above the first at every depth.
+    logic [23:0] main_pix;
+    always_comb begin
+        case (pix_size)
+            2'd0:    main_pix = {20'b0, m_buf_sel ? fb_rgb[7:4]   : fb_rgb[3:0]};
+            2'd1:    main_pix = {16'b0, m_buf_sel ? fb_rgb[15:8]  : fb_rgb[7:0]};
+            2'd2:    main_pix = {12'b0, m_buf_sel ? fb_rgb[23:12] : fb_rgb[11:0]};
+            default: main_pix = fb_rgb;
+        endcase
+    end
+
+    // The auxiliary planes' contribution: the popup's two bits, and the
+    // overlay byte from whichever of its two buffers the mode selects.
+    wire  [1:0] pup      = fb_aux[3:2];
+    wire  [7:0] overlay  = m_ovl_bsel ? fb_aux[23:16] : fb_aux[15:8];
+    wire        ovl_on   = (m_aux_mode == 3'd2 || m_aux_mode == 3'd6
+                            || m_aux_mode == 3'd7) && (overlay != 8'h0);
+
+    // Packed-RGB expansion, IRIS's expand_4/8/12: 2- and 3-bit fields spread
+    // by repetition, nibbles by 0x11. R lands in [7:0] because that is the
+    // lane `vid_r` reads, the same end CMAP's answer keeps it at.
+    function automatic logic [7:0] exp2(input logic [1:0] v);
+        exp2 = {4{v}};
+    endfunction
+    function automatic logic [7:0] exp3(input logic [2:0] v);
+        exp3 = {v, v, v[2:1]};
+    endfunction
+    logic [23:0] direct_rgb_c;
+    always_comb begin
+        case (pix_size)
+            2'd0:    direct_rgb_c = {{8{main_pix[3]}},
+                                     exp2({main_pix[2], main_pix[1]}),
+                                     {8{main_pix[0]}}};
+            2'd1:    direct_rgb_c = {exp2(main_pix[7:6]),
+                                     exp3(main_pix[5:3]),
+                                     exp3(main_pix[2:0])};
+            2'd2:    direct_rgb_c = {main_pix[11:8], main_pix[11:8],
+                                     main_pix[7:4],  main_pix[7:4],
+                                     main_pix[3:0],  main_pix[3:0]};
+            // 24-bit pixels are ABGR with red in the low byte, which is the
+            // identity in this convention. The byte swap that used to be
+            // here predates any consumer of this path.
+            default: direct_rgb_c = main_pix;
+        endcase
+    end
+
+    // Source priority, IRIS's compose loop: cursor, then popup, then the
+    // overlay, then the main pixel. Everything but packed RGB goes through
+    // CMAP; the direct path is registered one clock to pair with CMAP's
+    // registered answer.
+    logic [12:0] cmap_index_c;
+    logic        direct_c;
+    always_comb begin
+        direct_c = 1'b0;
+        if (cursor_q != 2'd0)
+            cmap_index_c = {xmap0_curs_cmap, 5'b0} | {11'b0, cursor_q};
+        else if (pup != 2'd0)
+            cmap_index_c = {xmap0_pup_cmap, 5'b0} | {11'b0, pup};
+        else if (ovl_on)
+            cmap_index_c = {m_aux_cmap, overlay};
+        else if (pix_mode == 2'd0) begin
+            case (pix_size)
+                2'd0,
+                2'd1:    cmap_index_c = {m_msb_cmap, main_pix[7:0]};
+                // 12bpp indexes only the top half of the map: the page's
+                // high bit plus the twelve pixel bits.
+                2'd2:    cmap_index_c = {m_msb_cmap[4], main_pix[11:0]};
+                default: cmap_index_c = main_pix[12:0];
+            endcase
+        end else begin
+            direct_c     = 1'b1;
+            cmap_index_c = 13'h0;
+        end
+    end
+    assign cmap_index = cmap_index_c;
+
+    logic        direct_q;
+    logic [23:0] direct_rgb_q;
+    always_ff @(posedge clk) begin
+        direct_q     <= direct_c;
+        direct_rgb_q <= direct_rgb_c;
+    end
 
     logic [23:0] pix_rgb;
     always_comb begin
@@ -392,12 +484,11 @@ module newport #(
             // The index itself, as grey - and the cursor as white, so that the
             // debug view does not report a pointer-shaped hole.
             pix_rgb = (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
-        end else if (pix_mode == 2'd0) begin
-            // Colour index: 0x00BBGGRR out of the map.
-            pix_rgb = cmap0_rgb;
+        end else if (direct_q) begin
+            pix_rgb = direct_rgb_q;
         end else begin
-            // Packed RGB straight out of the frame buffer.
-            pix_rgb = {fb_rgb[7:0], fb_rgb[15:8], fb_rgb[23:16]};
+            // 0x00BBGGRR out of the map.
+            pix_rgb = cmap0_rgb;
         end
     end
 
@@ -432,5 +523,16 @@ module newport #(
 
     assign gfx_irq    = vc2_vint;
     assign vblank_irq = r3_vrint;
+
+    // The display-interpretation beacon word. Sampled asynchronously by the
+    // beacon writer, so what it usually catches is whatever mode entry the
+    // bulk of the screen renders through - which is exactly the question
+    // when the screen is black over a full frame buffer.
+    assign dbg_disp = { 8'h4D,                    // magic
+                        vc2_dbg_did,              // {DID_EN, walker state}
+                        did_q,                    // the DID in use
+                        xmap0_mode,               // the mode entry it selects
+                        pup, ovl_on, direct_q,
+                        cmap_index_c, 6'b0 };
 
 endmodule
