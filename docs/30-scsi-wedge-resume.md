@@ -5,6 +5,8 @@ follows [29-scsi-wedge-beacon.md](29-scsi-wedge-beacon.md) (the beacon and the
 diagnosis) and [28-fsck-scsi-wedge.md](28-fsck-scsi-wedge.md) (the original
 work item). Written 2026-09-01.
 
+---
+
 ## STATE AT HANDOFF (read this first)
 
 * HEAD is `00de15a`: the 0x49 read pause code + the interrupt-delivery beacon
@@ -24,8 +26,6 @@ work item). Written 2026-09-01.
 STATUS CODE three times (0x48, 0x19, 0x49), one 40-minute FPGA fit each, instead
 of instrumenting the interrupt path first. Do not do that. A fit is ~40 minutes.
 Read the diagnostics build 8 adds, reason from them, THEN change RTL.**
-
----
 
 You are working on an **SGI Indy (IP24)** core for MiSTer FPGA at
 `C:\Temp\mistercore\sgiindy_MiSTer`, branch `main`. **Commit to `main`
