@@ -125,12 +125,23 @@ module wd33c93 #(
     // ---- Auxiliary Status Register ---------------------------------------
     // bit 0 DBR - a data byte is ready to read, or the chip wants one written
     // bit 4 CIP - a command is in progress; the driver must not issue another
-    // bit 5 BSY - the chip holds the SCSI bus
+    // bit 5 BSY - a LEVEL I COMMAND is executing. NOT the SCSI bus BSY line.
+    //             IRIX 5.3's handle_intr (wd93intr, /unix 0x880b2144) spins
+    //             on `ASR & 0x30` before it will read any register - and a
+    //             transfer paused at count zero leaves the target holding bus
+    //             BSY for as long as the pause lasts, so mirroring the bus
+    //             here parks the ISR in that three-instruction loop forever
+    //             and the pause interrupt is never acknowledged (that was the
+    //             second half of the docs/29 fsck wedge). Every Level I
+    //             command in this model completes within the register write
+    //             that issues it, so the honest value is a constant 0 - which
+    //             is also what IRIS reports (src/wd33c93a.rs never sets
+    //             asr::BSY, and the same IRIX boots there).
     // bit 6 LCI - the last command was ignored (issued while CIP)
     // bit 7 INT - an interrupt is pending. Reading SCSI_STATUS clears it, and
     //             that read is what a driver uses to find out what happened.
     logic dbr, cip, lci, int_pending;
-    wire [7:0] asr = {int_pending, lci, scsi_bsy, cip, 3'b000, dbr};
+    wire [7:0] asr = {int_pending, lci, 1'b0, cip, 3'b000, dbr};
 
     // ---- commands ---------------------------------------------------------
     localparam logic [7:0] C_RESET        = 8'h00;
@@ -273,6 +284,15 @@ module wd33c93 #(
     // pause must outlast that tail. 4096 cycles is ~126 us at clk_sys: three
     // orders above the tail, three under the driver's 60 s watchdog.
     logic [11:0] sat_pause_cnt;
+    // A Select-and-Transfer paused at count zero with the target still
+    // connected (the docs/29 segmented-transfer pause). This flag - not the
+    // Command Phase register - is what arms the resume path in the R_COMMAND
+    // handler, because IRIX's unex_info() REWRITES the phase register (to
+    // 0x45, or 0x44 without sync) before setdest() issues the resuming
+    // SELECT_ATN_XFER, so matching on CP_XFER_COUNT there never fires on the
+    // real driver. Proven by disassembly of /unix 5.3: unex_info
+    // (0x880b2fa4..0x880b2fd4) writes reg 0x10 first, command 0x08 last.
+    logic        sat_paused;
 
     // BSY is the OR of every target's, so "a target is on the bus" and "the
     // target I just selected answered" are not the same question. Selection
@@ -442,6 +462,7 @@ module wd33c93 #(
             dma_in_data <= 1'b0;
             sat_identify_sent <= 1'b0;
             sat_pause_cnt <= 12'd0;
+            sat_paused  <= 1'b0;
             rst_timer   <= 9'd0;
         end else if (ce) begin
             bsy_q   <= scsi_bsy;
@@ -470,6 +491,7 @@ module wd33c93 #(
                 scsi_ack    <= 1'b0;
                 dma_req     <= 1'b0;
                 dma_in_data <= 1'b0;
+                sat_paused  <= 1'b0;
                 rst_timer   <= RST_HOLD[8:0];
             end
 
@@ -566,6 +588,7 @@ module wd33c93 #(
                                             // for is gone with the bus.
                                             dma_req     <= 1'b0;
                                             dma_in_data <= 1'b0;
+                                            sat_paused  <= 1'b0;
                                         end
                                         C_SELECT, C_SELECT_ATN: begin
                                             scsi_atn  <= (din == C_SELECT_ATN);
@@ -578,8 +601,7 @@ module wd33c93 #(
                                             state <= ST_XFER;
                                         end
                                         C_SEL_XFER, C_SEL_ATN_XFER: begin
-                                            // RESUME, NOT SELECTION, when the
-                                            // command-phase register says a
+                                            // RESUME, NOT SELECTION, when a
                                             // transfer paused at count zero
                                             // and the target still holds the
                                             // bus: the driver has reloaded
@@ -594,11 +616,21 @@ module wd33c93 #(
                                             // too; then the target is already
                                             // in STATUS and the ordinary
                                             // phase walk concludes the
-                                            // command. IRIS implements both
-                                            // halves (src/wd33c93a.rs, the
-                                            // cmd_phase==0x46 arm).
-                                            if (reg_file[R_CMD_PHASE] == CP_XFER_COUNT
-                                                && scsi_bsy) begin
+                                            // command. IRIS resumes on
+                                            // "paused data outstanding", NOT
+                                            // on the Command Phase register
+                                            // (src/wd33c93a.rs, the
+                                            // xfer_data-non-empty arm), and
+                                            // that distinction is load-
+                                            // bearing: IRIX's unex_info()
+                                            // rewrites the phase register to
+                                            // 0x45/0x44 before issuing this
+                                            // command, so a CP_XFER_COUNT
+                                            // match here never fires on the
+                                            // real driver. sat_paused is the
+                                            // RTL's xfer_data-non-empty.
+                                            if (sat_paused && scsi_bsy) begin
+                                                sat_paused        <= 1'b0;
                                                 cip               <= 1'b1;
                                                 scsi_atn          <= 1'b0;
                                                 sat_identify_sent <= 1'b1;
@@ -612,6 +644,11 @@ module wd33c93 #(
                                                 dma_in_data <= 1'b0;
                                                 sat_identify_sent <= 1'b0;
                                                 sat_cdb_sent      <= 1'b0;
+                                                // A pause whose target has
+                                                // since let go of the bus is
+                                                // over; do not resume into it
+                                                // on the next command.
+                                                sat_paused        <= 1'b0;
                                                 reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
                                                 state     <= ST_SAT_SEL;
                                             end
@@ -636,6 +673,7 @@ module wd33c93 #(
                                             cip      <= 1'b0;
                                             scsi_sel <= 1'b0;
                                             scsi_ack <= 1'b0;
+                                            sat_paused <= 1'b0;
                                         end
                                         default: begin
                                             // Select-and-Transfer and the
@@ -953,6 +991,7 @@ module wd33c93 #(
                                 (phase == PH_DATA_IN) ? S_PAUSE_READ
                                                       : S_PAUSE_WRITE;
                             int_pending <= 1'b1;
+                            sat_paused  <= 1'b1;
                             // dma_in_data is left alone: the data phase is
                             // still open, and the resume path below re-enters
                             // this state to finish it (or to take the STATUS
@@ -1209,6 +1248,7 @@ module wd33c93 #(
                     scsi_atn <= 1'b0;
                     dbr      <= 1'b0;
                     dma_req  <= 1'b0;
+                    sat_paused <= 1'b0;
                     reg_file[R_SCSI_STATUS] <= S_SELECT_XFER_OK;
                     int_pending <= 1'b1;
                     state    <= ST_IDLE;
