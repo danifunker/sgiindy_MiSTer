@@ -119,9 +119,36 @@ PROM can observe (it never triggers the pause path - its transfers never
 exhaust the count mid-phase), and reads 0 for exactly the stretch from the
 pause interrupt to the accepted resume that IRIX's ISR needs to traverse.
 
-## Build 11 on the board
+## Build 11 on the board: fixed
 
-TO BE FILLED IN.
+Deployed 2026-09-02 00:40 (`7d05b95`, beacon ver 5), against the wedged-fsck
+reproducer image. The beacon showed the PROM probe recover exactly as it
+used to (one park-recovery reset, counters then quiet at 6/6/7), the
+804,352-byte `tlen=1571` read complete (`R_CMDPH=60`, phase back to IDLE),
+and then sustained mixed read/WRITE traffic - fsck correcting the
+filesystem. The console:
+
+    fsck: checking /dev/dsk/dks0d1s0
+    ** Phase 1 - Check Blocks and Sizes       <- wedged here on every
+    ** Phase 2 - Check Pathnames                 prior build
+    ** Phase 3 - Check Connectivity
+    ** Phase 4 - Check Reference Counts
+       (3 unref files cleared/reconnected, superblock counts fixed)
+    ** Phase 5 - Check Free List
+    ** Phase 6 - Salvage Free List
+    36791 files 1909517 blocks 2092795 free
+    REMOUNT ROOT?  yes
+    ***** REMOUNTING ROOT . . . *****
+    The system is coming up.
+
+All six phases, a repaired filesystem, root remounted, multiuser boot
+proceeding. No timeouts, no reset loop, `intp` never stuck.
+
+**Note on the reproducer:** fsck has now REPAIRED
+`SGIIndy53-wedged-fsck.img` and the boot wrote to it - it no longer
+reproduces the wedge. To make a new one, start from `SGIIndy53.img`
+(pristine) and pull the plug mid-write as before. The bug it reproduced is
+fixed, so none is needed for this issue.
 
 ## What this cost, and the lesson restated
 
