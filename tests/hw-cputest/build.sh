@@ -55,6 +55,15 @@ echo "== adding the memory log sink =="
     echo "error: the console patch did not apply - the suite has moved on" >&2
     exit 2; }
 
+echo "== adding the throughput benchmarks =="
+# The docs/34 sluggishness instruments: cached/uncached loop IPC, load/store
+# cost, the L1-miss DDR3 round trip, and Count vs the DS1386's wall clock.
+# A patch for the same reason console-memlog is one: the suite checkout is an
+# oracle shared with IRIS and stays unmodified.
+( cd "$WORK/cpu-tests" && patch -p1 --forward < "$HERE/bench.patch" ) || {
+    echo "error: bench.patch did not apply - the suite has moved on" >&2
+    exit 2; }
+
 echo "== building the suite =="
 make -C "$WORK/cpu-tests" CROSS="$CROSS" -j8 >"$WORK/suite-build.log" 2>&1 || {
     tail -20 "$WORK/suite-build.log"; exit 2; }

@@ -1,0 +1,263 @@
+diff -ruN a/harness/tests.c b/harness/tests.c
+--- a/harness/tests.c	2026-09-02 11:00:26.500464700 -0400
++++ b/harness/tests.c	2026-09-02 11:00:26.541444100 -0400
+@@ -27,6 +27,7 @@
+ DECLARE_GROUP(group_cache);
+ DECLARE_GROUP(group_mips4);
+ DECLARE_GROUP(group_mips4_fp);
++DECLARE_GROUP(group_bench);
+ 
+ const struct test_group *const all_groups[] = {
+     &group_identity,
+@@ -48,6 +49,7 @@
+     &group_cache,
+     &group_mips4,
+     &group_mips4_fp,
++    &group_bench,
+ };
+ 
+ const unsigned n_groups = sizeof(all_groups) / sizeof(all_groups[0]);
+diff -ruN a/tests/bench/bench.c b/tests/bench/bench.c
+--- a/tests/bench/bench.c	1969-12-31 19:00:00.000000000 -0500
++++ b/tests/bench/bench.c	2026-09-02 11:00:26.580477000 -0400
+@@ -0,0 +1,240 @@
++/* bench — throughput numbers for the working machine, printed, not judged.
++ *
++ * ADDED FOR THE MiSTer CORE by tests/hw-cputest/bench.patch; the suite
++ * checkout and the Verilator ratchet never see it. The docs/34 question is
++ * why IRIX feels slower than its clock says it should. The PROM's
++ * "16 Mhz R4400" line measures an UNCACHED loop - a KSEG1 fetch per
++ * instruction, docs/10 - and says nothing about the cached path the kernel
++ * actually runs on. These print the numbers that answer it:
++ *
++ *   bench/i_cached     an 18-instruction ALU loop fetched from KSEG0
++ *   bench/i_uncached   the same loop through its KSEG1 alias. This is the
++ *                      PROM's number re-measured, and it is the ANCHOR: its
++ *                      wall speed on the board is known, so the cached/
++ *                      uncached ratio scales every other line to real time
++ *                      even if Count's own rate turns out to be wrong.
++ *   bench/ld_cached    16 lw per iteration from one 64-byte window (D-hits)
++ *   bench/st_cached    16 sw per iteration into the same window. A write-
++ *                      through D-cache with no write buffer shows up here,
++ *                      as store cost far above load cost.
++ *   bench/ld_uncached  the same lw loop through KSEG1 - a bus read per load
++ *   bench/st_uncached  the same sw loop through KSEG1 - a bus write per store
++ *   bench/ld_miss      one lw per 32-byte stride across the 256 KB scratch
++ *                      region - every load a refill: the DDR3 round trip
++ *   bench/count_rate   Count ticks across two DS1386 seconds - Count vs the
++ *                      wall clock, with no help from the host
++ *
++ * Everything is in Count ticks (PClock/2 on a real R4400 - part of what is
++ * being checked). Each line prints the instruction count, the tick count and
++ * ticks-per-1000-instructions so the ratio survives a screenshot.
++ */
++
++#include "testlib.h"
++#include "cp0.h"
++
++#define KSEG1_OFF 0x20000000u
++
++extern unsigned char _scratch_start[], _scratch_end[];
++
++/* 2048 executions of the 18-instruction body: the delay-slot decrement makes
++ * a loop entered with N run N+1 times. */
++#define ITERS      2047u
++#define BODIES     (ITERS + 1u)
++#define LOOP_INSTR (BODIES * 18u)
++
++static u32 __attribute__((noinline, aligned(64))) loop_alu(u32 iters)
++{
++    u32 acc = 0;
++    __asm__ __volatile__(
++        ".set push\n\t.set noreorder\n"
++        "1:\n\t"
++        "addu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\t"
++        "addu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\t"
++        "addu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\t"
++        "addu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\taddu %0,%0,%2\n\t"
++        "bnez %1, 1b\n\t"
++        "addiu %1,%1,-1\n\t"
++        ".set pop"
++        : "+r"(acc), "+r"(iters)
++        : "r"(1u));
++    return acc;
++}
++
++static u32 __attribute__((noinline)) loop_lw(const u32 *p, u32 iters)
++{
++    u32 v = 0;
++    __asm__ __volatile__(
++        ".set push\n\t.set noreorder\n"
++        "1:\n\t"
++        "lw %0,0(%2)\n\tlw %0,4(%2)\n\tlw %0,8(%2)\n\tlw %0,12(%2)\n\t"
++        "lw %0,16(%2)\n\tlw %0,20(%2)\n\tlw %0,24(%2)\n\tlw %0,28(%2)\n\t"
++        "lw %0,32(%2)\n\tlw %0,36(%2)\n\tlw %0,40(%2)\n\tlw %0,44(%2)\n\t"
++        "lw %0,48(%2)\n\tlw %0,52(%2)\n\tlw %0,56(%2)\n\tlw %0,60(%2)\n\t"
++        "bnez %1, 1b\n\t"
++        "addiu %1,%1,-1\n\t"
++        ".set pop"
++        : "+r"(v), "+r"(iters)
++        : "r"(p)
++        : "memory");
++    return v;
++}
++
++static void __attribute__((noinline)) loop_sw(u32 *p, u32 iters)
++{
++    __asm__ __volatile__(
++        ".set push\n\t.set noreorder\n"
++        "1:\n\t"
++        "sw $zero,0(%1)\n\tsw $zero,4(%1)\n\tsw $zero,8(%1)\n\tsw $zero,12(%1)\n\t"
++        "sw $zero,16(%1)\n\tsw $zero,20(%1)\n\tsw $zero,24(%1)\n\tsw $zero,28(%1)\n\t"
++        "sw $zero,32(%1)\n\tsw $zero,36(%1)\n\tsw $zero,40(%1)\n\tsw $zero,44(%1)\n\t"
++        "sw $zero,48(%1)\n\tsw $zero,52(%1)\n\tsw $zero,56(%1)\n\tsw $zero,60(%1)\n\t"
++        "bnez %0, 1b\n\t"
++        "addiu %0,%0,-1\n\t"
++        ".set pop"
++        : "+r"(iters)
++        : "r"(p)
++        : "memory");
++}
++
++/* One lw per 32-byte stride, so a 16-byte-line direct-mapped cache misses on
++ * every single one across a span 16x its own size. */
++static u32 __attribute__((noinline)) loop_lw_stride(const u32 *p, const u32 *end)
++{
++    u32 v = 0;
++    __asm__ __volatile__(
++        ".set push\n\t.set noreorder\n"
++        "1:\n\t"
++        "lw %0,0(%1)\n\t"
++        "addiu %1,%1,32\n\t"
++        "bne %1,%2,1b\n\t"
++        "nop\n\t"
++        ".set pop"
++        : "+r"(v), "+r"(p)
++        : "r"(end)
++        : "memory");
++    return v;
++}
++
++static void report(const char *name, u32 instrs, u32 ticks)
++{
++    con_printf("  bench/%s: %u instr, %u ticks, %u ticks/kinstr\n",
++               name, instrs, ticks, (ticks * 1000u) / instrs);
++}
++
++static u32 timed_alu(u32 (*fn)(u32))
++{
++    u32 t0, t1;
++    (void)fn(ITERS);                     /* warm the caches */
++    t0 = cp0_count();
++    (void)fn(ITERS);
++    t1 = cp0_count();
++    return t1 - t0;
++}
++
++static void t_i_cached(void)
++{
++    report("i_cached", LOOP_INSTR, timed_alu(loop_alu));
++    CHECK(1);
++}
++
++static void t_i_uncached(void)
++{
++    u32 (*fn)(u32) = (u32 (*)(u32))((u32)loop_alu | KSEG1_OFF);
++    report("i_uncached", LOOP_INSTR, timed_alu(fn));
++    CHECK(1);
++}
++
++static void t_ld_st(void)
++{
++    u32 *k0 = (u32 *)_scratch_start;
++    u32 *k1 = (u32 *)((u32)_scratch_start | KSEG1_OFF);
++    u32 t0, t1;
++
++    (void)loop_lw(k0, ITERS);
++    t0 = cp0_count(); (void)loop_lw(k0, ITERS); t1 = cp0_count();
++    report("ld_cached", LOOP_INSTR, t1 - t0);
++
++    loop_sw(k0, ITERS);
++    t0 = cp0_count(); loop_sw(k0, ITERS); t1 = cp0_count();
++    report("st_cached", LOOP_INSTR, t1 - t0);
++
++    t0 = cp0_count(); (void)loop_lw(k1, ITERS); t1 = cp0_count();
++    report("ld_uncached", LOOP_INSTR, t1 - t0);
++
++    t0 = cp0_count(); loop_sw(k1, ITERS); t1 = cp0_count();
++    report("st_uncached", LOOP_INSTR, t1 - t0);
++    CHECK(1);
++}
++
++static void t_ld_miss(void)
++{
++    const u32 *beg = (const u32 *)_scratch_start;
++    const u32 *end = (const u32 *)_scratch_end;
++    u32 loads = ((u32)_scratch_end - (u32)_scratch_start) / 32u;
++    u32 t0, t1;
++
++    /* One pass to make every line resident-then-evicted the same way, one
++     * timed: with a 256 KB span over a 16 KB cache both passes miss every
++     * load, the first just also pays the cold TLB/refill corner. */
++    (void)loop_lw_stride(beg, end);
++    t0 = cp0_count();
++    (void)loop_lw_stride(beg, end);
++    t1 = cp0_count();
++    con_printf("  bench/ld_miss: %u loads, %u ticks, %u ticks/load\n",
++               loads, t1 - t0, (t1 - t0) / loads);
++    CHECK(1);
++}
++
++/* ---- Count vs the wall clock ------------------------------------------- */
++
++static u32 rtc_seconds(void)
++{
++    /* DS1386 byte N is the WORD at 0x1FBE0000 + N*4, low byte; reg 1 is
++     * seconds. Read-only, BCD - only CHANGE matters here, so no latching
++     * and no arithmetic. */
++    return *(volatile u32 *)0xBFBE0004u & 0xFFu;
++}
++
++static int wait_sec_change(u32 *sec, u32 *t_at)
++{
++    u32 t0 = cp0_count();
++    for (;;) {
++        u32 now = rtc_seconds();
++        if (now != *sec) {
++            *sec = now;
++            if (t_at) *t_at = cp0_count();
++            return 1;
++        }
++        /* A second at any believable Count rate is far inside this. */
++        if ((u32)(cp0_count() - t0) > 400000000u) return 0;
++    }
++}
++
++static void t_count_rate(void)
++{
++    u32 sec = rtc_seconds();
++    u32 t0 = 0, tmid = 0, t1 = 0;
++
++    if (!wait_sec_change(&sec, &t0)   ||
++        !wait_sec_change(&sec, &tmid) ||
++        !wait_sec_change(&sec, &t1)) {
++        con_printf("  bench/count_rate: RTC seconds never advanced; no rate\n");
++        CHECK(1);
++        return;
++    }
++    con_printf("  bench/count_rate: %u ticks / 2 s (%u + %u)\n",
++               t1 - t0, tmid - t0, t1 - tmid);
++    CHECK(1);
++}
++
++static const struct test tests[] = {
++    TEST("bench/i_cached",    t_i_cached,   CPU_ALL),
++    TEST("bench/i_uncached",  t_i_uncached, CPU_ALL),
++    TEST("bench/ld_st",       t_ld_st,      CPU_ALL),
++    TEST("bench/ld_miss",     t_ld_miss,    CPU_ALL),
++    TEST("bench/count_rate",  t_count_rate, CPU_ALL),
++};
++
++const struct test_group group_bench = {
++    "bench", tests, sizeof(tests) / sizeof(tests[0])
++};
