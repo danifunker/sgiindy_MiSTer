@@ -11,26 +11,33 @@ next SCSI problem (IRIX never attaches the CD-ROM). Written 2026-09-02.
 
 ## STATE AT HANDOFF (read this first)
 
-* **`main` is at `f5ffc82` or later** (four commits from this session, in
-  order: `4a6c8ee` ws_send shifted keys, `52f24ef` the frame buffer
-  relayout, `30bab9e` HAL2 reports no audio, `f5ffc82` the display fetch
-  path fixes). Check `git log` for a fifth: the build-18 result commit, if
-  the session got that far. The user pushes from his own environment.
-* **Build 18 = all four commits, fitted from `f5ffc82`.** Its board result
-  is at the END of docs/36 if the session reached it; if that section is
-  missing, the FIRST job is to deploy `output_files/sgiindy.rbf` (md5 in
-  `b18.console`/`b18.log` in the main checkout) and verify:
-  - the chooser renders at `PIX_DIV=1` (the refresh should be ~27 Hz);
-  - `bcnread.py` word 15 (`lcache:`): `rgb_miss`/`aux_miss` must be SMALL
-    AND STABLE between samples (the 16-bit counters wrap - a random-looking
-    value that changes each sample means every pixel misses), `aux_skips`
-    climbing by ~1024 a frame on a bare desktop;
-  - root login, then the toolchest System menu (popup planes = the aux
-    cache's flag path) and a window drag (SCR2SCR);
-  - System Shutdown from the toolchest must NOT freeze the desktop any more
-    (docs/36 section 3b), and hinv must print no audio line;
-  - `init 0` from the root console before any redeploy (docs/36 section 3
-    has the input recipe; the image fscks 5-10 min after every power-cut).
+* **`main` is at `716759f` or later.** The session of 2026-09-02 (evening)
+  verified build 18b on the board and closed docs/36 with the numbers
+  (section 5), then found and fixed a VC2 off-by-one: the display numbered
+  its lines 1..1024, so frame buffer row 0 was never shown, the bottom
+  screen row was black, and both line caches missed exactly one line
+  (1318 px) every frame. `716759f` is that fix (`rtl/newport/np_vc2.sv`
+  + two new `tb_vc2.cpp` checks that fail on the old RTL). The user pushes
+  from his own environment.
+* **Build 19 = `716759f`, fitted with `SEED=2`** (the seed 18b needed for
+  the HDMI PLL domain). Check `git log`/docs/36 for its board result; if it
+  is missing, deploy `output_files/sgiindy.rbf` (md5 in `b19.console` in the
+  main checkout) and verify, in this order:
+  - `init 0` from the root console BEFORE the redeploy if IRIX is up (docs/36
+    section 3 has the input recipe; the image fscks 5-10 min after a
+    power-cut);
+  - the chooser renders and the BOTTOM ROW of `scripts/grab.sh` is no longer
+    black; `fbgrab.py` row transitions equal the screenshot's (build 18b had
+    the store one row lower than the screen);
+  - `bcnread.py` word 15 (`lcache:`): `rgb_miss` and `aux_miss` must now be
+    ZERO and not moving (18b: both advanced by exactly 1318 a frame, in
+    lockstep); `aux_skips` ~1024 a frame at the chooser, ~1022 on the
+    desktop, ~700 with the toolchest System menu posted;
+  - the cursor still lands where the pointer is (the wrap now preps row 0's
+    cursor row itself - move the pointer to the very top of the screen);
+  - root login, toolchest System menu, System Shutdown clean (all three
+    verified on 18b).
+  Build 18b remains the fallback (`7685736ba4794f453761c52664219d76`).
 * **Build 16 (the SCSI fixes alone) is verified on the board:** zero
   `cmd=0xc9` timeouts, zero bus resets, zero SYNC-negotiation notices in a
   boot's SYSLOG. Build 17 (relayout, first cut) was a black screen for three
@@ -54,7 +61,7 @@ MiSTer binary is a fork.
 
 ## The queue
 
-### 1. Verify build 18 (above) and close docs/36 with the numbers
+### 1. Verify build 19 (above): the VC2 fix on the board
 
 ### 2. IRIX does not attach the CD-ROM (the CD install blocker)
 
