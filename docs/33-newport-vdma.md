@@ -158,6 +158,30 @@ outside the listed core clock domains (build 12 fit the same RTL family
 at +0.487) - fitter seed noise, and the board runs; a re-seed is the
 cheap fix if instability ever points here.
 
+## Round three: the framebuffer was right and the MONITOR was black
+
+Build 13's login screen was read out of DDR3 by `fbgrab.py` - which
+bypasses the display pipeline on purpose. The physical monitor (and the
+mrext screenshot API, `scripts/grab.sh`) showed black with the X cursor:
+drawing fixed, scan-out interpretation broken. The display chain in
+newport.sv hardcoded `did = 0` - fine for the PROM, whose DID table says
+"entry 0 everywhere", and wrong for X, which gives every window its own
+display ID (VC2's DID table, managed by the kernel's newportCreateDDRN /
+newportSetDisplayMode on X's behalf) and its own XMAP mode entry. A
+display that reads everything through entry 0 renders X's screen through
+a mode X does not maintain: black. The cursor survives because VC2
+overlays it past that stage.
+
+Build 14 implements the interpretation stage faithfully to IRIS's
+compositor (`compose_pixels` + `decode_did`): the VC2 DID table walker
+(sharing the cursor's SRAM port, riding the same blanking window), the
+per-pixel mode entry, buf_sel in pixel extraction, popup and overlay
+plane priority, packed-RGB expansion, and beacon word 14 (ver=7) showing
+the DID and mode entry the screen is actually decoded through. tb_vc2
+checks the walker against a decode_did transcription - 1.89M pixel
+samples, zero mismatches - and the full PROM-boot replay guards the
+DID-off path.
+
 ## Still open
 
 * The CD-ROM `cmd=0xc9` CDB-length disagreement and the `sd_lba`
