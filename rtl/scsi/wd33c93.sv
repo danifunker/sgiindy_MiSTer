@@ -93,7 +93,11 @@ module wd33c93 #(
     input  logic        dma_ack,
     input  logic  [7:0] dma_rdata,  // the byte from main memory
 
-    output logic        irq
+    output logic        irq,
+
+    // SGI: DDR3 debug beacon word (docs/28) - counters and live chip state,
+    // pure observation. Bit map at the assembly, next to scsi_rst.
+    output logic [63:0] dbg_bcn
 );
 
     // ---- indirect register file ------------------------------------------
@@ -165,6 +169,19 @@ module wd33c93 #(
     // wrong one. `0x80 | phase` made a MESSAGE OUT request arrive as 0x86, and
     // the PROM answered a status it did not recognise by disconnecting.
     localparam logic [7:0] S_SERVICE_REQ    = 8'h88;
+    // "Unexpected information phase": the same low-three-bits-are-the-phase
+    // encoding as S_SERVICE_REQ, but the 0x48 base means "a command WAS in
+    // progress when the target asked for this" - it is how the chip reports a
+    // Select-and-Transfer paused by its own Transfer Count while the target
+    // still wants a data phase. IRIX's wd93 routes the whole group through
+    // unex_info(), reloads the count and the DMA chain, and resumes with
+    // another Select-and-Transfer (see the resume arm at C_SEL_XFER below).
+    // IRIS posts exactly these values from the same situation
+    // (src/wd33c93a.rs queue_interrupt(TRANSFER_COUNT, 0x48/0x49) in its
+    // chunked DMA paths), and 0x4A/0x4B/0x4E/0x4F in its table confirm the
+    // base|phase rule (COMMAND/STATUS/MSG OUT/MSG IN land on their phase
+    // codes exactly).
+    localparam logic [7:0] S_UNEX_INFO      = 8'h48;
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
@@ -250,6 +267,15 @@ module wd33c93 #(
     localparam int SEL_TIMEOUT = 4096;
     logic [15:0] sel_timer;
 
+    // Confirms a Transfer-Count-exhausted data phase is REALLY a paused
+    // multi-segment transfer before interrupting. A normally completed
+    // transfer also passes through {count==0, REQ up, data phase} for a cycle
+    // or two - the target holds REQ past the last byte before it moves the
+    // phase lines (see the PH_DATA_OUT comment in ST_SAT_PHASE) - so the
+    // pause must outlast that tail. 4096 cycles is ~126 us at clk_sys: three
+    // orders above the tail, three under the driver's 60 s watchdog.
+    logic [11:0] sat_pause_cnt;
+
     // BSY is the OR of every target's, so "a target is on the bus" and "the
     // target I just selected answered" are not the same question. Selection
     // has to start from a free bus and then watch BSY *rise*; taking the level
@@ -328,6 +354,45 @@ module wd33c93 #(
     logic [8:0] rst_timer;
     assign scsi_rst = (rst_timer != 9'd0);
 
+    // SGI: DDR3 debug beacon (docs/28) - counters and live chip state, pure
+    // observation, read on hardware through ddr3_peek.py while wedged. The
+    // counters answer the question the wedge poses: does IRIX's 60 s
+    // "Resetting SCSI bus" recovery ever produce a bus-visible scsi_rst
+    // (rst_load), or only the chip-local C_RESET the targets never see?
+    //   [63:56] chip_reset pulses       [55:48] scsi_rst rising edges
+    //   [47:40] accepted C_RESET writes [39:32] accepted C_SEL(_ATN)_XFER
+    //   [31:24] refused commands (LCI)  [23:16] R_COMMAND  [15:8] R_CMD_PHASE
+    //   [7] cip  [6] int_pending  [5] lci  [4:0] state
+    logic [7:0] bcn_chiprst, bcn_rstload, bcn_creset, bcn_selxfer, bcn_lci;
+    logic       bcn_rst_d;
+    logic [4:0] bcn_state;
+    assign bcn_state = state;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            bcn_chiprst <= 8'd0;
+            bcn_rstload <= 8'd0;
+            bcn_creset  <= 8'd0;
+            bcn_selxfer <= 8'd0;
+            bcn_lci     <= 8'd0;
+            bcn_rst_d   <= 1'b0;
+        end else if (ce) begin
+            bcn_rst_d <= scsi_rst;
+            if (chip_reset) bcn_chiprst <= bcn_chiprst + 8'd1;
+            if (scsi_rst && !bcn_rst_d) bcn_rstload <= bcn_rstload + 8'd1;
+            if (sel && we && is_data && (ar == R_COMMAND)) begin
+                if ((cip || int_pending) && din != C_RESET)
+                    bcn_lci <= bcn_lci + 8'd1;
+                else if (din == C_RESET)
+                    bcn_creset <= bcn_creset + 8'd1;
+                else if (din == C_SEL_XFER || din == C_SEL_ATN_XFER)
+                    bcn_selxfer <= bcn_selxfer + 8'd1;
+            end
+        end
+    end
+    assign dbg_bcn = { bcn_chiprst, bcn_rstload, bcn_creset, bcn_selxfer,
+                       bcn_lci, reg_file[R_COMMAND], reg_file[R_CMD_PHASE],
+                       cip, int_pending, lci, bcn_state };
+
     // Register reads. The address port is the ASR; the data port is whatever
     // AR points at, with two registers answering from live state rather than
     // storage.
@@ -378,6 +443,7 @@ module wd33c93 #(
             dma_wdata   <= 8'h00;
             dma_in_data <= 1'b0;
             sat_identify_sent <= 1'b0;
+            sat_pause_cnt <= 12'd0;
             rst_timer   <= 9'd0;
         end else if (ce) begin
             bsy_q   <= scsi_bsy;
@@ -514,15 +580,43 @@ module wd33c93 #(
                                             state <= ST_XFER;
                                         end
                                         C_SEL_XFER, C_SEL_ATN_XFER: begin
-                                            scsi_atn  <= (din == C_SEL_ATN_XFER);
-                                            cip       <= 1'b1;
-                                            sel_timer <= 16'h0;
-                                            cdb_idx   <= 4'd0;
-                                            dma_in_data <= 1'b0;
-                                            sat_identify_sent <= 1'b0;
-                                            sat_cdb_sent      <= 1'b0;
-                                            reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
-                                            state     <= ST_SAT_SEL;
+                                            // RESUME, NOT SELECTION, when the
+                                            // command-phase register says a
+                                            // transfer paused at count zero
+                                            // and the target still holds the
+                                            // bus: the driver has reloaded
+                                            // the count (and its DMA chain)
+                                            // and wants the same connection
+                                            // continued. No new selection, no
+                                            // IDENTIFY, no CDB - straight
+                                            // back to following the target's
+                                            // phase. NetBSD's wd33c93
+                                            // xferdone issues exactly this
+                                            // write after the LAST segment
+                                            // too; then the target is already
+                                            // in STATUS and the ordinary
+                                            // phase walk concludes the
+                                            // command. IRIS implements both
+                                            // halves (src/wd33c93a.rs, the
+                                            // cmd_phase==0x46 arm).
+                                            if (reg_file[R_CMD_PHASE] == CP_XFER_COUNT
+                                                && scsi_bsy) begin
+                                                cip               <= 1'b1;
+                                                scsi_atn          <= 1'b0;
+                                                sat_identify_sent <= 1'b1;
+                                                sat_cdb_sent      <= 1'b1;
+                                                state             <= ST_SAT_PHASE;
+                                            end else begin
+                                                scsi_atn  <= (din == C_SEL_ATN_XFER);
+                                                cip       <= 1'b1;
+                                                sel_timer <= 16'h0;
+                                                cdb_idx   <= 4'd0;
+                                                dma_in_data <= 1'b0;
+                                                sat_identify_sent <= 1'b0;
+                                                sat_cdb_sent      <= 1'b0;
+                                                reg_file[R_CMD_PHASE] <= CP_DISCONNECTED;
+                                                state     <= ST_SAT_SEL;
+                                            end
                                         end
                                         C_NEGATE_ACK: scsi_ack <= 1'b0;
                                         C_ASSERT_ATN: scsi_atn <= 1'b1;
@@ -822,6 +916,46 @@ module wd33c93 #(
 `ifdef MSG_DEBUG
                     $display("[INI] SAT_PHASE bsy=%b req=%b phase=%b atn=%b cdb_idx=%0d ident=%b", scsi_bsy, scsi_req, phase, scsi_atn, cdb_idx, sat_identify_sent);
 `endif
+                    // TRANSFER COUNT EXHAUSTED WITH THE TARGET STILL IN A
+                    // DATA PHASE IS A PAUSE, NOT A WAIT - and not reporting
+                    // it is what wedged fsck (docs/29). IRIX splits any
+                    // transfer over its DMA map into segments (fsck's Phase 1
+                    // inode read is 804,352 bytes; the map is 64 pages, so
+                    // segment 1 was 261,808) and programs the count per
+                    // segment. The real chip interrupts with 0x48|phase and
+                    // COMMAND PHASE already at 0x46, unex_info() re-arms the
+                    // count and the descriptor chain, and a new
+                    // Select-and-Transfer resumes the same connection. This
+                    // model set CP to 0x46 and then waited "for the target to
+                    // move on" - which a target with 542 KB still to give
+                    // never does. Beacon capture of the livelock: chip_rst /
+                    // rst_load / c_reset / sel_xfer counters stepping every
+                    // 60 s around an identical re-park at data_cnt=261808 of
+                    // 804352, R_CMDPH=46, cip=1, intp=0.
+                    //
+                    // The settle counter exists because a NORMALLY completed
+                    // transfer also shows {count==0, REQ, data phase} for a
+                    // cycle or two while the target holds REQ past its last
+                    // byte. ~126 us tells the two apart with three orders of
+                    // margin each way.
+                    if (scsi_bsy && scsi_req && (xfer_count == 24'd0) &&
+                        (phase == PH_DATA_IN || phase == PH_DATA_OUT)) begin
+                        sat_pause_cnt <= sat_pause_cnt + 12'd1;
+                        if (&sat_pause_cnt) begin
+                            cip         <= 1'b0;
+                            dbr         <= 1'b0;
+                            reg_file[R_SCSI_STATUS] <=
+                                S_UNEX_INFO | {5'b0, phase};
+                            int_pending <= 1'b1;
+                            // dma_in_data is left alone: the data phase is
+                            // still open, and the resume path below re-enters
+                            // this state to finish it (or to take the STATUS
+                            // phase transition, which is what pulses eop).
+                            state       <= ST_IDLE;
+                        end
+                    end else
+                        sat_pause_cnt <= 12'd0;
+
                     if (!scsi_bsy) begin
                         // Bus free: the target is done. If a DMA data phase
                         // was running it ends here too - see below.
@@ -890,9 +1024,12 @@ module wd33c93 #(
                             // times out.
                             PH_DATA_OUT: begin
                                 if (xfer_count == 24'd0) begin
-                                    // Count exhausted. Wait for the target to
-                                    // move on, exactly as the two phases above
-                                    // do.
+                                    // Count exhausted: no byte moves. A target
+                                    // that promptly ends the phase is the
+                                    // normal completion; one that stays is a
+                                    // paused multi-segment transfer, and the
+                                    // pause watchdog above this case reports
+                                    // it to the driver.
                                 end else if (use_dma) begin
                                     dma_req     <= 1'b1;
                                     dma_dir_in  <= 1'b0;

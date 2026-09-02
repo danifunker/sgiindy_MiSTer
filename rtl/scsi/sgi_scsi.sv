@@ -86,7 +86,12 @@ module sgi_scsi #(
     input  logic  [7:0]             sd_buff_addr,
     input  logic [15:0]             sd_buff_dout,
     output logic [15:0]             sd_buff_din,
-    input  logic                    sd_buff_wr
+    input  logic                    sd_buff_wr,
+
+    // SGI: DDR3 debug beacon words (docs/28). [0] bus/HPS live, [1] wd33c93,
+    // [2]/[3] target 1 live A/B, [4]/[5] target 6 live A/B, [6] target 1
+    // sticky first-stall snapshot. Pure observation.
+    output logic [63:0]             dbg_bcn [7]
 );
 
     // ---- port decode -------------------------------------------------------
@@ -114,6 +119,11 @@ module sgi_scsi #(
     // array at module scope for the mux below to select from it.
     wire [31:0]            t_lba  [NUM_TARGETS];
     wire [15:0]            t_din  [NUM_TARGETS];
+    // Per-target beacon taps (docs/28); zeros for targets not built.
+    wire [63:0]            t_bcn_a [NUM_TARGETS];
+    wire [63:0]            t_bcn_b [NUM_TARGETS];
+    wire [63:0]            t_bcn_s [NUM_TARGETS];
+    wire [63:0]            wd_bcn;
 
     // Open-collector OR. Only the selected target drives anything.
     wire bus_bsy = |t_bsy;
@@ -156,7 +166,8 @@ module sgi_scsi #(
         .dma_eop   (dma_eop),
         .dma_ack   (dma_ack),
         .dma_rdata (dma_rdata),
-        .irq       (irq)
+        .irq       (irq),
+        .dbg_bcn   (wd_bcn)
     );
 
     // ---- the targets -------------------------------------------------------
@@ -224,6 +235,9 @@ module sgi_scsi #(
                     .sd_buff_dout   (sd_buff_dout),
                     .sd_buff_din    (t_din[t]),
                     .sd_buff_wr     (sd_buff_wr),
+                    .dbg_bcn_a      (t_bcn_a[t]),
+                    .dbg_bcn_b      (t_bcn_b[t]),
+                    .dbg_bcn_stk    (t_bcn_s[t]),
                     .dbg_mounted    (),
                     .dbg_phase      (),
                     .dbg_hs         (),
@@ -271,6 +285,9 @@ module sgi_scsi #(
                 assign t_din[t]  = 16'h0;
                 assign sd_rd[t]  = 1'b0;
                 assign sd_wr[t]  = 1'b0;
+                assign t_bcn_a[t] = 64'h0;
+                assign t_bcn_b[t] = 64'h0;
+                assign t_bcn_s[t] = 64'h0;
             end
         end
     endgenerate
@@ -305,5 +322,20 @@ module sgi_scsi #(
         for (int k = 0; k < NUM_TARGETS; k++)
             if (sd_wr[k] || sd_ack[k]) sd_buff_din = t_din[k];
     end
+
+    // SGI: DDR3 debug beacon assembly (docs/28).
+    // [0]: {sd_rd, sd_wr, sd_ack, t_bsy (7 bits each),
+    //       b_rst, b_sel, b_atn, b_ack, bus_bsy, bus_msg, bus_cd, bus_io,
+    //       bus_req, sd_lba[26:0]}
+    assign dbg_bcn[0] = { sd_rd, sd_wr, sd_ack, t_bsy,
+                          b_rst, b_sel, b_atn, b_ack,
+                          bus_bsy, bus_msg, bus_cd, bus_io, bus_req,
+                          sd_lba[26:0] };
+    assign dbg_bcn[1] = wd_bcn;
+    assign dbg_bcn[2] = t_bcn_a[1];
+    assign dbg_bcn[3] = t_bcn_b[1];
+    assign dbg_bcn[4] = t_bcn_a[6];
+    assign dbg_bcn[5] = t_bcn_b[6];
+    assign dbg_bcn[6] = t_bcn_s[1];
 
 endmodule

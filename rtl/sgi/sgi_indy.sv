@@ -210,7 +210,11 @@ module sgi_indy #(
     output logic [31:0] dbg_cop0,
     output logic [31:0] dbg_exc_bad,
     output logic [31:0] dbg_rpc,
-    output logic        dbg_retire
+    output logic        dbg_retire,
+
+    // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
+    // the top's beacon writer. Pure observation.
+    output logic [63:0] dbg_scsi_bcn [7]
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -730,7 +734,8 @@ module sgi_indy #(
         .sd_buff_addr (scsi_sd_buff_addr),
         .sd_buff_dout (scsi_sd_buff_dout),
         .sd_buff_din  (scsi_sd_buff_din),
-        .sd_buff_wr   (scsi_sd_buff_wr)
+        .sd_buff_wr   (scsi_sd_buff_wr),
+        .dbg_bcn      (dbg_scsi_bcn)
     );
 
     // The rest of the IOC window: panel, SYS_ID, reset/LED, and the INT2

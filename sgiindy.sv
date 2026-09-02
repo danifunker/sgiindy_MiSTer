@@ -438,6 +438,9 @@ wire  [7:0] vid_r, vid_g, vid_b;
 
 wire        txda, txdb;
 
+// SCSI debug beacon words out of the core (docs/28), to the writer below.
+wire [63:0] scsi_bcn [7];
+
 sgi_indy u_core
 (
 	.clk              (clk_sys),
@@ -526,6 +529,8 @@ sgi_indy u_core
 	.scsi_sd_buff_dout(sd_buff_dout),
 	.scsi_sd_buff_din (scsi_sd_buff_din),
 	.scsi_sd_buff_wr  (sd_buff_wr),
+
+	.dbg_scsi_bcn     (scsi_bcn),
 
 	// Debug taps: the console byte tap and the bus mirror. They exist for the
 	// simulation harness and nothing on hardware reads them. (Do not start a
@@ -657,6 +662,10 @@ ddr3_mux u_mem
 	.fbw_rdata (fbw_rdata),
 	.fbw_ack   (fbw_ack),
 
+	.bcn_req   (bcn_req),
+	.bcn_addr  (bcn_addr),
+	.bcn_wdata (bcn_wdata),
+
 	.DDRAM_BUSY      (DDRAM_BUSY),
 	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
 	.DDRAM_ADDR      (DDRAM_ADDR),
@@ -667,6 +676,53 @@ ddr3_mux u_mem
 	.DDRAM_BE        (DDRAM_BE),
 	.DDRAM_WE        (DDRAM_WE)
 );
+
+// ---- SCSI debug beacon writer (docs/28) ------------------------------------
+// Streams eight 64-bit SCSI status words into the otherwise-unused DDR3
+// window at byte offset 0x05800000 (ARM physical 0x35800000), one word every
+// 64 cycles, so tools/misterdeploy/ddr3_peek.py can watch the SCSI subsystem
+// live while the guest is wedged. Lowest-priority master in ddr3_mux, so
+// observation cannot perturb the guest. Word 0 is {BEC0, version, 00,
+// heartbeat}; words 1..7 are sgi_scsi's dbg_bcn[0..6] (bus/HPS, wd33c93,
+// target 1 A/B, target 6 A/B, target 1 sticky). Runs on pll_locked alone -
+// a guest reset must not stop the reporting.
+reg  [5:0]  bcn_div;
+reg  [2:0]  bcn_idx;
+reg  [31:0] bcn_beat;
+reg         bcn_req;
+reg  [31:0] bcn_addr;
+reg  [63:0] bcn_wdata;
+
+wire [63:0] bcn_src [8];
+assign bcn_src[0] = { 16'hBEC0, 8'h01, 8'h00, bcn_beat };
+assign bcn_src[1] = scsi_bcn[0];
+assign bcn_src[2] = scsi_bcn[1];
+assign bcn_src[3] = scsi_bcn[2];
+assign bcn_src[4] = scsi_bcn[3];
+assign bcn_src[5] = scsi_bcn[4];
+assign bcn_src[6] = scsi_bcn[5];
+assign bcn_src[7] = scsi_bcn[6];
+
+always @(posedge clk_sys) begin
+	if (~pll_locked) begin
+		bcn_div   <= 6'd0;
+		bcn_idx   <= 3'd0;
+		bcn_beat  <= 32'd0;
+		bcn_req   <= 1'b0;
+		bcn_addr  <= 32'h0;
+		bcn_wdata <= 64'h0;
+	end else begin
+		bcn_req <= 1'b0;
+		bcn_div <= bcn_div + 6'd1;
+		if (bcn_div == 6'd63) begin
+			bcn_req   <= 1'b1;
+			bcn_addr  <= 32'h0580_0000 + {26'd0, bcn_idx, 3'b000};
+			bcn_wdata <= bcn_src[bcn_idx];
+			bcn_idx   <= bcn_idx + 3'd1;
+			if (bcn_idx == 3'd7) bcn_beat <= bcn_beat + 32'd1;
+		end
+	end
+end
 
 /////////////////////////////   VIDEO   //////////////////////////
 

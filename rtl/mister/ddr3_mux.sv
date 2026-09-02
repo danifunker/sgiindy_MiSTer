@@ -115,6 +115,15 @@ module ddr3_mux #(
     output logic [63:0] fbw_rdata,
     output logic        fbw_ack,
 
+    // ---- master 5: the SCSI debug beacon, strictly last -------------------
+    // Write-only pulses into the window above the PROM (0x05800000, ARM
+    // 0x35800000). Taken only on cycles where nothing else is pending, so
+    // observing the machine cannot change what it observes. No ack: the
+    // writer never waits, it just streams status words.
+    input  logic        bcn_req,
+    input  logic [31:0] bcn_addr,
+    input  logic [63:0] bcn_wdata,
+
     // ---- the DE10-Nano's DDR3 bridge --------------------------------------
     input  logic        DDRAM_BUSY,
     output logic  [7:0] DDRAM_BURSTCNT,
@@ -127,8 +136,9 @@ module ddr3_mux #(
     output logic        DDRAM_WE
 );
 
-    localparam int NM = 5;
-    localparam int M_FBR = 0, M_DL = 1, M_RAM = 2, M_PROM = 3, M_FBW = 4;
+    localparam int NM = 6;
+    localparam int M_FBR = 0, M_DL = 1, M_RAM = 2, M_PROM = 3, M_FBW = 4,
+                   M_BCN = 5;
 
     // ---- one latched request per master ----------------------------------
     logic          [NM-1:0] pend;
@@ -188,6 +198,13 @@ module ddr3_mux #(
         rq_addr[M_FBW]  = wordaddr(BASE_FB, fbw_addr);
         rq_wdata[M_FBW] = fbw_wdata;
         rq_be[M_FBW]    = fbw_be;
+
+        // The beacon's address is already a byte offset in the region.
+        rq[M_BCN]       = bcn_req;
+        rq_we[M_BCN]    = 1'b1;
+        rq_addr[M_BCN]  = wordaddr(32'h0, bcn_addr);
+        rq_wdata[M_BCN] = bcn_wdata;
+        rq_be[M_BCN]    = 8'hFF;
     end
 
     // ---- the transaction in flight ----------------------------------------
@@ -217,8 +234,10 @@ module ddr3_mux #(
             any  = 1'b1;
         end else begin
             // k counts forward from the one after `rr`; scanning k downward
-            // and letting the last assignment win picks the nearest.
-            for (int k = NM - 2; k >= 0; k--) begin
+            // and letting the last assignment win picks the nearest. The
+            // bound is the ROTATING GROUP's size (masters 1..4), not NM-2:
+            // the beacon master below is not in the rotation.
+            for (int k = 3; k >= 0; k--) begin
                 automatic logic [$clog2(NM)-1:0] cand =
                     $clog2(NM)'(1 + ((rr + k[1:0]) & 2'b11));
                 if (pend[cand]) begin
@@ -226,6 +245,13 @@ module ddr3_mux #(
                     any  = 1'b1;
                 end
             end
+        end
+        // The beacon goes ONLY when nobody else is asking: strictly last, so
+        // the observation cannot cost the observed machine a cycle it would
+        // otherwise have had.
+        if (!any && pend[M_BCN]) begin
+            pick = $clog2(NM)'(M_BCN);
+            any  = 1'b1;
         end
     end
 
@@ -353,7 +379,8 @@ module ddr3_mux #(
                                       ? {1'b0, p_burst} : 9'd1;
                     // Only the rotating group advances the pointer; the
                     // display is not in it and must not push anyone's turn.
-                    if (pick != $clog2(NM)'(M_FBR)) rr <= 2'(pick - 1);
+                    if (pick != $clog2(NM)'(M_FBR) &&
+                        pick != $clog2(NM)'(M_BCN)) rr <= 2'(pick - 1);
                     DDRAM_ADDR     <= {REGION, p_addr[pick]};
                     DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_FBR)) ? p_burst : 8'd1;
                     DDRAM_DIN      <= p_wdata[pick];

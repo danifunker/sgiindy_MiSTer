@@ -74,6 +74,9 @@ module scsi
 	output [31:0] dbg_wrstall,
 	output [31:0] dbg_wrfb,     // JTAG WRFB: write-phase first-beat forensics
 	output [31:0] dbg_ring,     // read-ring serve/refill bookkeeping (anchor feed)
+	output [63:0] dbg_bcn_a,    // SGI DDR3 beacon (docs/28): live word A
+	output [63:0] dbg_bcn_b,    // SGI DDR3 beacon: live word B (lba/data_len/ring)
+	output [63:0] dbg_bcn_stk,  // SGI DDR3 beacon: sticky first-stall snapshot
 	output [31:0] dbg_cda0,     // JTAG CDA0: cd_audio TOC/engine state (see cd_audio.sv)
 	output [31:0] dbg_cda2,     // JTAG CDA2: last 0xC1 CDB {op9, start5, alloc7, alloc8}
 output [31:0] dbg_cda3,     // JTAG CDA3: last play-class CDB {op, cdb3, cdb4, cdb5}
@@ -3246,6 +3249,52 @@ always @(posedge clk) begin
 end
 assign dbg_selsnap = { 5'd0, dbg_cmd_bytes, dbg_req_while_sel, dbg_reached_data,
                        ack, req, bsy, sel, dbg_max_phase, phase };
+
+// ---------------------------------------------------------------------------
+// SGI: DDR3 debug beacon (docs/28). SYNTHESIZED observability - pure taps, no
+// behavioural change - so the hardware wedge can be read live through
+// tools/misterdeploy/ddr3_peek.py while IRIX sits in its 60 s retry loop.
+//   A: [63:56] cmd[0]  [55:53] phase  [52] bsy  [51] req  [50] ack
+//      [49] io_rd_d [48] io_wr [47] wr_pending [46] io_ack [45] ca_io_active
+//      [44] data_phase_complete [43] mounted [42] sel [41] atn
+//      [40] sd_buff_sel [39:36] cmd_cnt [35:18] data_cnt[17:0] [17:16] 0
+//      [15:0] tlen
+//   B: [63:32] lba  [31:8] data_len[23:0]  [7:0] rd_hps_blk[7:0]
+//   STK: sticky FIRST-stall snapshot, cleared only by sys_rst - a bus reset
+//      must not erase the evidence. [63:62] reason: 1 = REQ suppressed with
+//      no ACK (io_busy / data_phase_complete class), 2 = REQ up but the
+//      initiator never answers (CDB-length disagreement class). [59:0] =
+//      A[59:0] at latch time. ~129 ms at clk_sys before either latches - two
+//      orders above any legitimate HPS stall, three under the driver's 60 s.
+assign dbg_bcn_a = { cmd[0], phase, bsy, req, ack,
+                     io_rd_d, io_wr, wr_pending, io_ack, ca_io_active,
+                     data_phase_complete, mounted, sel, atn,
+                     sd_buff_sel, cmd_cnt, data_cnt[17:0], 2'b00, tlen };
+assign dbg_bcn_b = { lba, data_len[23:0], rd_hps_blk[7:0] };
+
+reg [63:0] bcn_stk;
+reg [21:0] bcn_t1_cnt, bcn_t2_cnt;
+assign dbg_bcn_stk = bcn_stk;
+always @(posedge clk) begin
+	if (sys_rst) begin
+		bcn_stk    <= 64'd0;
+		bcn_t1_cnt <= 22'd0;
+		bcn_t2_cnt <= 22'd0;
+	end else begin
+		if ((phase != PHASE_IDLE) && !req && !ack) begin
+			bcn_t1_cnt <= bcn_t1_cnt + 22'd1;
+			if ((&bcn_t1_cnt) && (bcn_stk[63:62] == 2'd0))
+				bcn_stk <= { 2'd1, 2'd0, dbg_bcn_a[59:0] };
+		end else
+			bcn_t1_cnt <= 22'd0;
+		if ((phase != PHASE_IDLE) && req && !ack) begin
+			bcn_t2_cnt <= bcn_t2_cnt + 22'd1;
+			if ((&bcn_t2_cnt) && (bcn_stk[63:62] == 2'd0))
+				bcn_stk <= { 2'd2, 2'd0, dbg_bcn_a[59:0] };
+		end else
+			bcn_t2_cnt <= 22'd0;
+	end
+end
 
 endmodule
 
