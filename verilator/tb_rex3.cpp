@@ -316,6 +316,78 @@ int main(int argc, char **argv)
               rd_ok && got == wantv);
     }
 
+    //========================================================================
+    //  Phase 3: FASTCLEAR and the CID clip - the two write-path features X
+    //  leans on that the PROM never touches (docs/33). FASTCLEAR must write
+    //  COLORVRAM through a hostile logic op and a zero z-pattern; the CID
+    //  clip must land pixels only where the auxiliary planes' low nibble
+    //  matches CLIPMODE's cidmatch field.
+    //========================================================================
+    {
+        enum { R_ZPATTERN_ = 0x0014, R_COLORVRAM = 0x001C, R_CLIPMODE_ = 0x1328 };
+        const int FX0 = 200, FY0 = 300, FW = 24, FH = 5;
+
+        // FASTCLEAR: logicop DST (write destination back = draws nothing if
+        // the bit is ignored), z-pattern all-zero (skips every pixel if the
+        // bit is ignored), COLORI a decoy. Only FASTCLEAR semantics produce
+        // 0x37 in the frame buffer.
+        wr(R_COLORVRAM, 0x00000037);
+        wr(R_COLORI,    0x00000099);
+        wr(R_ZPATTERN_, 0x00000000);
+        wr(R_CLIPMODE_, 0x1E00);      // cidmatch = 0xF: CID clip off, as X sets it
+        wr(R_DRAWMODE1, (5u << 28) | (1u << 17) | (7u << 12) | (1u << 3));
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9) | (1u << 12));
+        wr(R_XYSTARTI,  ((uint32_t)FX0 << 16) | (uint32_t)FY0);
+        wr(R_XYENDI | GO, ((uint32_t)(FX0 + FW - 1) << 16)
+                          | (uint32_t)(FY0 + FH - 1));
+        for (int i = 0; i < 200000 && dut->gfx_busy; i++) tick();
+
+        uint64_t fc_wrong = 0;
+        for (int y = FY0; y < FY0 + FH; y++)
+            for (int x = FX0; x < FX0 + FW; x++) {
+                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
+                if (!written.count(a) || (fb[a] & 0xFF) != 0x37) fc_wrong++;
+            }
+        printf("\nFASTCLEAR: %dx%d fill, %llu pixels wrong\n", FW, FH,
+               (unsigned long long)fc_wrong);
+        check("FASTCLEAR writes COLORVRAM through logicop DST and zpat 0",
+              fc_wrong == 0);
+
+        // CID clip: pre-set the aux low nibble to 5 for the left half of a
+        // row only, then draw the whole row with cidmatch=5. Only the left
+        // half may change.
+        const int CY = 320, CX0 = 200, CWD = 16;
+        for (int x = CX0; x < CX0 + CWD; x++) {
+            uint32_t a = (uint32_t)(((CY << 11) + x) << 3);
+            uint64_t aux = (x < CX0 + CWD/2) ? 5ull : 0ull;
+            fb[a] = (aux << 32) | 0x11;         // old pixel index 0x11
+        }
+        wr(R_ZPATTERN_, 0xFFFFFFFF);
+        wr(R_COLORI,    0x00000042);
+        wr(R_CLIPMODE_, (5u << 9));             // cidmatch = 5, smasks off
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 3));
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));
+        wr(R_XYSTARTI,  ((uint32_t)CX0 << 16) | (uint32_t)CY);
+        wr(R_XYENDI | GO, ((uint32_t)(CX0 + CWD - 1) << 16) | (uint32_t)CY);
+        for (int i = 0; i < 200000 && dut->gfx_busy; i++) tick();
+        wr(R_CLIPMODE_, 0x1E00);                // cidmatch back to 0xF
+
+        uint64_t cid_wrong = 0;
+        for (int x = CX0; x < CX0 + CWD; x++) {
+            uint32_t a = (uint32_t)(((CY << 11) + x) << 3);
+            uint8_t want = (x < CX0 + CWD/2) ? 0x42 : 0x11;
+            if ((fb[a] & 0xFF) != want) {
+                cid_wrong++;
+                if (cid_wrong <= 4)
+                    printf("  cid x=%d got %02x want %02x\n", x,
+                           (unsigned)(fb[a] & 0xFF), want);
+            }
+        }
+        printf("CID clip: %llu pixels wrong\n", (unsigned long long)cid_wrong);
+        check("the CID clip draws only where the aux nibble matches",
+              cid_wrong == 0);
+    }
+
     printf(failures ? "\nREX3FILL: FAIL\n" : "\nREX3FILL: PASS\n");
     delete dut;
     return failures ? 1 : 0;

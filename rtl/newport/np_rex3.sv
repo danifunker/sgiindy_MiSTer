@@ -289,6 +289,7 @@ module np_rex3 #(
     // trace rather than acted on.
     wire  [2:0] dm1_compare   = drawmode1[14:12];
     wire        dm1_rgbmode   = drawmode1[15];
+    wire        dm1_fastclear = drawmode1[17];
     wire  [3:0] dm1_logicop   = drawmode1[31:28];
 
     localparam logic [1:0] OP_NOOP    = 2'd0;
@@ -477,6 +478,25 @@ module np_rex3 #(
     // that many pixels and the next GO carries the next word.
     wire host_mode = (dm0_opcode == OP_READ) || dm0_colorhost;
 
+    // CLIPMODE's CID-match field, [12:9]. 0xF disables the per-pixel window-ID
+    // clip; anything else gates every DRAW write on the CID nibble in the
+    // auxiliary planes matching - X's mechanism for clipping to occluded
+    // windows, straight from IRIS's process_pixel_draw.
+    wire  [3:0] cid_match = clipmode[12:9];
+    wire        cid_gate  = (cid_match != 4'hF) && (dm0_opcode == OP_DRAW);
+
+    // FASTCLEAR (DRAWMODE1 bit 17): every drawn pixel takes COLORVRAM,
+    // replicated to the plane depth, ignoring the colour source, the logic
+    // op and the patterns - IRIS's process_pixel_fastclear, active for DRAW
+    // without host data when the CID clip is off. Xsgi fills every large
+    // background this way; ignoring the bit painted the login panel with a
+    // stale colour source: index 0, black (docs/33).
+    wire        fastclear_act = dm1_fastclear && (cid_match == 4'hF)
+                              && (dm0_opcode == OP_DRAW) && !host_mode;
+
+    // The logic op the write path actually applies.
+    wire  [3:0] eff_logicop = fastclear_act ? 4'h3 : dm1_logicop;
+
     // Where the walk goes for the next pixel of a primitive.
     dr_state_t next_pixel_state;
     assign next_pixel_state = (dm0_opcode == OP_SCR2SCR) ? DR_SRC_RD
@@ -618,6 +638,9 @@ module np_rex3 #(
     always_comb begin
         if (dm0_opcode == OP_SCR2SCR)      draw_src = src_pix;
         else if (dm0_colorhost)            draw_src = host_pix;
+        // FASTCLEAR's value is COLORVRAM; the per-depth `amplified`
+        // replication below produces exactly IRIS's fastclear_color.
+        else if (fastclear_act)            draw_src = colorvram[23:0];
         else if (dm1_rgbmode)              draw_src = {colorblue[18:11], colorgrn[18:11],
                                                       colorred[18:11]};
         else                               draw_src = colori[23:0];
@@ -639,7 +662,7 @@ module np_rex3 #(
 
     logic [23:0] logic_out;
     always_comb begin
-        case (dm1_logicop)
+        case (eff_logicop)
             4'h0:    logic_out = 24'h000000;
             4'h1:    logic_out =  draw_src &  dst_val;
             4'h2:    logic_out =  draw_src & ~dst_val;
@@ -694,10 +717,12 @@ module np_rex3 #(
     wire mask_byte_clean = (wrmask[7:0]   == 8'h00 || wrmask[7:0]   == 8'hFF)
                         && (wrmask[15:8]  == 8'h00 || wrmask[15:8]  == 8'hFF)
                         && (wrmask[23:16] == 8'h00 || wrmask[23:16] == 8'hFF);
-    wire logic_needs_dst = !(dm1_logicop == 4'h0 || dm1_logicop == 4'h3
-                          || dm1_logicop == 4'hC || dm1_logicop == 4'hF);
+    wire logic_needs_dst = !(eff_logicop == 4'h0 || eff_logicop == 4'h3
+                          || eff_logicop == 4'hC || eff_logicop == 4'hF);
+    // The CID clip needs the auxiliary planes of every destination pixel, so
+    // it forces the read path - which is also what keeps it out of DR_FILL.
     wire need_dst_read = (dm0_opcode == OP_READ) || logic_needs_dst
-                      || !mask_byte_clean;
+                      || !mask_byte_clean || cid_gate;
 
     wire [23:0] plane_val = need_dst_read ? plane_new : amplified;
     wire [63:0] fb_word_new = is_aux_plane
@@ -1382,11 +1407,14 @@ module np_rex3 #(
     end
 
     // ---- frame buffer port -------------------------------------------------
-    wire zpat_hit = !dm0_enzpattern || zpattern[zbit];
+    // FASTCLEAR writes through the patterns; the CID clip skips any pixel
+    // whose window-ID nibble in the auxiliary planes does not match.
+    wire zpat_hit = !dm0_enzpattern || zpattern[zbit] || fastclear_act;
     wire skip_pix = (first_pix && dm0_skipfirst)
                  || (row_done && dm0_skiplast)
                  || (!clip_ok)
-                 || (!zpat_hit && !dm0_zpopaque);
+                 || (!zpat_hit && !dm0_zpopaque)
+                 || (cid_gate && (dst_word[35:32] != cid_match));
 
     always_comb begin
         fb_req   = 1'b0;
