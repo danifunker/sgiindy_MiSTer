@@ -57,7 +57,21 @@ module hal2 (
     // REV. Bit 15 clear means "audio present"; the PROM's node printer splits
     // the rest as (v>>12)&7 . (v>>4)&F . v&F, so 0x4010 prints as 4.1.0 and
     // the "A2" beside it in hinv is a string in the PROM, not a field here.
-    localparam logic [15:0] REV_VALUE = 16'h4010;
+    // BIT 15 IS SET AGAIN - "no audio present" - since 2026-09-02 (docs/36).
+    // With it clear, IRIX's audio.sm probe (exprobe of this register with
+    // mask 0x8000) passes and the kernel loads the kdsp_a2 audio driver into
+    // mapped kernel space, and that driver runs against a HAL2 with no DMA
+    // engine and no sample path behind it. Its timer callback derives the
+    // number of samples to move from the DMA position, gets a negative count,
+    // and transfer_samps then calls bzero on its ring for ever with interrupts
+    // off: the desktop freezes the moment anything plays a sound - the System
+    // Shutdown confirmation, the console bell. That was the "shutdown hang"
+    // on the board. Absent is honest until the DMA channel and the sample
+    // pipeline exist; the PROM then skips its HAL2 init and hinv prints no
+    // audio line (tests/run-scsi.sh and run-cdrom.sh stop on the CD-ROM line
+    // instead). The register file below stays, ready for when it is 0x4010
+    // again.
+    localparam logic [15:0] REV_VALUE = 16'hC010;
 
     // ---- IAR decode ------------------------------------------------------
     // iar[7]    1 = read the indirect register into IDR, 0 = write it from IDR

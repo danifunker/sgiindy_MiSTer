@@ -60,13 +60,18 @@ EXPECT=(
     # grandparent is the type-0x0b adapter - so this one line asserts the whole
     # chain, not just that a disk answered INQUIRY.
     "SCSI Disk: scsi(0)disk(1)"
-    # HAL2 answering its revision register, which is the whole of the audio
-    # line - there is no audio path behind it. The PROM splits HAL2_REV as
-    # (v>>12)&7 . (v>>4)&0xF . v&0xF, so 0x4010 is 4.1.0; the "A2" is a
-    # hardcoded string at 0xBFC54B58. Asserted here because clearing REV bit 15
-    # commits this core to answering the init sequence at 0xBFC00BD0, and if
-    # that ever stops working it hangs the boot rather than skipping audio.
-    "Audio: Iris Audio Processor: version A2 revision 4.1.0"
+    # The CD-ROM drive elaborated on ID 6 answers INQUIRY with no disc in it,
+    # so this line is here with no ISO attached; it is also the last hinv
+    # line now that HAL2 reports no audio (hal2.sv REV bit 15, docs/36), so
+    # the run stops on it.
+    "SCSI CDROM: scsi(0)cdrom(6)"
+)
+
+FORBID_AUDIO=(
+    # HAL2_REV bit 15 is set: the PROM must skip its audio init and print no
+    # audio line at all. If this comes back, kdsp_a2 comes back with it, and
+    # so does the desktop freeze on the first sound.
+    "Iris Audio Processor"
 )
 
 FORBID=(
@@ -104,7 +109,7 @@ echo "booting $(basename "$PROM") with a disk on ID 1 ..."
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \
-       --stop-on 'revision 4.1.0' \
+       --stop-on 'cdrom(6)' \
        --console "$OUT" >/dev/null 2>&1
 
 fail=0
@@ -115,7 +120,7 @@ for e in "${EXPECT[@]}"; do
         printf '  MISSING %s\n' "$e"; fail=1
     fi
 done
-for f in "${FORBID[@]}"; do
+for f in "${FORBID[@]}" "${FORBID_AUDIO[@]}"; do
     if grep -qF -- "$f" "$OUT"; then
         printf '  REGRESSED, must not appear: %s\n' "$f"; fail=1
     fi

@@ -136,9 +136,11 @@ Verification so far:
   two new checks (a drawing-plane write leaves the window-ID copy alone; a
   popup-plane draw sets the popup bits and refreshes the copy in every
   drawing slot).
-* Whole-machine, rebuilt `cputest` (WM_OPT): `run-prom` PASS, `run-newport`
-  PASS (1318x1065 exact at `PIX_DIV=1`, the video capture lit), `run-rex3`
-  and `run-scsi`: **(pending)**. The fit: **(pending)**.
+* Whole-machine, rebuilt `cputest` (WM_OPT, an incremental minute): `run-prom`
+  PASS, `run-newport` PASS (1318x1065 exact at `PIX_DIV=1`, the video
+  capture lit), `run-rex3` PASS (5162 commands replayed, 1,310,720 pixels
+  checked, none unchecked), `run-scsi` PASS. Committed as `52f24ef`, fitted
+  as build 17: **(result below)**.
 
 ## 3. Board facts established on the way
 
@@ -171,6 +173,39 @@ Verification so far:
 * Power-cutting the guest is what that restart did, so the boot after the fit
   fscks. Item 6's "log in and `init 0` before redeploying" is now possible
   from the console above.
+
+## 3b. The shutdown hang, found: the audio driver
+
+Reproduced on build 16 with the beacon sampling once a second: toolchest
+System -> System Shutdown, the menu closes, the busy cursor appears, and
+nothing else ever draws. The CPU sits in `bzero`'s 32-byte store loop
+(0x88016f8c..fa0) nine samples in ten, the tenth in mapped kernel text at
+0xc00d3a20, with an unmasked LOCAL0 interrupt pending and never taken. The
+console had wedged the same way minutes earlier on a garbled command line
+(a terminal bell, in hindsight).
+
+Mapped kernel text is not in `/unix`, so the frozen guest's page table was
+read from the ARM: `kptbl` (K0 0x881ec000) entry 0xd3 = 0x4028b1df, physical
+0x0a2c7000, `guestmem.py` dumped the page, `disbin.py` showed a ring-buffer
+zeroing loop - `s1 = min(size - index, remaining)` with a SIGNED compare,
+`bzero(ring + index*4, s1*4)`, index wrapping at size, `remaining -= s1`
+until zero. A negative `remaining` zeroes for ever. The byte pattern is not
+in `/unix` and is in `/usr/cpu/sysgen/IP22boot/kdsp_a2.o` at text offset
+0x39e0: **`transfer_samps` of the `kdsp_a2` audio driver**, called from
+`kdsp_timercallback`. `/var/sysgen/system/audio.sm` loads that module when
+its probe of HAL2_REV at 0xBFBD8020 finds bit 15 clear - which this core
+clears so the PROM's POST lists the audio processor - and the driver then
+runs against a HAL2 with no DMA engine and no sample path, derives a
+negative sample count from the DMA position, and spins with interrupts off
+the first time anything plays a sound. The shutdown confirmation plays one;
+so does the console bell.
+
+Decision: `hal2.sv` `REV_VALUE` is 0xC010 again - bit 15 set, "no audio
+present", the state IRIS models as `hal2_absent_read`. The PROM skips its
+HAL2 init, hinv prints no audio line, IRIX never loads `kdsp_a2`. The
+register file stays for when the DMA channel and the sample pipeline exist.
+`tests/run-scsi.sh` and `run-cdrom.sh` stop on the CD-ROM line now (it is
+the last hinv line) and run-scsi forbids the audio line. Fitted as build 18.
 
 ## 4. Item 4 scoping, from reading rather than guessing
 

@@ -266,10 +266,13 @@ module sgi_hpc3 (
         //   reports. That is the whole of
         //     Audio: Iris Audio Processor: version A2 revision 4.1.0
         //
-        // BIT 15 IS THE SWITCH. Set, it means "no audio present", and both
-        // the PROM and the IRIX driver skip the audio path entirely -
-        // which is what this returned before, deliberately, as IRIS's
-        // hal2_absent_read does. Clearing it commits to answering the
+        // BIT 15 IS THE SWITCH, AND IT IS SET AGAIN (hal2.sv REV_VALUE,
+        // 2026-09-02): with it clear IRIX loads the kdsp_a2 audio driver,
+        // which wedges the kernel in an endless bzero the first time
+        // anything plays a sound (docs/36). Set, it means "no audio
+        // present", and both the PROM and the IRIX driver skip the audio
+        // path entirely - which is what this returned before, deliberately,
+        // as IRIS's hal2_absent_read does. Clearing it commits to answering the
         // init sequence at 0xBFC00BD0, which writes IAR/IDR and then spins
         // on ISR bit 0 three times. Every register other than REV reads 0,
         // so busy is always clear and each spin exits on its first pass;

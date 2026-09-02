@@ -83,9 +83,10 @@ with open(sys.argv[1], 'wb') as f:
 PY
 
 echo "booting $(basename "$PROM") with a disk on ID 1 and a CD-ROM on ID 6 ..."
-# Stops on the audio line, which the PROM prints AFTER the SCSI ones, so the
-# CD-ROM line is always flushed before the run ends. Stopping on the CD-ROM
-# line itself would race the newline - see tests/run-scsi.sh.
+# Stops on the CD-ROM line, which is the last one hinv prints now that HAL2
+# reports no audio (hal2.sv REV bit 15, docs/36) - there is no later line to
+# stop on. The stop pattern is the tail of the line, so everything the EXPECT
+# below asks for has been transmitted by the time the run ends.
 # --no-gfx leaves Newport unfitted. A real Indy always has a graphics
 # board, and the PROM moves its console to it the moment it finds one -
 # so a serial-console ratchet has to ask for the machine that talks to a
@@ -94,7 +95,7 @@ echo "booting $(basename "$PROM") with a disk on ID 1 and a CD-ROM on ID 6 ..."
        --max-cycles 1200000000 --stuck 150000000 \
        --type-on 'Option?' '5\r' \
        --type-on 'Command Monitor' 'hinv\r' \
-       --stop-on 'revision 4.1.0' \
+       --stop-on 'cdrom(6)' \
        --console "$OUT" >/dev/null 2>&1
 
 fail=0
