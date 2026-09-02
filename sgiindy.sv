@@ -657,7 +657,7 @@ fb_linecache #(.TRACK_ZERO(1'b0)) u_linecache
 // The auxiliary planes: only the lines the rasteriser has put something
 // visible on, which on a desktop is almost none of them (fb_linecache.sv,
 // TRACK_ZERO). The rest are published as zeros without a fetch.
-fb_linecache #(.TRACK_ZERO(1'b1)) u_auxcache
+fb_linecache #(.TRACK_ZERO(1'b1), .REGION_BASE(32'h0080_0000)) u_auxcache
 (
 	.clk       (clk_sys),
 	.reset     (reset),

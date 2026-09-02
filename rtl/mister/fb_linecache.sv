@@ -83,10 +83,15 @@
 //  when a whole line it fetched came back with nothing under the mask - unless
 //  a mark for that line landed while the fetch was in flight, in which case
 //  the fetch may predate the write and the flag stays. A line whose flag is
-//  clear is published as zeros without touching memory. Flags reset to SET,
-//  so the first frame after reset fetches everything and the table settles
-//  from what is actually there. The drawing-plane instance leaves TRACK_ZERO
-//  off and fetches every line.
+//  clear is published as zeros without touching memory. FLAGS RESET CLEAR:
+//  every visible auxiliary value reaches memory through the rasteriser, which
+//  marks its line, so a line nothing has written since reset has nothing to
+//  show - and whatever the region held before (a previous build's pixels,
+//  on the board) is rightly ignored. Resetting them SET was tried first and
+//  cost a storm: the first frame fetched both plane sets for every line, the
+//  over-subscribed bus starved the auxiliary fills, and lines whose fills
+//  never completed stayed flagged for frames. The drawing-plane instance
+//  leaves TRACK_ZERO off and fetches every line.
 //
 //  A MISS SERVES BLACK RATHER THAN STALLING, because stalling is not on the
 //  menu: there is no back-pressure on this path. A miss costs one pixel of
@@ -107,6 +112,20 @@ module fb_linecache #(
     // fetching the whole 1024-word line would cost half as much again for
     // nothing.
     parameter int LINE_WORDS   = 672,
+    // How many of those the display can ever SHOW: 1318 pixels = 659 words.
+    // The empty-line test (TRACK_ZERO) looks only at these. The words past
+    // them are fetched for burst alignment and never displayed, and nothing
+    // clears them - the PROM's rex3Clear stops at pixel 1342 and X at 1279 -
+    // so on the board they held the previous build's leftovers and no line
+    // ever tested empty: the flags never cleared and both caches missed.
+    parameter int VIS_WORDS    = 659,
+    // Where this plane set's region starts, as a byte offset the display's
+    // px_addr and this module's fbr_addr both carry. The auxiliary planes sit
+    // 8 MB above the drawing planes: without this the line number was taken
+    // from address bits that include that offset, every display request
+    // looked like line y+1024 and never hit, and the fills read the drawing
+    // region instead - build 17's black screen, and tb_fetcharb's first run.
+    parameter logic [31:0] REGION_BASE = 32'h0000_0000,
     // Lines in the frame buffer. The fill stops here and waits for the next
     // frame's restart: a fill that walked on through the vertical blanking
     // would fetch memory beyond the frame (the other plane region, in fact)
@@ -190,7 +209,9 @@ module fb_linecache #(
     logic [10:0]  disp_line;
     logic         vs_d, restart;
 
-    wire [10:0]   req_line = px_addr[LINE_SHIFT + 10 : LINE_SHIFT];
+    // The line is the address within the region: REGION_BASE is a multiple
+    // of the region size, so taking ten bits above the line offset drops it.
+    wire [10:0]   req_line = {1'b0, px_addr[LINE_SHIFT + 9 : LINE_SHIFT]};
     wire [AW-1:0] req_off  = px_addr[LINE_SHIFT-1 : 3];
 
     // ---- the per-line flag table (TRACK_ZERO) ----------------------------
@@ -200,7 +221,7 @@ module fb_linecache #(
     logic          nz_acc;         // something under the mask seen in this fill
     logic          marked_during;  // a mark for fill_line landed during it
     wire           fill_flag = TRACK_ZERO ? flag[fill_line[9:0]] : 1'b1;
-    wire           dout_nz   = |(fbr_dout & ZERO_MASK);
+    wire           dout_nz   = (|(fbr_dout & ZERO_MASK)) && (int'(fill_pos) < VIS_WORDS);
 
     // ---- the buffers -----------------------------------------------------
     // FOUR ARRAYS WRITTEN OUT LONGHAND, AND THAT IS NOT A STYLE CHOICE. The
@@ -284,7 +305,7 @@ module fb_linecache #(
     wire [31:0] fill_byte  = 32'({20'b0, fill_pos} << 3);
     wire [31:0] words_left = 32'(LINE_WORDS) - 32'({20'b0, fill_pos});
 
-    assign fbr_addr  = line_base + fill_byte;
+    assign fbr_addr  = REGION_BASE + line_base + fill_byte;
     assign fbr_burst = (words_left < 32'(BURST)) ? words_left[7:0] : 8'(BURST);
     assign fbr_req   = (fst == F_REQ);
 
@@ -319,7 +340,7 @@ module fb_linecache #(
             miss_q    <= 1'b0;
             sel_q     <= '0;
             zero_q    <= 1'b0;
-            flag      <= '1;
+            flag      <= '0;
             nz_acc    <= 1'b0;
             marked_during <= 1'b0;
             dbg_skips <= 32'd0;

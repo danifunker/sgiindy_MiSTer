@@ -9,10 +9,23 @@
 //  that requester. The mux itself serialises bursts the same way, so the data
 //  stream is never ambiguous.
 //
-//  Port A has priority when both ask. It is the drawing planes, without which
-//  there is no picture at all; the auxiliary cache usually has nothing to
-//  fetch (see TRACK_ZERO in fb_linecache.sv) and can wait a burst when it
-//  does.
+//  THE SELECTION IS LATCHED WHEN THE REQUEST IS PRESENTED, AND THAT IS THE
+//  WHOLE CONTRACT. ddr3_mux latches the address and the burst count on the
+//  first cycle it sees `fbr_req` and issues them some cycles later; the
+//  requester holds its request until `fbr_taken`. The first version of this
+//  file chose the winner combinationally right up to the taken cycle, so when
+//  the auxiliary cache asked first and the drawing cache arrived a cycle
+//  later, the mux issued the auxiliary burst while this file credited the
+//  drawing cache with it - and then waited for a word count the burst was
+//  never going to deliver. Both caches stalled in their data phase, the
+//  restart at vertical sync never got a look in, and build 17 showed one
+//  stale line on a black screen. A winner chosen here stays chosen until
+//  the mux takes it.
+//
+//  Port A has priority when both ask at the same moment. It is the drawing
+//  planes, without which there is no picture at all; the auxiliary cache
+//  usually has nothing to fetch (see TRACK_ZERO in fb_linecache.sv) and can
+//  wait a burst when it does.
 //============================================================================
 
 module fb_fetch_arb (
@@ -44,21 +57,19 @@ module fb_fetch_arb (
     input  logic        fbr_dout_valid
 );
 
-    // Which reader owns the burst in flight, and how many words are still
-    // to come. `busy` falls with the last word.
+    // `sel_valid`: a request is being presented to the mux, for reader
+    // `sel_b`, and stays presented until taken. `busy`: that burst is in
+    // flight and owned by `owner_b`; `left` words are still to come.
+    logic       sel_valid, sel_b;
     logic       busy, owner_b;
     logic [8:0] left;
 
-    // Present the winner's request while nothing is in flight. The mux holds
-    // the request until it is taken, and so do the caches (fbr_req is a state
-    // in each), so nothing here needs to latch.
-    wire pick_b = !a_req && b_req;
-    assign fbr_req   = !busy && (a_req || b_req);
-    assign fbr_addr  = pick_b ? b_addr  : a_addr;
-    assign fbr_burst = pick_b ? b_burst : a_burst;
+    assign fbr_req   = sel_valid;
+    assign fbr_addr  = sel_b ? b_addr  : a_addr;
+    assign fbr_burst = sel_b ? b_burst : a_burst;
 
-    assign a_taken = fbr_taken && !busy && !pick_b;
-    assign b_taken = fbr_taken && !busy &&  pick_b;
+    assign a_taken = fbr_taken && sel_valid && !sel_b;
+    assign b_taken = fbr_taken && sel_valid &&  sel_b;
 
     assign a_dout = fbr_dout;
     assign b_dout = fbr_dout;
@@ -67,17 +78,25 @@ module fb_fetch_arb (
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            busy    <= 1'b0;
-            owner_b <= 1'b0;
-            left    <= 9'd0;
+            sel_valid <= 1'b0;
+            sel_b     <= 1'b0;
+            busy      <= 1'b0;
+            owner_b   <= 1'b0;
+            left      <= 9'd0;
         end else begin
-            if (!busy) begin
+            if (sel_valid) begin
                 if (fbr_taken) begin
-                    busy    <= 1'b1;
-                    owner_b <= pick_b;
-                    left    <= {1'b0, fbr_burst};
+                    sel_valid <= 1'b0;
+                    busy      <= 1'b1;
+                    owner_b   <= sel_b;
+                    left      <= {1'b0, fbr_burst};
                 end
-            end else if (fbr_dout_valid) begin
+            end else if (!busy && (a_req || b_req)) begin
+                sel_valid <= 1'b1;
+                sel_b     <= !a_req;
+            end
+
+            if (busy && fbr_dout_valid) begin
                 left <= left - 9'd1;
                 if (left <= 9'd1) busy <= 1'b0;
             end

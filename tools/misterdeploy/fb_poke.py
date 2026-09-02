@@ -22,11 +22,17 @@ Usage (on the MiSTer):
     fb_poke.py ramp      # index = x & 0xFF, a horizontal ramp
     fb_poke.py fill 0x40 # one index everywhere
     fb_poke.py sig       # a per-lane signature: byte j = 0xE0 + j
+
+Every mode also ZEROES THE AUXILIARY REGION for the whole 2048-pixel stride.
+The display's auxiliary line cache skips lines whose overlay and popup bits
+are all zero, and a region left holding a previous build's bytes would keep
+every line flagged until something overwrote it.
 """
 import mmap, os, sys
 
 FB, W, H, STRIDE, PAGE = 0x34000000, 1280, 1024, 2048, 4096
 BPP = 4
+AUX = FB + 0x00800000
 
 
 def mapping(phys, length):
@@ -64,7 +70,11 @@ def main():
         m, off = mapping(FB + (y * STRIDE) * BPP, W * BPP)
         m[off:off + W * BPP] = bytes(row)
         m.close()
-    print(f"wrote {mode} over {W}x{H}")
+    # The auxiliary planes: the full stride, all zero, in one mapping.
+    m, off = mapping(AUX, STRIDE * H * BPP)
+    m[off:off + STRIDE * H * BPP] = bytes(STRIDE * H * BPP)
+    m.close()
+    print(f"wrote {mode} over {W}x{H}, auxiliary planes zeroed")
 
 
 if __name__ == "__main__":

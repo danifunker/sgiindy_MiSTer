@@ -320,6 +320,18 @@ ddr3test:
 # accepts a burst late and returns it in gaps. A cache tested with random
 # addresses would be a different cache.
 #   make linecachetest && ./obj_dir_lcache/Vfb_linecache
+# --- the whole display fetch path: two caches + the arbiter -----------------
+# Against a bridge that latches the request when first seen and issues it
+# later, like ddr3_mux does - the behaviour that deadlocked build 17's
+# arbiter and that neither single-module test could see.
+#   make fetcharbtest && ./obj_dir_fetcharb/Vtb_fetcharb
+fetcharbtest:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_fetcharb --top-module tb_fetcharb \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vtb_fetcharb tb_fetcharb.sv $(RTL)/mister/fb_linecache.sv \
+	   $(RTL)/mister/fb_fetch_arb.sv tb_fetcharb.cpp
+
 linecachetest:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_lcache --top-module fb_linecache \
 	   -GTRACK_ZERO=1 \

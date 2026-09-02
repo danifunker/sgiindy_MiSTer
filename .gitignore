@@ -104,3 +104,4 @@ tests/.*.sh
 verilator/.*.sh
 verilator/.Makefile.unix
 verilator/.lintstub/
+verilator/obj_dir_fetcharb/

@@ -139,12 +139,16 @@ int main(int argc, char **argv)
 
     // A frame buffer's worth of distinct values, one 64-bit word per pair of
     // pixels; lines the display cannot see anything on keep only bits outside
-    // the mask.
+    // the mask. BEYOND THE VISIBLE SPAN THE MEMORY IS GARBAGE ON EVERY LINE:
+    // the cache fetches 672 words for burst alignment but the display shows
+    // 1318 pixels, and on the board nothing ever clears the rest of the line
+    // - the PROM's clear stops at pixel 1342 - so the empty-line test must
+    // not look there. It did once, and no line ever tested empty.
     for (int y = 0; y < V_VIS; y++)
-        for (int x = 0; x < H_VIS; x += 2) {
+        for (int x = 0; x < 1344; x += 2) {
             uint32_t a = ((uint32_t)y * STRIDE + x) * BPP;
             uint64_t v = cell(a);
-            if (!line_visible(y)) v &= ~ZERO_MASK;
+            if (x < H_VIS && !line_visible(y)) v &= ~ZERO_MASK;
             if (v == 0) v = 0xFF000000FF000000ull;     // never all-zero
             mem[a] = v;
         }
@@ -156,6 +160,19 @@ int main(int argc, char **argv)
     for (int i = 0; i < 8; i++) tick();
     dut->reset = 0;
     tick();
+
+    // Flags reset clear, so the visible lines have to be marked the way the
+    // rasteriser marks a line it writes something visible into.
+    for (int y = 0; y < V_VIS; y++)
+        if (line_visible(y)) { dut->mark = 1; dut->mark_line = y; tick(); }
+    dut->mark = 0;
+    // A line marked after its fill shows a frame later, as on the board: the
+    // prefetcher had already published line 0 as zeros before its mark
+    // landed. Restart the frame so frame 0 starts from the settled table.
+    dut->vs = 1; for (int i = 0; i < 3; i++) tick();
+    dut->vs = 0;
+    // ...and give it the vertical blanking a real frame starts with.
+    for (int i = 0; i < (V_TOTAL - V_VIS) * H_TOTAL; i++) tick();
 
     const int FRAMES = 4;
     const int MARKED_LINE = 5;               // an empty line, marked before frame 2
@@ -177,10 +194,10 @@ int main(int argc, char **argv)
         if (dut->miss) { misses[e.frame]++; return; }
         if (!e.visible) return;
         checked++;
-        // Frame 0 fetches everything; afterwards an empty line comes back as
-        // zeros, except the marked one in the frame it was marked for.
+        // A marked line comes back as memory has it; an unmarked one as
+        // zeros, except the one marked before frame 2 in that frame.
         uint32_t wa = e.addr & ~7u;
-        bool fetched = (e.frame == 0) || line_visible(e.y)
+        bool fetched = line_visible(e.y)
                     || (e.frame == 2 && e.y == MARKED_LINE);
         uint64_t want = fetched ? mem[wa] : 0;
         if (dut->px_rdata != want) {
@@ -243,10 +260,11 @@ int main(int argc, char **argv)
           misses[1] == 0 && misses[2] == 0 && misses[3] == 0);
     check("the first frame recovered within a few lines",
           misses[0] <= (uint64_t)H_VIS * 3);
-    // Seven lines in eight are empty, so once the flags have settled the
-    // fetch traffic must drop to a fraction of frame 0's.
-    check("empty lines were not fetched once their flags cleared",
-          bursts[1] * 4 < bursts[0] && bursts[3] * 4 < bursts[0]);
+    // Seven lines in eight are unmarked and must never be fetched: 128
+    // marked lines at six bursts each is 768 a frame, plus the one extra
+    // line in frame 2.
+    check("unmarked lines were never fetched",
+          bursts[0] < 800 && bursts[1] < 800 && bursts[3] < 800);
     check("a marked line was fetched again, then dropped again",
           bursts[2] > bursts[3]);
 

@@ -140,7 +140,39 @@ Verification so far:
   PASS, `run-newport` PASS (1318x1065 exact at `PIX_DIV=1`, the video
   capture lit), `run-rex3` PASS (5162 commands replayed, 1,310,720 pixels
   checked, none unchecked), `run-scsi` PASS. Committed as `52f24ef`, fitted
-  as build 17: **(result below)**.
+  as build 17 (42,229 registers, worst slack +0.055 ns, block memory 52%).
+* **Build 17 on the board: a black screen with one stale line**, the beacon's
+  new word showing both caches missing every pixel and no aux line ever
+  skipped - while `fbgrab.py` through the new layout showed the console
+  picture sitting correctly in the store. So REX3 was right and the fetch
+  path was starved, and the fetch path is the one piece `sim_top` never
+  exercises (it reads the frame buffer through plain one-cycle memories).
+  `tb_fetcharb` was written to close that gap - both caches and the arbiter
+  against a bridge that, like `ddr3_mux`, latches a request's address and
+  burst the first cycle it sees it and issues them later - and it found
+  three things in a row:
+  - the arbiter chose its winner combinationally until `fbr_taken`, so when
+    the aux cache asked first and the drawing cache a cycle later, the mux
+    issued the aux burst while the arbiter credited the drawing cache and
+    waited for a word count that never came: both caches dead in their data
+    phase, the vsync restart never reached. The selection is latched now;
+  - the aux cache took its line number from address bits that include the
+    8 MB region offset, so every request looked like line y+1024 and never
+    hit, and its fills read the drawing region instead of the aux region -
+    the actual cause of the black screen: double traffic starving both
+    caches. `REGION_BASE` is a parameter now;
+  - the empty-line test looked at all 672 fetched words, but the display
+    shows 1318 pixels = 659 words and nothing ever clears the rest of a line
+    (the PROM's clear stops at pixel 1342), so leftover bytes beyond the
+    visible span kept every line flagged (`VIS_WORDS`). And with the flags
+    resetting SET, the first frame fetched both plane sets everywhere and
+    the over-subscribed bus starved the aux fills for several frames; they
+    reset CLEAR now - every visible aux value reaches memory through the
+    rasteriser, which marks its line, so nothing is lost and there is no
+    storm. `fb_poke.py` zeroes the aux region as well.
+  After those: `linecachetest` PASS, `fetcharbtest` PASS with zero misses in
+  every frame including the first and 6912 bursts a frame (6144 drawing +
+  the 128 marked aux lines). Fitted as build 18 together with the audio fix.
 
 ## 3. Board facts established on the way
 
