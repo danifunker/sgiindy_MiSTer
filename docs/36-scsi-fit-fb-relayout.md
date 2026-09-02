@@ -271,3 +271,81 @@ place of our nine `dbg_*`. Its caches fill 32-byte lines (four 64-bit beats)
 over 512 lines = 16 KB; the associativity claim still needs the tag compare
 read. PRId constant 0x2020. So `r4300_wrap.vhd` and `r4300_bus.sv` carry over
 and the work is re-applying the SGI change list to the R4600 files.
+
+## 5. Build 18b verified on the board, and the line the display never showed
+
+Session of 2026-09-02, evening. Build 18b (rbf md5
+`7685736ba4794f453761c52664219d76`, the `f5ffc82` RTL at fitter seed 2) was on
+the board with IRIX at the login chooser; the fit is 34,903 ALMs (83%),
+42,183 registers, 2,921,595 block memory bits (52%), 374 RAM blocks, 51 DSPs.
+
+**The queue's checks, with numbers.** The chooser renders at `PIX_DIV=1`.
+The refresh is 27.9 Hz, measured from the beacon rather than assumed: the
+miss counter below advances by exactly one display line a frame, so
+frames = misses / 1318, and 103 frames took 3.70 s (27.9 Hz), which is
+50 MHz / (1682 x 1065). Root login (`text:root`, Enter) reached the desktop
+in about a minute; `xset m 0 0` typed into the Console made the ws mouse
+deltas 1:1 (259 requested, 259 moved); the toolchest's System menu posted
+and unposted cleanly through the popup planes; the console scrolled its
+`ec0` ALERTs (the CopyArea path) without a wrong pixel. A title-bar drag
+was NOT done: the ws API has no held-button message (`mouseBtn:` is a click,
+`mouseEvent:` exists in the remote binary but its format is unknown) and
+4Dwm has no keyboard move bound, so SCR2SCR rests on the console scroll and
+`run-rex3`. Beacon word 15 (`lcache:`), sampled 6-8 times at ~0.7 s:
+
+| screen | `aux_skips` a frame | `rgb_miss` = `aux_miss` a frame |
+|---|---|---|
+| login chooser | 1024 | 1318 (one line) |
+| desktop, Console + Software Manager | 1022 | 1318 |
+| desktop with the System menu posted | 706 | 1318 |
+
+So the auxiliary cache fetches only the lines that carry something (the
+menu is 318 lines tall: 1024 - 706), and the drawing cache misses nothing -
+except that both counters advance by exactly 1318 pixels every frame, in
+lockstep, at every screen. The 16-bit counters wrap, so this had to be read
+from rapid samples: consecutive deltas were 19 x 1318, 20 x 1318, 22 x 1318,
+never anything else. One whole line a frame, missed by both caches at once.
+
+**Which line, and why.** The bottom row of every monitor screenshot is
+black, and the frame buffer store is one line lower than the screen: the
+chooser's frame edge is store row 157 and screen row 156 (`fbgrab.py` against
+`scripts/grab.sh`, three columns, both edges). So the display asks the caches
+for rows 1..1024 - row 1024 is beyond `LINES` and neither cache ever fills
+it, hence the black row and the lockstep misses - and frame buffer row 0 is
+never shown at all. The VC2 was numbering its lines from 1.
+
+The PROM's `n1280_r3` table, decoded straight out of the PROM image (a
+scanner for the docs/16 run format: seven line kinds, each self-pointing,
+all summing to 841 two-pixel units), has the frame table `(0x0000,1)
+(0x0010,2) (0x0020,3) (0x0010,3) (0x002e,1) (0x003e,31) (0x0050,1023)
+(0x0069,1) (end)`: 41 blanking lines with the vertical sync across lines
+4-6, then 1023 visible lines and one visible variant, then the wrap. Every
+visible line's display enable runs into its end-of-line run, so the enable
+falls at the moment the generator starts the end-of-line lookup - during
+which `np_vc2.sv` stalls the pixel ticks - and the falling edge, which is
+the line advance, was detected only on the next pixel tick, gated behind
+`ce_pix`. For 1023 lines that is merely late. For the last one the frame
+wrap (`VT_FRAME_CNT` reading the zero count) had already reset `y_ctr` to 0
+before that tick came, and the deferred advance then made it 1. Everything
+downstream - the DID walk, the cursor row, the fetch address - was
+consistently one line off, which is why nothing looked wrong and only the
+beacon and the store/screen comparison could see it.
+
+**The fix (`np_vc2.sv`):** the enable's falling edge is watched every clock,
+so the advance lands the clock after the enable falls and always before the
+wrap; and the wrap now preps row 0's cursor row itself (`curs_cy0`, from
+CURSOR_Y rather than the working copy that the same cycle loads) - the
+advance had been doing that for "row 1" and nothing did it for row 0.
+`tb_vc2.cpp` gained two checks that fail on the old RTL - "the first
+visible line of a frame is frame buffer row 0" read row 1, and the last
+line row 288 of a 300-line frame - and pass on the new: rows 0..299, 300
+lines, cursor and DID checks unchanged. The whole-machine simulator
+reproduced the board exactly before the fix: `--viddump` against
+`--fbdump`, pins row 39 showing store row 1, 1023 lit rows of a 1024-row
+store. (`tests/run-newport.sh` checks the raster's size, which was right all
+along; a size check cannot see a one-line shift.)
+
+Also learned: two Quartus fits of another project (MacQuadra800, a different
+session) were running on this box when this session started, which is why
+no sgiindy fit was launched until they finished - the docs/37 trap applies
+across projects, not just across sessions of this one.

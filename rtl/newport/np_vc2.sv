@@ -263,6 +263,13 @@ module np_vc2 #(
                      && (curs_cy < (curs_size64 ? 13'sd64 : 13'sd32));
     wire [5:0] curs_cy6 = curs_cy[5:0];
 
+    // The same for frame buffer row 0, which the frame wrap starts rather than
+    // a line advance. From CURSOR_Y itself rather than the working copy, since
+    // the wrap is the moment the working copy is loaded from it.
+    wire signed [12:0] curs_cy0 = 13'sd31 - $signed({2'b0, regs[R_CURSOR_Y][10:0]});
+    wire curs_row0_ok = curs_en && (curs_cy0 >= 13'sd0)
+                     && (curs_cy0 < (curs_size64 ? 13'sd64 : 13'sd32));
+
     wire [14:0] curs_a = curs_size64
         ? curs_base + {7'b0, curs_row_i, 2'b0} + {13'b0, curs_i}
         : (curs_i[1] ? curs_base + 15'd64 + {8'b0, curs_row_i, 1'b0} + {14'b0, curs_i[0]}
@@ -498,34 +505,39 @@ module np_vc2 #(
             end else if (ce_pix) begin
                 pix_div_ctr <= 16'h0;
                 pix_phase   <= ~pix_phase;
-                de_d        <= de;
                 if (!de) x_ctr <= 11'h0;
                 else     x_ctr <= x_ctr + 11'd1;
-                // The end of a visible span is the line advance. Blanking
-                // lines do not move the frame buffer row, so this counts
-                // displayed lines rather than total lines.
-                if (de_d && !de) begin
-                    y_ctr <= y_ctr + 11'd1;
-                    // THE LINE HAS JUST ENDED, so there are hundreds of blank
-                    // pixel times before the next one needs its cursor row.
-                    // Four reads is all it takes and nothing else wants the
-                    // port badly enough to notice.
-                    curs_step   <= curs_next_ok ? 3'd1 : 3'd0;
-                    curs_row_ok <= curs_next_ok;
-                    curs_row_i  <= curs_cy6;
-                    // The DID walk for the next line starts here too; its
-                    // reads queue behind the cursor's on the shared port.
-                    did_kick    <= 1'b1;
-                    did_y       <= y_ctr + 11'd1;
-`ifdef VC2_CURSOR_DEBUG
-                    dbg_line_pix <= 16'd0;
-                    if (y_ctr > 11'd35 && y_ctr < 11'd75)
-                        $display("[VC2] end of line %0d: row_ok_during=%0d pixels=%0d | next cy=%0d ok=%0d",
-                                 y_ctr, curs_row_ok, dbg_line_pix, curs_cy, curs_next_ok);
-`endif
-                end
             end else begin
                 pix_div_ctr <= pix_div_ctr + 16'd1;
+            end
+            // Watched every clock, not only on pixel ticks: the enable falls
+            // into the end-of-line lookup, which stalls the ticks, and on the
+            // last visible line the frame wrap resets the row counter before
+            // the next tick - a fall counted after that numbered every frame
+            // 1..N, showed row 0 nowhere and asked the fetch for row N.
+            de_d <= de;
+            // The end of a visible span is the line advance. Blanking
+            // lines do not move the frame buffer row, so this counts
+            // displayed lines rather than total lines.
+            if (de_d && !de) begin
+                y_ctr <= y_ctr + 11'd1;
+                // THE LINE HAS JUST ENDED, so there are hundreds of blank
+                // pixel times before the next one needs its cursor row.
+                // Four reads is all it takes and nothing else wants the
+                // port badly enough to notice.
+                curs_step   <= curs_next_ok ? 3'd1 : 3'd0;
+                curs_row_ok <= curs_next_ok;
+                curs_row_i  <= curs_cy6;
+                // The DID walk for the next line starts here too; its
+                // reads queue behind the cursor's on the shared port.
+                did_kick    <= 1'b1;
+                did_y       <= y_ctr + 11'd1;
+`ifdef VC2_CURSOR_DEBUG
+                dbg_line_pix <= 16'd0;
+                if (y_ctr > 11'd35 && y_ctr < 11'd75)
+                    $display("[VC2] end of line %0d: row_ok_during=%0d pixels=%0d | next cy=%0d ok=%0d",
+                             y_ctr, curs_row_ok, dbg_line_pix, curs_cy, curs_next_ok);
+`endif
             end
             vert_int_n_d <= state_c[0];
 
@@ -653,6 +665,9 @@ module np_vc2 #(
                         // cursor vertically - VT_VPOS_VC_N - which is what
                         // makes CURSOR_Y safe to write at any time.
                         regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
+                        curs_step   <= curs_row0_ok ? 3'd1 : 3'd0;
+                        curs_row_ok <= curs_row0_ok;
+                        curs_row_i  <= curs_cy0[5:0];
                         // Row zero's DID walk has no line-end to hang off.
                         did_kick   <= 1'b1;
                         did_y      <= 11'd0;
@@ -678,6 +693,9 @@ module np_vc2 #(
                         // cursor vertically - VT_VPOS_VC_N - which is what
                         // makes CURSOR_Y safe to write at any time.
                         regs[R_WORK_CURSOR_Y] <= regs[R_CURSOR_Y];
+                        curs_step   <= curs_row0_ok ? 3'd1 : 3'd0;
+                        curs_row_ok <= curs_row0_ok;
+                        curs_row_i  <= curs_cy0[5:0];
                             did_kick   <= 1'b1;
                             did_y      <= 11'd0;
                             vt         <= VT_FRAME_PTR0;

@@ -274,6 +274,12 @@ int main(int argc, char **argv)
     int curs_x_min = 1 << 20, curs_x_max = -1;
     int curs_y_min = 1 << 20, curs_y_max = -1;
     uint64_t curs_row_hits[40] = {0};
+    // The frame buffer row VC2 claims for the first and last visible line
+    // of a settled frame. The line counter resets when the frame table
+    // wraps, which in every real table is right after the last visible
+    // line - and that line's display-enable fall was once counted AFTER the
+    // reset, numbering every frame 1..N and never showing row 0 at all.
+    int first_y = -1, last_y = -1, de_lines = 0, last_full_y = -1, full_lines = 0;
 
     for (uint64_t i = 0; i < budget; i++) {
         tick();
@@ -282,6 +288,13 @@ int main(int argc, char **argv)
         if (hs && !hs_d) { hsyncs++; if (y < 4096) y++; x = 0; hs_run = 0; }
         if (vs && !vs_d) { vsyncs++; if (frames) { seen_h = y; } frames++; y = 0; }
         if (de && !de_d) de_rises++;
+        if (frames >= 2) {
+            if (vs && !vs_d) { last_full_y = last_y; full_lines = de_lines; first_y = -1; de_lines = 0; }
+            if (de && !de_d) {
+                if (first_y < 0) first_y = (int)dut->pix_y;
+                last_y = (int)dut->pix_y; de_lines++;
+            }
+        }
         if (ce && hs)    hs_run++;
         if (!hs && hs_d) { hs_width = hs_run; if (hs_width) hs_width_seen = hs_width; }
         if (ce && de)    { x++; if (x > seen_w) seen_w = x; }
@@ -342,6 +355,12 @@ int main(int argc, char **argv)
           hs_width_seen == want_hswide);
     check("one display-enable pulse per visible line",
           de_rises >= (uint64_t)V_VIS * (uint64_t)(frames - 1) && de_rises > 0);
+    printf("     rows: first visible line is row %d, last is row %d, %d lines\n",
+           first_y, last_full_y, full_lines);
+    check("the first visible line of a frame is frame buffer row 0",
+          first_y == 0);
+    check("the last visible line of a frame is the row the table's count says",
+          last_full_y == V_VIS - 1 && full_lines == V_VIS);
 
     printf("     cursor: %llu pixels, x %d..%d, y %d..%d (want %d..%d, %d..%d)\n",
            (unsigned long long)curs_pixels, curs_x_min, curs_x_max,
