@@ -13,8 +13,9 @@ Steps:
   kbdRaw:<n>    raw uinput code (F12=88; letters jump the file browser:
                 D=32, S=31, I=23 ...)
   text:<string> type a string at the guest, one keystroke per character, using
-                the ASCII table below. Unshifted keys only - "hinv\\r" rather
-                than four kbdRaw steps and an enter.
+                the ASCII table below. "hinv\\r" rather than four kbdRaw steps
+                and an enter. Capitals and shifted symbols are typed with
+                LEFTSHIFT held around the key (kbdRawDown:42 .. kbdRawUp:42).
   mouseMove:<dx>,<dy>   RELATIVE mouse move (the guest sees a mouse delta)
   mouseBtn:<name>       mouse button: left / right / middle
   sleep:<sec>   pause between steps (OSD needs ~0.3-0.8 s to redraw)
@@ -54,15 +55,24 @@ KEYCODE = {
     "\\": 43, ",": 51, ".": 52, "/": 53, " ": 57,
     "\n": 28, "\r": 28, "\t": 15,
 }
+# The shifted twin of each unshifted symbol. A capital letter is its own
+# lowercase key plus SHIFT; these are the symbols that need the same.
+SHIFTED = {
+    "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7",
+    "*": "8", "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]",
+    ":": ";", '"': "'", "~": "`", "|": "\\", "<": ",", ">": ".", "?": "/",
+}
+KEY_LEFTSHIFT = 42
 
 
 def expand_text(text):
     """A `text:` step becomes one kbdRaw step per character.
 
-    Unshifted characters only. A capital letter or a symbol that needs SHIFT is
-    refused rather than silently typed as its lowercase twin - a command that
-    quietly loses a character is worse than one that will not run, because the
-    PROM answers both with a syntax error and only one of them is your fault.
+    A capital letter or a shifted symbol becomes SHIFT-down, key, SHIFT-up: the
+    guest sees a real shifted keystroke, which is what a shell needs for /CDROM
+    or a pipe. Anything outside the two tables is refused rather than silently
+    typed as something else - a command that quietly loses a character is
+    worse than one that will not run.
     """
     # A shell cannot easily hand this an actual carriage return, so the
     # two-character forms are taken as the real thing - `text:hinv\r` is the
@@ -70,10 +80,16 @@ def expand_text(text):
     text = (text.replace("\\r", "\r").replace("\\n", "\n").replace("\\t", "\t"))
     steps = []
     for ch in text:
-        code = KEYCODE.get(ch.lower() if ch.isalpha() else ch)
-        if code is None or (ch.isalpha() and ch != ch.lower()):
-            raise SystemExit("ws_send: cannot type %r - unshifted keys only" % ch)
-        steps.append("kbdRaw:%d" % code)
+        shifted = (ch.isalpha() and ch != ch.lower()) or ch in SHIFTED
+        base = ch.lower() if ch.isalpha() else SHIFTED.get(ch, ch)
+        code = KEYCODE.get(base)
+        if code is None:
+            raise SystemExit("ws_send: cannot type %r - not in the key table" % ch)
+        if shifted:
+            steps += ["kbdRawDown:%d" % KEY_LEFTSHIFT, "kbdRaw:%d" % code,
+                      "kbdRawUp:%d" % KEY_LEFTSHIFT]
+        else:
+            steps.append("kbdRaw:%d" % code)
     return steps
 
 
