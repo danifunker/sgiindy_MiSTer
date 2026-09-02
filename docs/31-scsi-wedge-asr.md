@@ -82,12 +82,44 @@ and every segment re-arms through the same unex_info path, so the pause code
 must keep firing per segment (it does: CP_XFER_COUNT is set on each 1→0
 count decrement).
 
-## The fix
+## The fix, first try: build 10, and what it taught about bit 5
 
-`f9b86c6`: ASR bit 5 constant 0 + the `sat_paused` resume arm, beacon
-version 4. Build 10. [Result section below filled in after deploy.]
+`f9b86c6` made ASR bit 5 a constant 0 ("Level I busy, never set, like
+IRIS") plus the `sat_paused` resume arm, beacon version 4. **Build 10 broke
+the PROM boot**: `Boot device not responding: scsi(0)disk(1)...` before IRIX
+ever loaded. The give-up state on the beacon: target 1 parked mid-CDB on the
+op=03 REQUEST SENSE (the "benign" boot-time park docs/29's sticky had been
+recording on every boot), `R_CMD=04` (Disconnect), `intp=1` abandoned,
+counters frozen - and `rst_load` stuck at 2 where build 9's boots counted it
+climbing.
 
-## Build 10 on the board
+The PROM's own binary explains it (boot.rom, all offsets ROM-resident):
+
+* Command issue (`0x9fc1f64c` area) waits on **CIP (0x10)** and handles
+  **LCI (0x40) + INT (0x80)** - the eat-stale-interrupt dance the LCI rule
+  in the R_COMMAND handler was built from. No bit 5 there.
+* But the command-abort CLEANUP (0x9fc1c650..0x9fc1c740) is **gated on ASR
+  bit 5**: read ASR, `andi 0x20`; only if set does it Disconnect, eat the
+  pending interrupt, re-check, and - if the bus is STILL engaged - call the
+  bus-reset routine at 0x9fc1e6fc. That reset is what frees the parked
+  target on every boot (build 9's climbing `rst_load`). Bit 5 = 0 made the
+  cleanup `beqz` straight past its own recovery.
+
+So the two drivers want different things from bit 5 at chip-identical
+moments (idle, INT pending, bus BSY held): the PROM's cleanup needs it SET
+for an abandoned connection; IRIX's handle_intr needs it CLEAR at the
+segmented-transfer pause. The one state bit that separates those moments is
+`sat_paused` - the pause is the only time the chip itself has parked the
+connection on purpose, expecting a resume. Hence the final rule:
+
+    ASR.BSY = scsi_bsy && !sat_paused
+
+which is byte-identical to the old always-bus-BSY behaviour everywhere the
+PROM can observe (it never triggers the pause path - its transfers never
+exhaust the count mid-phase), and reads 0 for exactly the stretch from the
+pause interrupt to the accepted resume that IRIX's ISR needs to traverse.
+
+## Build 11 on the board
 
 TO BE FILLED IN.
 

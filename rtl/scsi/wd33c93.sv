@@ -122,26 +122,55 @@ module wd33c93 #(
     logic [7:0] reg_file [32];
     logic [4:0] ar;                 // the address latch
 
+    // A Select-and-Transfer paused at count zero with the target still
+    // connected (the docs/29 segmented-transfer pause). This flag - not the
+    // Command Phase register - is what arms the resume path in the R_COMMAND
+    // handler, because IRIX's unex_info() REWRITES the phase register (to
+    // 0x45, or 0x44 without sync) before setdest() issues the resuming
+    // SELECT_ATN_XFER, so matching on CP_XFER_COUNT there never fires on the
+    // real driver. Proven by disassembly of /unix 5.3: unex_info
+    // (0x880b2fa4..0x880b2fd4) writes reg 0x10 first, command 0x08 last.
+    // It also carves the pause out of ASR bit 5 below. Set at the pause,
+    // cleared on resume/selection/C_RESET/C_ABORT/chip reset/ST_SAT_END.
+    logic        sat_paused;
+
     // ---- Auxiliary Status Register ---------------------------------------
     // bit 0 DBR - a data byte is ready to read, or the chip wants one written
     // bit 4 CIP - a command is in progress; the driver must not issue another
-    // bit 5 BSY - a LEVEL I COMMAND is executing. NOT the SCSI bus BSY line.
-    //             IRIX 5.3's handle_intr (wd93intr, /unix 0x880b2144) spins
-    //             on `ASR & 0x30` before it will read any register - and a
-    //             transfer paused at count zero leaves the target holding bus
-    //             BSY for as long as the pause lasts, so mirroring the bus
-    //             here parks the ISR in that three-instruction loop forever
-    //             and the pause interrupt is never acknowledged (that was the
-    //             second half of the docs/29 fsck wedge). Every Level I
-    //             command in this model completes within the register write
-    //             that issues it, so the honest value is a constant 0 - which
-    //             is also what IRIS reports (src/wd33c93a.rs never sets
-    //             asr::BSY, and the same IRIX boots there).
+    // bit 5 BSY - the SCSI bus is still engaged, EXCEPT during a transfer this
+    //             chip itself paused for resume. Both halves of that sentence
+    //             were read out of the drivers' own binaries, and each one is
+    //             load-bearing:
+    //
+    //             * The bus half is what the PROM's command-abort cleanup is
+    //               gated on (boot.rom 0x9fc1c69c / 0x9fc1c6ec: read ASR,
+    //               `andi 0x20`, and only if set: Disconnect, eat the pending
+    //               interrupt, and if STILL set call the bus-reset routine at
+    //               0x9fc1e6fc). A target abandoned mid-command - the benign
+    //               boot-time op=03 park in docs/29's sticky - holds BSY
+    //               forever, and this cleanup is the only thing that frees
+    //               it. Reporting 0 here made the PROM skip straight past its
+    //               own recovery and declare "Boot device not responding"
+    //               (build 10).
+    //
+    //             * The pause carve-out is what IRIX's handle_intr needs
+    //               (/unix 0x880b2144: spin while `ASR & 0x30` before reading
+    //               ANY register). A count-exhaustion pause leaves the target
+    //               holding bus BSY by design, so reporting the bus during
+    //               sat_paused parks the ISR in that three-instruction loop
+    //               forever and the pause interrupt is never acknowledged,
+    //               whatever status code it carries - which is why 0x48, 0x19
+    //               and 0x49 all wedged fsck identically (docs/29-31).
+    //               sat_paused stays up through unex_info's whole re-arm
+    //               window and drops when the resuming Select-and-Transfer is
+    //               accepted, so the bit reads 0 for exactly the stretch the
+    //               driver services the pause.
     // bit 6 LCI - the last command was ignored (issued while CIP)
     // bit 7 INT - an interrupt is pending. Reading SCSI_STATUS clears it, and
     //             that read is what a driver uses to find out what happened.
     logic dbr, cip, lci, int_pending;
-    wire [7:0] asr = {int_pending, lci, 1'b0, cip, 3'b000, dbr};
+    wire [7:0] asr = {int_pending, lci, scsi_bsy && !sat_paused, cip,
+                      3'b000, dbr};
 
     // ---- commands ---------------------------------------------------------
     localparam logic [7:0] C_RESET        = 8'h00;
@@ -284,15 +313,6 @@ module wd33c93 #(
     // pause must outlast that tail. 4096 cycles is ~126 us at clk_sys: three
     // orders above the tail, three under the driver's 60 s watchdog.
     logic [11:0] sat_pause_cnt;
-    // A Select-and-Transfer paused at count zero with the target still
-    // connected (the docs/29 segmented-transfer pause). This flag - not the
-    // Command Phase register - is what arms the resume path in the R_COMMAND
-    // handler, because IRIX's unex_info() REWRITES the phase register (to
-    // 0x45, or 0x44 without sync) before setdest() issues the resuming
-    // SELECT_ATN_XFER, so matching on CP_XFER_COUNT there never fires on the
-    // real driver. Proven by disassembly of /unix 5.3: unex_info
-    // (0x880b2fa4..0x880b2fd4) writes reg 0x10 first, command 0x08 last.
-    logic        sat_paused;
 
     // BSY is the OR of every target's, so "a target is on the bus" and "the
     // target I just selected answered" are not the same question. Selection
