@@ -45,6 +45,7 @@ SIM="$ROOT/verilator/obj_dir/Vsim_top"
 PROM="${PROM:-$ROOT/roms/IP24_Indy/ip24prom.070-9101-011.bin}"
 OUT="$ROOT/tests/out/newport-console.txt"
 FB="$ROOT/tests/out/newport-fb.ppm"
+VID="$ROOT/tests/out/newport-pins.ppm"
 
 # How many lit pixels count as "it drew something". The PROM's boot screen is
 # a filled background and a logo; a few hundred thousand pixels is what that
@@ -65,7 +66,7 @@ mkdir -p "$(dirname "$OUT")"
 
 echo "booting $(basename "$PROM") with Newport fitted ..."
 out="$("$SIM" --prom "$PROM" --max-cycles 90000000 --stuck 80000000 \
-       --fbdump "$FB" --console "$OUT" 2>&1)"
+       --fbdump "$FB" --viddump "$VID" --console "$OUT" 2>&1)"
 
 fail=0
 check() {   # check <description> <test-expression-result>
@@ -135,6 +136,14 @@ fi
 
 echo
 echo "console output is in ${OUT#"$ROOT"/}"
+# THE RASTER MUST SHOW THE STORE ROW FOR ROW. The size check above passed on
+# build 18b while the display showed frame buffer row 1 on its first line and
+# never row 0 (docs/36 section 5): tests/vidshift.py aligns where the rows
+# change on the pins with where they change in the store.
+vs="$(python3 "$ROOT/tests/vidshift.py" "$VID" "$FB" 2>&1)"; vsrc=$?
+echo "$vs" | sed 's/^/  /'
+check "the raster shows the store row for row (vidshift.py)" "$([[ $vsrc -eq 0 ]] && echo ok)"
+
 echo "frame buffer is in ${FB#"$ROOT"/}"
 [[ $fail -eq 0 ]] && echo "NEWPORT: PASS"
 exit $fail

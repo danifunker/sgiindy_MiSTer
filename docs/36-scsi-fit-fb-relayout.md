@@ -291,7 +291,11 @@ and unposted cleanly through the popup planes; the console scrolled its
 was NOT done: the ws API has no held-button message (`mouseBtn:` is a click,
 `mouseEvent:` exists in the remote binary but its format is unknown) and
 4Dwm has no keyboard move bound, so SCR2SCR rests on the console scroll and
-`run-rex3`. Beacon word 15 (`lcache:`), sampled 6-8 times at ~0.7 s:
+`run-rex3`. `hinv -c audio` in that console printed nothing (no audio
+device, as intended), and `init 0` typed there drew the "The system is
+shutting down. Please wait." notice over a greyed desktop and halted
+cleanly - the greying draw whose absence was the original "shutdown hang"
+report. Beacon word 15 (`lcache:`), sampled 6-8 times at ~0.7 s:
 
 | screen | `aux_skips` a frame | `rgb_miss` = `aux_miss` a frame |
 |---|---|---|
@@ -342,8 +346,14 @@ line row 288 of a 300-line frame - and pass on the new: rows 0..299, 300
 lines, cursor and DID checks unchanged. The whole-machine simulator
 reproduced the board exactly before the fix: `--viddump` against
 `--fbdump`, pins row 39 showing store row 1, 1023 lit rows of a 1024-row
-store. (`tests/run-newport.sh` checks the raster's size, which was right all
-along; a size check cannot see a one-line shift.)
+store. `tests/run-newport.sh` checks the raster's size, which was right all
+along; a size check cannot see a one-line shift, so it now also runs
+`tests/vidshift.py`, which aligns the rows where the pins picture changes
+with the rows where the store changes (the boot screen's gradient gives
+150 of them a frame; the store is an index and the pins a colour, so values
+cannot be compared but transitions can). On 18b's capture: 1023 rows
+displayed of 1024, 134 of 152 transitions one row off; on the fix: 1024
+rows, 153 of 153 in place.
 
 Also learned: two Quartus fits of another project (MacQuadra800, a different
 session) were running on this box when this session started, which is why

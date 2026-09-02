@@ -240,7 +240,13 @@ and the frame buffer instead of on text. The frame size is checked exactly —
 1318 x 1065, which is what walking `n1280_r3` out of `np_timing.h` by hand
 gives — because VC2's timing generator is an interpreter for a table the PROM
 loads, and for an interpreter "close" is a bug. The frame buffer is written to
-`tests/out/newport-fb.ppm` so a failure can be looked at.
+`tests/out/newport-fb.ppm` and the last complete frame off the pins to
+`tests/out/newport-pins.ppm`, and `tests/vidshift.py` then insists the raster
+shows the store **row for row**: it aligns the rows where the pins picture
+changes with the rows where the store changes (the boot screen's gradient
+gives about 150 of them). A size check alone passed on a build whose VC2
+numbered its lines from 1 and never showed frame buffer row 0 (docs/36
+section 5); this one fails it.
 
 ## `run-rex3.sh` — every pixel against every command
 
