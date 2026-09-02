@@ -242,6 +242,18 @@ the whole machine: `run-prom` PASS, `run-scsi` PASS, `run-cdrom` PASS (the
 PROM boots, lists the disk and the drive, prints no audio line). Fitted as
 build 18 together with the fetch-path fixes.
 
+**A timing note, build 18 -> 18b.** Build 18's fit met every clock but the
+HDMI PLL domain (the MiSTer scaler), which it missed by 0.176 ns - the same
+domain build 17 met by 0.055. `scripts/build.sh` grew a `SEED=n` knob for
+exactly this margin; `SEED=2` refit it to +0.616 ns (build 18b, rbf md5
+`7685736ba4794f453761c52664219d76`), same RTL. The console text shows a few
+thin vertical strokes rounded away by the scaler's 1280-to-HDMI downscale
+("cloc<" for "clock"), identical between build 18 and 18b and present on the
+known-good builds 15 and 16 - the frame buffer STORE is byte-clean (an
+index-plane dump of the boot text reads correctly), so it is a capture/
+downscale artifact, not the timing violation and not the relayout. 18b is
+the build to keep.
+
 **Verified on the board, build 18:** toolchest System -> System Shutdown
 posts its "Power off and set boot time ... Are you sure?" dialog with the
 CPU idling (beacon PCs in the idle loop, none in `bzero`), an error dialog
