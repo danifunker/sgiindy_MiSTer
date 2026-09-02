@@ -178,10 +178,14 @@ module wd33c93 #(
     // another Select-and-Transfer (see the resume arm at C_SEL_XFER below).
     // IRIS posts exactly these values from the same situation
     // (src/wd33c93a.rs queue_interrupt(TRANSFER_COUNT, 0x48/0x49) in its
-    // chunked DMA paths), and 0x4A/0x4B/0x4E/0x4F in its table confirm the
-    // base|phase rule (COMMAND/STATUS/MSG OUT/MSG IN land on their phase
-    // codes exactly).
-    localparam logic [7:0] S_UNEX_INFO      = 8'h48;
+    // chunked DMA paths). NOTE the data phases DO NOT follow base|phase: the
+    // group's low bit is inverted for them - 0x48 is DATA IN (phase 001) and
+    // 0x49 is DATA OUT (phase 000), the opposite of what 0x48|phase gives.
+    // COMMAND (0x4A), STATUS (0x4B), MSG OUT (0x4E) and MSG IN (0x4F) do land
+    // on 0x48|phase, but the pause only ever fires in a data phase, so only
+    // these two are used.
+    localparam logic [7:0] S_UNEX_RECV_DATA = 8'h48;  // unexpected DATA IN
+    localparam logic [7:0] S_UNEX_SEND_DATA = 8'h49;  // unexpected DATA OUT
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
@@ -944,8 +948,16 @@ module wd33c93 #(
                         if (&sat_pause_cnt) begin
                             cip         <= 1'b0;
                             dbr         <= 1'b0;
+                            // 0x48 RECV (DATA IN) / 0x49 SEND (DATA OUT).
+                            // NOT base|phase: this group inverts the I/O bit
+                            // for the data phases (IRIS posts 0x48 from its
+                            // DMA-IN pause, 0x49 from DMA-OUT; only its
+                            // COMMAND/STATUS/MSG codes follow base|phase).
+                            // The pause fires only in a data phase, so these
+                            // two are exhaustive.
                             reg_file[R_SCSI_STATUS] <=
-                                S_UNEX_INFO | {5'b0, phase};
+                                (phase == PH_DATA_IN) ? S_UNEX_RECV_DATA
+                                                      : S_UNEX_SEND_DATA;
                             int_pending <= 1'b1;
                             // dma_in_data is left alone: the data phase is
                             // still open, and the resume path below re-enters
