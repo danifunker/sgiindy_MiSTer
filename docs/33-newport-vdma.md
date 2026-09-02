@@ -1,0 +1,136 @@
+# 33 - The Newport pixel-DMA black screen: the MC's VDMA engine was never built
+
+**Status: fix implemented and sim-verified; this section's board result is
+recorded at the bottom.** Follows [32-resume-newport-dma.md](32-resume-newport-dma.md).
+Work done 2026-09-02.
+
+## The symptom
+
+IRIX 5.3 boots to multiuser (docs/29-31), X starts, the screen goes black.
+The kernel logs `ng1 pixel dma write timeout`; X draws its hardware cursor
+and nothing else. The PROM console, fsck transcript and boot text all render
+correctly, so the framebuffer and scan-out path were never suspects.
+
+## The diagnosis, from the driver binary (zero fits spent)
+
+Following the docs/31 method: `efsread.py IMAGE get /unix`, then
+`ecoffsyms.py` + `disbin.py` on the ng1 driver. The whole chain:
+
+* **`Ng1PixelDma` (0x88190080)** is the kernel end of every pixel X moves.
+  It does NOT program the Newport to fetch anything. It:
+  1. takes the mcgdma lock, calls `vdma_set_tlb` (0x880fd418) to program
+     the **MC chip's four-entry DMA µTLB** with the user buffer's page
+     table, printing `ng1: vdma_set_tlb failed!` if that fails;
+  2. builds a descriptor: memory vaddr, `{lines<<16|width}`, `{yinc<<16|
+     stride}`, and a GIO address = physical address of the REX3 **HOSTRW
+     window** + the page offset X passed in (always HOSTRW0|GO = offset
+     0xA30 - IRIS's dma path accepts nothing else);
+  3. spins on REX3 `USER_STATUS` (0x133C) bit 3 until the drawing engine
+     is idle;
+  4. installs `ng1_dma_intr` on **local interrupt vector 4** =
+     INT2 **LOCAL0 bit 4**, the MC DMA-done line (`setlclvector(4, ...)`
+     at 0x881904dc), starts the `ng1dmatimer` timeout, and calls
+     **`MCdma` (0x880fd2b4)**;
+  5. sleeps on the `ng1dmaintr` semaphore. If the interrupt never comes,
+     the timer fires: `ng1 pixel dma %s timeout`.
+
+* **`MCdma`** programs the MC's GIO64 DMA engine registers (all big-endian
+  low-word addresses, base 0x1FA00000): clears CAUSE (0x164), sets CTL
+  (0x16C) to XLATE|INT_ENABLE (0x110), writes MEMADR (0x2004), MODE
+  (0x2034 = **0x50** for writes = LONG|DIR, **0x52** for reads adds
+  TO_HOST), SIZE (0x2014), STRIDE (0x201C), and starts the transfer with
+  the write to **GIO_ADRS (0x202C)**. `ng1intrena` is 1 in the shipped
+  kernel: the interrupt path is the default, not an option.
+
+* **`ng1_dma_intr` (0x8818be54)** requires `DMA_RUN & 8` (the COMPLETE
+  cause mirrored into RUN's low nibble) on success, retires the interrupt
+  by writing **0 to DMA_CAUSE**, and wakes the semaphore. On a fault it
+  reads the written-back MEMADR, lets `vdma_fault` fix the page, and
+  restarts the transfer by writing 1 to **STDMA (0x2044)**.
+
+## What the RTL actually had
+
+Four independent gaps, all in the same chain ([sgi_mc.sv](../rtl/sgi/sgi_mc.sv),
+[mc_gio_dma.sv](../rtl/sgi/mc_gio_dma.sv), [sgi_indy.sv](../rtl/sgi/sgi_indy.sv)):
+
+1. **`mc_gio_dma` implemented fill-to-memory only** - the PROM's boot
+   memory clear. Mem->GIO and GIO->Mem "reported an instantly-finished
+   transfer" without moving a byte, by design, from before the Newport
+   existed ("this machine HAS no GIO64 device").
+2. **No µTLB translation** (DMA_CTL bit 8). The engine never saw the TLB
+   registers at all; IRIX's source addresses are user-space virtual.
+3. **The DMA-done interrupt was not wired**: `l0_source` bit 4 in
+   sgi_indy.sv was constant zero, and sgi_mc had no interrupt output.
+   Even an instantly-completing stub therefore timed X out.
+4. **No path from the MC to the Newport**: the engine's only bus master
+   went to the RAM arbiter. GIO addresses had nowhere to go.
+
+Plus a fifth, found while building the fix against IRIS's walk loop:
+
+5. **np_rex3's DR_STEP checked word-end before row-end.** In host mode a
+   row boundary is a forced word boundary (IRIS breaks with x already
+   wrapped to XSAVE and y advanced); the RTL instead ended the primitive
+   with x stepped PAST the row. The PROM never saw it - its host-mode
+   transfers are one-word primitives - but a DMA'd image hits it on every
+   row, and every row after the first would have landed outside its
+   rectangle.
+
+## The fix (all against IRIS's src/mc.rs `dma_worker`/`translate_addr`)
+
+* **mc_gio_dma.sv rewritten**: fill (unchanged semantics, now with
+  translation), mem->GIO (pack up to 8 bytes MSB-first per 64-bit beat,
+  all beats to the same GIO address, short final beat zero-padded),
+  GIO->mem (the reverse), and the µTLB: tag = vaddr[31:22], PTE fetched
+  from physical memory by the engine itself (ctl bit 0 = 4/8-byte PTE,
+  bit 1 = 4/16 KB page), PTE bit 1 valid / bit 2 writable, faults set
+  DMA_CAUSE FAULT/TLB_MISS/CLEAN and always interrupt. One-entry
+  translation cache. Descending copies stay unimplemented (nothing issues
+  them) and keep the old skip-and-report behaviour.
+* **sgi_mc.sv**: passes the TLB to the engine; a transfer's end sets
+  COMPLETE (only under INT_ENABLE - pollers watch RUN), mirrors cause
+  into RUN's low nibble, writes back MEMADR/SIZE/COUNT exactly as IRIS
+  does (the ISR's fault-restart path reads them), and drives the new
+  `dma_int` level - raised on completion-under-IE or any fault, cleared
+  by writing 0 to CAUSE. The engine's final-stride writeback matches
+  IRIS: the stride is applied after the LAST line too.
+* **sgi_indy.sv**: routes the engine's GIO beats into the Newport
+  (anything outside the graphics window answers zero, like the memory
+  hole path); wires `dma_int` to L0 bit 4; wires the VC2 vblank level to
+  L1 bit 7 (the vertical retrace interrupt, IRIS's exact shape - it was
+  also unwired).
+* **np_rex3.sv**: a 64-bit VDMA host port. A write beat is IRIS's
+  HOSTRW64 push - both host words and GO in one edge, applied under the
+  same engine-idle rules as a held CPU write. A read beat is IRIS's
+  `dma_read64` - GO first, wait for the engine, then take HOSTRW. And the
+  DR_STEP row/word ordering fix above.
+* **Beacon**: ver=6, words 11-13 = MC engine state, live descriptor
+  addresses, REX3 beat counters. `bcnread.py` decodes them.
+
+## Verification before the fit
+
+* `make -C verilator mcdmatest` - **tb_mcdma.cpp rewritten** as a
+  transcription of IRIS's loops including translation: 24 descriptors
+  (fill suite unchanged, plus aligned/unaligned/multi-line copies, page
+  crossings, 8-byte PTEs, TLB-miss/invalid-PTE/clean faults, both
+  directions) x 2 ack timings - all pass, including final-MEMADR
+  writeback equality.
+* `make -C verilator rex3test` - tb_rex3.cpp grew a VDMA phase: a 32x4
+  image streamed as 16 beats through the nd port lands pixel-for-pixel,
+  and an OP_READ beat returns the bytes just drawn.
+* `tests/run-rex3.sh` - the per-pixel replay of the whole PROM console
+  boot, against the DR_STEP reorder.
+* Whole-machine PROM boot - the fill engine (boot memory clear) and
+  console regression.
+
+## Board result
+
+(recorded after the fit)
+
+## Still open
+
+* The CD-ROM `cmd=0xc9` CDB-length disagreement and the `sd_lba`
+  last-match-wins mux (docs/29) - unchanged by this work.
+* 64-bit CPU PIO stores to REX3 split wrong (newport.sv takes one word of
+  a doubleword store). Nothing in PROM/IRIX 5.3 issues them - o32
+  userland cannot, the kernel driver uses word accesses - noted here so
+  the next person doesn't rediscover it.

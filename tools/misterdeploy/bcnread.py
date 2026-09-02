@@ -37,7 +37,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 11
+NWORDS = 14
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
            "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
@@ -108,6 +108,37 @@ def dec_int(w9, w10):
     return lines
 
 
+VDMA_STATES = ["IDLE", "CHECK", "BEAT", "MEMA", "MEMB", "GIO", "PTE", "STEP",
+               "DONE", "?9", "?10", "?11", "?12", "?13", "?14", "?15"]
+
+
+def dec_vdma(w11, w12, w13):
+    # w11 (sgi_mc dma_dbg): [63:56]mode [55]XLATE [52]IE [51:48]cause
+    #   [47:24]engine{state[3:0],fault[2:0],skip,beats[15:0]}
+    #   [23]int level [19:0]gio_adr[19:0]
+    # w12: [63:32]memadr [31:0]gio_adr  (the live descriptor registers)
+    # w13: [63:48]magic 4E44 [33]vblank [32]mc_dma_int, np dbg in [31:0]:
+    #   [31:16]wr_beats [15:8]rd_beats [7:4]drops
+    #   [3]rd_wait [2]engine_busy [1]go_pending [0]wr_held
+    lines = []
+    eng = bits(w11, 47, 24)
+    lines.append("vdma: mode=%02x xlate=%d ie=%d cause=%x int=%d "
+                 "eng=%s fault=%x skip=%d beats=%d gio_lo=%05x"
+                 % (bits(w11, 63, 56), bits(w11, 55, 55), bits(w11, 52, 52),
+                    bits(w11, 51, 48), bits(w11, 23, 23),
+                    VDMA_STATES[bits(eng, 23, 20)], bits(eng, 19, 17),
+                    bits(eng, 16, 16), bits(eng, 15, 0), bits(w11, 19, 0)))
+    lines.append("vdma: memadr=0x%08x gio_adr=0x%08x"
+                 % (bits(w12, 63, 32), bits(w12, 31, 0)))
+    np = bits(w13, 31, 0)
+    lines.append("rex3: wr_beats=%d rd_beats=%d drops=%d rd_wait=%d busy=%d "
+                 "go=%d held=%d | vblank=%d mc_int=%d"
+                 % (bits(np, 31, 16), bits(np, 15, 8), bits(np, 7, 4),
+                    bits(np, 3, 3), bits(np, 2, 2), bits(np, 1, 1),
+                    bits(np, 0, 0), bits(w13, 33, 33), bits(w13, 32, 32)))
+    return lines
+
+
 def dec(ws):
     w0, w1, w2, w3, w4, w5, w6, w7 = ws[:8]
     w8 = ws[8] if len(ws) > 8 else 0
@@ -137,6 +168,8 @@ def dec(ws):
     out.append(dec_hpc3(w8))
     if len(ws) > 10:
         out.extend(dec_int(w9, w10))
+    if len(ws) > 13 and bits(w0, 47, 40) >= 6:
+        out.extend(dec_vdma(ws[11], ws[12], ws[13]))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",

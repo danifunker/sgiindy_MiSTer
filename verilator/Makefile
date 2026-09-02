@@ -256,9 +256,13 @@ vc2test:
 # A wrong picture is nearly always a command the engine was given rather than
 # one it mishandled, and ng1_tp.c is right there to compare against.
 #   make cputest-rex3-debug && ./obj_dir_rex3dbg/Vsim_top --prom ... 2>&1 | less
+# WM_OPT rather than -O3: every optimisation level above -O0 dies in a
+# Verilator 5.020 internal fault just after np_rex3.sv (the same fault the
+# wholemachine targets work around), and this target elaborates the same
+# whole design. See the WM_OPT comment above.
 cputest-rex3-debug: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3dbg --top-module sim_top \
-	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) +define+REX3_DEBUG \
+	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I.." $(WM_W) +define+REX3_DEBUG \
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 

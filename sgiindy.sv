@@ -442,6 +442,7 @@ wire        txda, txdb;
 wire [63:0] scsi_bcn [7];
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
+wire [63:0] vdma_bcn [3];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
 
 sgi_indy u_core
 (
@@ -535,6 +536,7 @@ sgi_indy u_core
 	.dbg_scsi_bcn     (scsi_bcn),
 	.dbg_hpc3_dma     (hpc3_dma_bcn),
 	.dbg_int_bcn      (int_bcn),
+	.dbg_vdma_bcn     (vdma_bcn),
 
 	// Debug taps: the console byte tap and the bus mirror. They exist for the
 	// simulation harness and nothing on hardware reads them. (Do not start a
@@ -691,7 +693,9 @@ ddr3_mux u_mem
 // target 1 A/B, target 6 A/B, target 1 sticky); word 8 is the HPC3 SCSI0 DMA
 // channel state; words 9-10 are the interrupt-delivery diagnostics (docs/29).
 // Runs on pll_locked alone - a guest reset must not stop the reporting.
-localparam int BCN_WORDS = 11;
+// Build 12 (ver=6) adds words 11-13: the MC VDMA engine, its descriptor
+// addresses, and REX3's beat counters (docs/33).
+localparam int BCN_WORDS = 14;
 reg  [5:0]  bcn_div;
 reg  [3:0]  bcn_idx;
 reg  [31:0] bcn_beat;
@@ -700,7 +704,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h05, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h06, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -711,6 +715,9 @@ assign bcn_src[7] = scsi_bcn[6];
 assign bcn_src[8] = hpc3_dma_bcn;
 assign bcn_src[9] = int_bcn[0];
 assign bcn_src[10] = int_bcn[1];
+assign bcn_src[11] = vdma_bcn[0];
+assign bcn_src[12] = vdma_bcn[1];
+assign bcn_src[13] = vdma_bcn[2];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin

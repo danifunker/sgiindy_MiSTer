@@ -25,9 +25,10 @@
 //  error during bring-up is a far worse trap than a zero, and the PROM never
 //  does it - all 190-odd MC references in the image end in 4 or 0xc.
 //
-//  WHAT IS NOT HERE YET: the GIO64 DMA engine. Its registers exist and hold
-//  what is written to them, and a start completes instantly, but no data
-//  moves. See the DMA section below - that is the next piece of M2.
+//  THE GIO64 DMA ENGINE IS REAL NOW - fill, both copy directions, and the
+//  µTLB translation, in rtl/sgi/mc_gio_dma.sv, with the DMA-done interrupt
+//  on `dma_int` (INT2 LOCAL0 bit 4). IRIX's ng1 driver runs every pixel X
+//  draws through it; docs/33 has the whole diagnosis.
 //============================================================================
 
 module sgi_mc #(
@@ -92,7 +93,33 @@ module sgi_mc #(
     output logic [31:0] dma_m_addr,
     output logic [63:0] dma_m_wdata,
     output logic  [7:0] dma_m_be,
-    input  logic        dma_m_ack
+    input  logic [63:0] dma_m_rdata,
+    input  logic        dma_m_ack,
+
+    // ---- the engine's GIO-side master ------------------------------------
+    // One 64-bit beat per transaction at the descriptor's GIO address;
+    // sgi_indy routes it to the Newport's DMA port. Held until `ack`.
+    output logic        dma_g_req,
+    output logic        dma_g_we,
+    output logic [31:0] dma_g_addr,
+    output logic [63:0] dma_g_wdata,
+    input  logic [63:0] dma_g_rdata,
+    input  logic        dma_g_ack,
+
+    // THE DMA-DONE INTERRUPT, INT2 LOCAL0 BIT 4. Level: raised when a
+    // transfer completes with DMA_CTL's INT_ENABLE set, or on any
+    // translation fault regardless of it (IRIS's signal_dma_interrupt), and
+    // cleared by writing zero to DMA_CAUSE - which is the first thing both
+    // VdmaInit and MCdma do. IRIX's ng1 driver sleeps on this line for
+    // every pixel DMA X issues; unwired it is the whole black desktop.
+    output logic        dma_int,
+
+    // Live engine and descriptor state for the DDR3 beacon (docs/33):
+    // dma_dbg   = {mode[7:0], XLATE, 2'b0, IE, cause[3:0], engine dbg[23:0],
+    //              int level, 3'b0, gio_adr[19:0]}
+    // dma_addrs = {memadr, gio_adr}, the live descriptor registers.
+    output logic [63:0] dma_dbg,
+    output logic [63:0] dma_addrs
 );
 
     // ---- register offsets, verbatim from the MC spec's table -------------
@@ -138,6 +165,7 @@ module sgi_mc #(
     // DMA_CAUSE / DMA_RUN bits, from vdma.pdf.
     localparam logic [31:0] DMA_CAUSE_COMPLETE = 32'h0000_0008;
     localparam logic [31:0] DMA_RUN_RUNNING    = 32'h0000_0040;
+    localparam int          DMA_CTL_INT_ENABLE = 4;
 
     // ---- the registers ---------------------------------------------------
     logic [31:0] cpuctrl0, cpuctrl1, rpss_div, eerom;
@@ -156,10 +184,24 @@ module sgi_mc #(
     // engine would latch on. Sampling a cycle later is what makes the engine
     // see the descriptor the CPU just wrote rather than the one before it.
     logic dma_start_q, dma_busy, dma_done, dma_mode_unsup;
+    logic [2:0]  dma_fault;
+    logic        dma_wb_valid;
+    logic [31:0] dma_wb_memadr;
     wire  dma_start_now = wr_lo && !sem_sel && !tlb_sel
                        && (addr == REG_DMA_GIO_ADRS
                            || (addr == REG_DMA_STDMA && wr_word[0])
                            || addr == REG_DMA_MEMADRDS);
+
+    // The µTLB, flattened for the engine: entry n's hi word (dma_tlb[2n])
+    // at [64n +: 32], its lo word (dma_tlb[2n+1]) at [64n+32 +: 32].
+    logic [255:0] dma_tlb_flat;
+    always_comb
+        for (int k = 0; k < 4; k++) begin
+            dma_tlb_flat[64*k    +: 32] = dma_tlb[2*k];
+            dma_tlb_flat[64*k+32 +: 32] = dma_tlb[2*k+1];
+        end
+
+    logic [23:0] dma_eng_dbg;
 
     mc_gio_dma u_gio_dma (
         .clk              (clk),
@@ -172,20 +214,48 @@ module sgi_mc #(
         .d_mode           (dma_mode),
         .d_count          (dma_count),
         .d_ctl            (dma_ctl),
+        .tlb_flat         (dma_tlb_flat),
         .busy             (dma_busy),
         .done             (dma_done),
         .mode_unsupported (dma_mode_unsup),
+        .fault            (dma_fault),
+        .wb_valid         (dma_wb_valid),
+        .wb_memadr        (dma_wb_memadr),
         .m_req            (dma_m_req),
         .m_we             (dma_m_we),
         .m_addr           (dma_m_addr),
         .m_wdata          (dma_m_wdata),
         .m_be             (dma_m_be),
-        .m_ack            (dma_m_ack)
+        .m_rdata          (dma_m_rdata),
+        .m_ack            (dma_m_ack),
+        .g_req            (dma_g_req),
+        .g_we             (dma_g_we),
+        .g_addr           (dma_g_addr),
+        .g_wdata          (dma_g_wdata),
+        .g_rdata          (dma_g_rdata),
+        .g_ack            (dma_g_ack),
+        .dbg              (dma_eng_dbg)
     );
+
+    assign dma_dbg = { dma_mode[7:0],
+                       dma_ctl[8], 2'b00, dma_ctl[4],   // XLATE, IE
+                       dma_cause[3:0],
+                       dma_eng_dbg,
+                       dma_int, 3'b000, dma_gio_adr[19:0] };
+    assign dma_addrs = { dma_memadr, dma_gio_adr };
     logic [31:0] rpss_ctr;
     logic [19:0] dogc;
     logic        sys_semaphore;
     logic [15:0] user_semaphore;
+
+    // What a finished transfer leaves in DMA_CAUSE: the engine's fault bits
+    // land on FAULT/TLB_MISS/CLEAN (bits 0..2), and COMPLETE is set only for
+    // an unfaulted end under INT_ENABLE - a polling caller watches RUN.
+    wire [31:0] dma_cause_new = dma_cause
+                              | {29'h0, dma_fault}
+                              | ((dma_fault == 3'b0
+                                  && dma_ctl[DMA_CTL_INT_ENABLE])
+                                 ? DMA_CAUSE_COMPLETE : 32'h0);
 
     // The DMA TLB occupies 0x180..0x1BF as four hi/lo pairs on a stride of
     // 0x10; index it rather than naming eight registers. 0x180 >> 6 == 6 and
@@ -351,6 +421,7 @@ module sgi_mc #(
             rpss_tick      <= 8'h0;
             sys_semaphore  <= 1'b0;
             user_semaphore <= 16'h0;
+            dma_int        <= 1'b0;
             for (int k = 0; k < 8; k++) dma_tlb[k] <= 32'h0;
         end else begin
             //---------------- timers ----------------
@@ -419,17 +490,21 @@ module sgi_mc #(
                     REG_RPSS_CTR:      ;                      // read-only
                     REG_DMA_GIO_MASK:  dma_gio_mask  <= wr_word;
                     REG_DMA_GIO_SUB:   dma_gio_sub   <= wr_word;
-                    REG_DMA_CAUSE:     dma_cause     <= wr_word;
+                    // A CAUSE write mirrors its low nibble into RUN's fault
+                    // bits, and writing ZERO is how the driver retires the
+                    // DMA interrupt - VdmaInit and MCdma both do it before
+                    // every start. Both halves are IRIS's write handler.
+                    REG_DMA_CAUSE: begin
+                        dma_cause <= wr_word;
+                        dma_run   <= (dma_run & ~32'hF) | (wr_word & 32'hF);
+                        if (wr_word == 32'h0) dma_int <= 1'b0;
+                    end
                     REG_DMA_CTL:       dma_ctl       <= wr_word;
 
                     //-------- GIO64 DMA engine --------
-                    // STUB. The registers behave, and every "start" address
-                    // reports an instantly-finished transfer, but nothing is
-                    // copied. That is deliberate: the alternative stub - never
-                    // asserting DMA_RUN - wedges the PROM in a poll, whereas
-                    // this one lets it run on and report the memory it finds,
-                    // which is the more useful failure to look at. The real
-                    // engine needs a bus master and is the next piece of M2.
+                    // The descriptor registers. SIZE and STRIDE mirror their
+                    // halves into COUNT as the real chip does - MCdma in the
+                    // IRIX kernel never writes COUNT itself and relies on it.
                     REG_DMA_MEMADR:    dma_memadr <= wr_word;
                     REG_DMA_SIZE: begin
                         dma_size  <= wr_word;
@@ -473,9 +548,26 @@ module sgi_mc #(
             // now, so the bit is set while it is busy and cleared when it is
             // done, and the PROM's poll waits for an actual transfer.
             if (dma_start_q) dma_run <= dma_run | DMA_RUN_RUNNING;
+
+            // TRANSFER END, all of it IRIS's dma_worker epilogue. COMPLETE is
+            // only set when INT_ENABLE is - a polling caller watches RUN, not
+            // CAUSE - and the interrupt rises for a completion under
+            // INT_ENABLE or for ANY fault regardless of it. RUN's low nibble
+            // mirrors the cause bits. The descriptor writes back: memadr
+            // holds where the transfer stopped, the line count and the whole
+            // count register go to zero, which is what the driver's residual
+            // reads and vdma_fault's restart both assume.
             if (dma_done) begin
-                dma_run   <= dma_run & ~DMA_RUN_RUNNING;
-                dma_cause <= dma_cause | DMA_CAUSE_COMPLETE;
+                dma_cause <= dma_cause_new;
+                dma_run   <= (dma_run & ~DMA_RUN_RUNNING & ~32'hF)
+                           | (dma_cause_new & 32'hF);
+                if (dma_fault != 3'b0 || dma_ctl[DMA_CTL_INT_ENABLE])
+                    dma_int <= 1'b1;
+                if (dma_wb_valid) begin
+                    dma_memadr <= dma_wb_memadr;
+                    dma_size   <= {16'h0, dma_size[15:0]};
+                    dma_count  <= 32'h0;
+                end
             end
             // A start written while the previous transfer is still finishing
             // wins, which is why this sits after the two above.

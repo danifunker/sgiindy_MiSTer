@@ -221,7 +221,11 @@ module sgi_indy #(
     // Interrupt-delivery diagnostics (docs/29): whether the SCSI interrupt
     // reaches the CPU, and what the CPU is doing. Word 0 = INT2 state + the
     // raw SCSI IRQ lines + IP2..6; word 1 = the CPU decode PC and cop0 state.
-    output logic [63:0] dbg_int_bcn [2]
+    output logic [63:0] dbg_int_bcn [2],
+    // VDMA / Newport pixel-DMA diagnostics (docs/33). Word 0 = the MC DMA
+    // engine's mode/cause/state/beat count; word 1 = the live descriptor
+    // addresses {memadr, gio_adr}; word 2 = REX3's beat counters.
+    output logic [63:0] dbg_vdma_bcn [3]
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -379,12 +383,23 @@ module sgi_indy #(
     logic [63:0] dma_rdata;
 
     // The MC's GIO64 DMA engine is the second master on this port. It fills
-    // memory - the PROM's boot memory clear runs through it - so it is bulk
-    // work with nothing waiting on the other end of a bus phase.
+    // memory - the PROM's boot memory clear runs through it - and now also
+    // reads it: the copy modes fetch pixel data and page-table entries. Bulk
+    // work either way, with nothing waiting on the other end of a bus phase.
     logic        mcd_req, mcd_we, mcd_ack;
     logic [31:0] mcd_addr;
     logic [63:0] mcd_wdata;
     logic  [7:0] mcd_be;
+
+    // The engine's GIO-side master: one 64-bit beat per transaction, routed
+    // to the Newport's DMA port. IRIX's ng1 always aims it at REX3's HOSTRW
+    // register; anything outside the graphics window is answered with zeros
+    // below so a misprogrammed descriptor cannot wedge the engine.
+    logic        mcg_req, mcg_we, mcg_ack;
+    logic [31:0] mcg_addr;
+    logic [63:0] mcg_wdata, mcg_rdata;
+    logic        mc_dma_int;
+    logic [63:0] mc_dma_dbg, mc_dma_addrs;
 
     // TWO MASTERS, ONE PORT, AND SCSI WINS EVERY TIE. The SCSI channel is
     // servicing a live bus phase with a target waiting on it; the MC's fill
@@ -576,8 +591,36 @@ module sgi_indy #(
         .dma_m_addr  (mcd_addr),
         .dma_m_wdata (mcd_wdata),
         .dma_m_be    (mcd_be),
-        .dma_m_ack   (mcd_ack)
+        .dma_m_rdata (dma_rdata),
+        .dma_m_ack   (mcd_ack),
+
+        .dma_g_req   (mcg_req),
+        .dma_g_we    (mcg_we),
+        .dma_g_addr  (mcg_addr),
+        .dma_g_wdata (mcg_wdata),
+        .dma_g_rdata (mcg_rdata),
+        .dma_g_ack   (mcg_ack),
+
+        .dma_int     (mc_dma_int),
+        .dma_dbg     (mc_dma_dbg),
+        .dma_addrs   (mc_dma_addrs)
     );
+
+    // The engine's GIO beats. IRIX aims every one of them at REX3's HOSTRW
+    // register inside the graphics window; a beat anywhere else answers
+    // zero one cycle later, exactly like the DMA memory port's hole answer,
+    // so a bad descriptor cannot hang the engine three layers from its cause.
+    wire mcg_gfx = (mcg_addr >= GFX_BASE) && (mcg_addr < GFX_BASE + GFX_SIZE)
+                 && gfx_present;
+
+    logic        mcg_miss_ack;
+    always_ff @(posedge clk)
+        mcg_miss_ack <= !reset && mcg_req && !mcg_gfx && !mcg_miss_ack;
+
+    logic        npd_ack;
+    logic [63:0] npd_rdata;
+    assign mcg_ack   = npd_ack | mcg_miss_ack;
+    assign mcg_rdata = npd_ack ? npd_rdata : 64'h0;
 
     // The R4000 configuration EEPROM. On hardware this is a real chip on the
     // CPU daughtercard; here it is volatile, which costs nothing yet because
@@ -777,8 +820,16 @@ module sgi_indy #(
         // does: `Scsi0 => intstat & (SCSI0_DEV | SCSI0_DMA) != 0`. Nothing has
         // exercised the DMA half - the PROM polls and its descriptors do not
         // set XIE - so this is wiring, not a tested path.
-        .l0_source ({7'h0, scsi_irq | scsi_dma_irq, 1'b0}),
-        .l1_source (8'h00),
+        //
+        // L0 bit 4 is the MC's DMA-done level: IRIX's ng1 driver installs
+        // ng1_dma_intr on local vector 4 and SLEEPS on it for every pixel
+        // DMA X issues - `ng1 pixel dma write timeout` was this bit being
+        // hardwired zero as much as it was the engine moving no data.
+        // L1 bit 7 is the graphics board's vertical retrace, high across
+        // each vertical blank, the level IRIS's vblank callback drives.
+        .l0_source ({3'b000, mc_dma_int, 2'b00,
+                     scsi_irq | scsi_dma_irq, 1'b0}),
+        .l1_source ({np_vblank, 7'h00}),
         // The SCC and the keyboard controller are mappable sources, not local
         // ones: they arrive through MAP_STAT and reach the CPU only if
         // software has pointed MAP_MASK0 or MAP_MASK1 at them. `int_n` is
@@ -798,6 +849,14 @@ module sgi_indy #(
     assign dbg_int_bcn[0] = { 8'hE2, scsi_irq, scsi_dma_irq, irq_lines[4:0],
                               9'b0, int2_state_o };
     assign dbg_int_bcn[1] = { dbg_pc, dbg_cop0 };
+
+    // VDMA beacon words (docs/33): the MC engine, the descriptor, and the
+    // Newport's view of what arrived - enough to say from the board which
+    // link of CPU -> MC engine -> REX3 -> interrupt a wedged X is stuck on.
+    assign dbg_vdma_bcn[0] = mc_dma_dbg;
+    assign dbg_vdma_bcn[1] = mc_dma_addrs;
+    assign dbg_vdma_bcn[2] = { 16'h4E44, 14'b0, np_vblank, mc_dma_int,
+                               np_nd_dbg };
 
     // The Dallas RTC and the NVRAM the PROM keeps its environment in. Also
     // inside HPC3's window - it is the battery-backed-RAM chip select.
@@ -824,6 +883,8 @@ module sgi_indy #(
     logic [63:0] gfx_rdata;
     logic        gfx_ack;
     logic        gfx_absent_ack;
+    logic        np_vblank;
+    logic [31:0] np_nd_dbg;
 
     // With no board fitted the window still answers zero rather than being
     // left unclaimed: REX3's STATUS reads busy forever if an unclaimed cycle
@@ -842,6 +903,12 @@ module sgi_indy #(
         .wdata     (bus_wdata),
         .rdata     (gfx_rdata),
         .ack       (gfx_ack),
+        .nd_req    (mcg_req && mcg_gfx),
+        .nd_we     (mcg_we),
+        .nd_addr   (mcg_addr[19:0]),
+        .nd_wdata  (mcg_wdata),
+        .nd_rdata  (npd_rdata),
+        .nd_ack    (npd_ack),
         .fbw_req   (fbw_req),
         .fbw_we    (fbw_we),
         .fbw_addr  (fbw_addr),
@@ -861,6 +928,8 @@ module sgi_indy #(
         .vid_g     (vid_g),
         .vid_b     (vid_b),
         .gfx_irq   (),
+        .vblank_irq (np_vblank),
+        .dbg_nd    (np_nd_dbg),
         .dbg_raw_index (dbg_raw_index)
     );
 

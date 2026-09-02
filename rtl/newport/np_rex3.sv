@@ -58,6 +58,29 @@ module np_rex3 #(
     output logic [31:0] rdata,
     output logic        ack,
 
+    // ---- the VDMA host port, 64 bits wide -----------------------------------
+    // The MC's GIO64 DMA engine lands here: every pixel X draws arrives as a
+    // 64-bit beat at HOSTRW0 with the GO bit (offset 0xA30 - the kernel's
+    // Ng1PixelDma computes that GIO address from the offset X passes in, and
+    // it is the only address IRIS's dma path accepts either). A write beat is
+    // IRIS's REX3_HOSTRW64 push: both host words and a GO in one go. A read
+    // beat is its dma_read64: GO FIRST, wait for the engine, then take the
+    // host words - the inverse of the CPU's read-then-advance, because the
+    // engine has no discard loop on the far side.
+    //
+    // `nd_req` is held until `nd_ack`, like every master port in this core.
+    // Beats wait for the drawing engine exactly as a held CPU write does -
+    // each one starts a primitive, and the next may not land on top of it.
+    input  logic        nd_req,
+    input  logic        nd_we,
+    input  logic [12:0] nd_off,       // byte offset in the 8 KB window
+    input  logic [63:0] nd_wdata,
+    output logic [63:0] nd_rdata,
+    output logic        nd_ack,
+    // {write beats[15:0], read beats[7:0], drops[3:0], ndst, engine flags} -
+    // one beacon word half; "did any beat reach REX3" answered from the board.
+    output logic [31:0] dbg_nd,
+
     // ---- Display Control Bus ---------------------------------------------
     output logic        dcb_sel,
     output logic        dcb_we,
@@ -538,9 +561,9 @@ module np_rex3 #(
         ax = cx + win_x + (apply_move ? move_x : 17'sd0);
         ay = cy + win_y + (apply_move ? move_y : 17'sd0);
         clip_ok = 1'b1;
+        any = 1'b0;
         if (ensmask[0] && !in_box(cx, cy, smask0x, smask0y)) clip_ok = 1'b0;
         if (|ensmask[4:1]) begin
-            any = 1'b0;
             if (ensmask[1] && in_box(ax, ay, smask1x, smask1y)) any = 1'b1;
             if (ensmask[2] && in_box(ax, ay, smask2x, smask2y)) any = 1'b1;
             if (ensmask[3] && in_box(ax, ay, smask3x, smask3y)) any = 1'b1;
@@ -845,6 +868,27 @@ module np_rex3 #(
     wire        wr_isgo  = wr_held ? wr_go   : is_go;
     wire  [3:0] wr_be    = wr_held ? wr_lanes : be;
 
+    // ---- the VDMA host port's decode and gate ------------------------------
+    // Same offset convention as the CPU's: bit 11 is GO, the register is
+    // what is left. Only HOSTRW0 is a DMA target; anything else is accepted
+    // and dropped so a misprogrammed descriptor cannot wedge the engine.
+    wire        nd_go   = nd_off[11];
+    wire [12:0] nd_reg  = {nd_off[12], 1'b0, nd_off[10:0]} & 13'h1FFC;
+    wire        nd_host = (nd_reg == R_HOSTRW0);
+
+    typedef enum logic [0:0] { ND_IDLE, ND_RD_WAIT } nd_state_t;
+    nd_state_t ndst;
+
+    // A beat applies under the same conditions a held CPU write does, and
+    // never on the same cycle as one - the CPU's held write wins the tie.
+    wire nd_apply = !engine_busy && !wr_held && !(sel && we);
+
+    logic [15:0] nd_wr_beats;
+    logic  [7:0] nd_rd_beats;
+    logic  [3:0] nd_drops;
+    assign dbg_nd = { nd_wr_beats, nd_rd_beats, nd_drops,
+                      (ndst == ND_RD_WAIT), engine_busy, go_pending, wr_held };
+
 `ifdef REX3_DEBUG
     logic [31:0] rex3_gos;
 `ifndef REX3_DEBUG_MAX
@@ -883,6 +927,8 @@ module np_rex3 #(
             go_pending <= 1'b0;
             wr_held <= 1'b0; wr_off <= 13'h0; wr_data <= 32'h0;
             wr_lanes <= 4'h0; wr_go <= 1'b0;
+            ndst <= ND_IDLE; nd_ack <= 1'b0; nd_rdata <= 64'h0;
+            nd_wr_beats <= 16'h0; nd_rd_beats <= 8'h0; nd_drops <= 4'h0;
 `ifdef REX3_DEBUG
             rex3_gos <= 32'd0;
 `endif
@@ -1020,6 +1066,42 @@ module np_rex3 #(
                     end
                     if (is_go && reg_off != R_DCBDATA0) go_pending <= 1'b1;
             end
+
+            // ---- VDMA host port ---------------------------------------------
+            // A write beat is both host words and the GO in one edge; a read
+            // beat fires the GO first and takes the words when the engine has
+            // finished packing them into HOSTRW - which is the moment
+            // `engine_busy` falls again. `!nd_ack` keeps the one-cycle window
+            // between our ack and the master dropping its request from being
+            // mistaken for a second beat.
+            nd_ack <= 1'b0;
+            case (ndst)
+                ND_IDLE: if (nd_req && !nd_ack) begin
+                    if (!nd_host) begin
+                        nd_rdata <= 64'h0;
+                        nd_ack   <= 1'b1;
+                        nd_drops <= nd_drops + 4'h1;
+                    end else if (nd_apply) begin
+                        if (nd_we) begin
+                            hostrw0 <= nd_wdata[63:32];
+                            hostrw1 <= nd_wdata[31:0];
+                            if (nd_go) go_pending <= 1'b1;
+                            nd_ack  <= 1'b1;
+                            nd_wr_beats <= nd_wr_beats + 16'h1;
+                        end else begin
+                            if (nd_go) go_pending <= 1'b1;
+                            ndst <= ND_RD_WAIT;
+                        end
+                    end
+                end
+                ND_RD_WAIT: if (!engine_busy) begin
+                    nd_rdata <= {hostrw0, hostrw1};
+                    nd_ack   <= 1'b1;
+                    ndst     <= ND_IDLE;
+                    nd_rd_beats <= nd_rd_beats + 8'h1;
+                end
+                default: ndst <= ND_IDLE;
+            endcase
 
             // ---- DCB sequencer ----------------------------------------------
             dcb_sel <= 1'b0;
@@ -1228,18 +1310,19 @@ module np_rex3 #(
                     first_pix <= 1'b0;
                     if (span_left != 6'd0) span_left <= span_left - 6'd1;
 
-                    // A whole host word has been moved: flush it and end the
-                    // primitive, whatever the span says. The next GO carries
-                    // the next word.
-                    if (host_mode && host_left == 3'd0) begin
-                        if (dm0_opcode == OP_READ) begin
-                            hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
-                            hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
-                        end
-                        cx     <= x_step;
-                        xstart <= {5'b0, x_step[15:0], 11'b0};
-                        dr     <= DR_IDLE;
-                    end else if (row_done) begin
+                    // ROW END IS CHECKED BEFORE WORD END, because IRIS's walk
+                    // does the y-advance and the x-wrap before it looks at the
+                    // host count - and in host mode a row boundary is a FORCED
+                    // word boundary, full word or not: the primitive pauses
+                    // with the position already wrapped to the next row's
+                    // start, a partial word's leftover is discarded, and the
+                    // next GO's word starts the next row. The old order ended
+                    // the primitive with x stepped PAST the row instead, which
+                    // put every DMA'd image row after the first off the right
+                    // edge of its rectangle. The PROM never saw it - its
+                    // host-mode transfers are one-word primitives - but X's
+                    // pixel DMA hits it on every row of every blit.
+                    if (row_done) begin
                         // End of the span. x returns to XSAVE and y advances;
                         // the z-pattern restarts at bit 31, which is why each
                         // scanline of a glyph starts from the top of its word.
@@ -1247,19 +1330,32 @@ module np_rex3 #(
                         zbit <= 5'd31;
                         cy   <= y_step;
                         span_left <= 6'd32;
+                        ystart <= {5'b0, y_step[15:0], 11'b0};
+                        xstart <= xsave;
+                        if (host_mode && dm0_opcode == OP_READ) begin
+                            hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
+                            hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
+                        end
                         // Without STOPONY each row is its own primitive and
                         // the next GO starts the next one - exactly how
                         // Ng1TpDrawbitmap paints a glyph, one write to
-                        // ZPATTERN per scanline.
-                        if (!dm0_stopony || y_at_end) begin
-                            ystart <= {5'b0, y_step[15:0], 11'b0};
-                            xstart <= xsave;
-                            dr     <= DR_IDLE;
-                        end else begin
-                            ystart <= {5'b0, y_step[15:0], 11'b0};
-                            xstart <= xsave;
-                            dr     <= next_pixel_state;
+                        // ZPATTERN per scanline. Host mode ends the GO's work
+                        // here too, whatever the count says.
+                        if (!dm0_stopony || y_at_end || host_mode)
+                            dr <= DR_IDLE;
+                        else
+                            dr <= next_pixel_state;
+                    end else if (host_mode && host_left == 3'd0) begin
+                        // A whole host word mid-row: flush it and pause the
+                        // primitive where it stands. The next GO carries the
+                        // next word.
+                        if (dm0_opcode == OP_READ) begin
+                            hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
+                            hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
                         end
+                        cx     <= x_step;
+                        xstart <= {5'b0, x_step[15:0], 11'b0};
+                        dr     <= DR_IDLE;
                     end else begin
                         zbit   <= (zbit == 5'd0) ? 5'd31 : zbit - 5'd1;
                         cx     <= x_step;

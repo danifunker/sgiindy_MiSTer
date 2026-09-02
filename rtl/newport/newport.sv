@@ -64,6 +64,17 @@ module newport #(
     output logic [63:0] rdata,
     output logic        ack,
 
+    // ---- the MC's VDMA beats, 64 bits at a time ---------------------------
+    // Held-until-ack, from sgi_indy's routing of the DMA engine's GIO master.
+    // Only REX3 answers; the rest of the window acks and drops, for the same
+    // reason the CPU window does - nothing may wedge on an unanswered cycle.
+    input  logic        nd_req,
+    input  logic        nd_we,
+    input  logic [19:0] nd_addr,      // offset into the 1 MB window
+    input  logic [63:0] nd_wdata,
+    output logic [63:0] nd_rdata,
+    output logic        nd_ack,
+
     // ---- frame buffer: the rasteriser's random port -----------------------
     output logic        fbw_req,
     output logic        fbw_we,
@@ -89,6 +100,11 @@ module newport #(
     output logic  [7:0] vid_b,
 
     output logic        gfx_irq,        // REX3's vertical retrace interrupt
+    // The vertical retrace LEVEL, for INT2 LOCAL1 bit 7: high for the whole
+    // vertical blank, exactly the shape IRIS's vblank callback drives into
+    // its IOC. IRIX's ng1 takes its retrace interrupt from this line.
+    output logic        vblank_irq,
+    output logic [31:0] dbg_nd,       // np_rex3's VDMA beat counters
 
     // ---- bring-up instrument, not a feature ------------------------------
     // On hardware the screen came up black with a perfect raster, and a black
@@ -139,6 +155,21 @@ module newport #(
     always_ff @(posedge clk) begin
         gfx_hole_ack <= !reset && sel && !in_rex3;
     end
+
+    // ---- the VDMA port's decode -------------------------------------------
+    // Beats inside REX3's 8 KB go to its host port; the rest of the window
+    // acks and drops. `!nd_hole_ack` keeps the master's request-drop cycle
+    // from double-answering, the same shape as np_rex3's own guard.
+    wire nd_in_rex3 = (nd_addr >= REX3_LO) && (nd_addr < REX3_HI);
+
+    logic [63:0] nd_r3_rdata;
+    logic        nd_r3_ack;
+    logic        nd_hole_ack;
+    always_ff @(posedge clk)
+        nd_hole_ack <= !reset && nd_req && !nd_in_rex3 && !nd_hole_ack;
+
+    assign nd_rdata = nd_r3_ack ? nd_r3_rdata : 64'h0;
+    assign nd_ack   = nd_r3_ack | nd_hole_ack;
 
     // ---- Display Control Bus ------------------------------------------------
     logic        dcb_sel, dcb_we;
@@ -217,6 +248,13 @@ module newport #(
         .be        (r3_be),
         .rdata     (r3_rdata),
         .ack       (r3_ack),
+        .nd_req    (nd_req && nd_in_rex3),
+        .nd_we     (nd_we),
+        .nd_off    (nd_addr[12:0]),
+        .nd_wdata  (nd_wdata),
+        .nd_rdata  (nd_r3_rdata),
+        .nd_ack    (nd_r3_ack),
+        .dbg_nd    (dbg_nd),
         .dcb_sel   (dcb_sel),
         .dcb_we    (dcb_we),
         .dcb_addr  (dcb_addr),
@@ -388,6 +426,7 @@ module newport #(
     assign vsync = vs_q;
     assign de    = de_q;
 
-    assign gfx_irq = vc2_vint;
+    assign gfx_irq    = vc2_vint;
+    assign vblank_irq = vc2_vblank;
 
 endmodule

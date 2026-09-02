@@ -228,6 +228,94 @@ int main(int argc, char **argv)
            intended.size(), (unsigned long long)lost);
     check("every write the engine asserted reached memory", lost == 0);
 
+    //========================================================================
+    //  Phase 2: the VDMA host port - X's pixel path (docs/33).
+    //
+    //  What IRIX's ng1 driver actually does: program a host-sourced packed
+    //  draw (DRAW | colorhost, RWPACKED | RWDOUBLE, 8bpp host depth), then
+    //  stream the image through the MC's DMA engine as 64-bit beats into
+    //  HOSTRW0|GO. Every beat is eight pixels; every row boundary is a word
+    //  boundary. The check is the same as phase 1's: every pixel of the
+    //  image lands, in the right place, with the right value.
+    //========================================================================
+    {
+        auto nd_beat_wr = [&](uint64_t val) -> bool {
+            dut->nd_req = 1; dut->nd_we = 1; dut->nd_off = 0xA30;
+            dut->nd_wdata = val;
+            for (int guard = 0; guard < 100000; guard++) {
+                tick();
+                if (dut->nd_ack) { dut->nd_req = 0; tick(); return true; }
+            }
+            dut->nd_req = 0;
+            return false;
+        };
+        auto nd_beat_rd = [&](uint64_t &val) -> bool {
+            dut->nd_req = 1; dut->nd_we = 0; dut->nd_off = 0xA30;
+            for (int guard = 0; guard < 100000; guard++) {
+                tick();
+                if (dut->nd_ack) { val = dut->nd_rdata; dut->nd_req = 0; tick(); return true; }
+            }
+            dut->nd_req = 0;
+            return false;
+        };
+
+        const int DX0 = 10, DY0 = 100, DW = 32, DH = 4;
+        auto px_val = [&](int x, int y) -> uint8_t {
+            return (uint8_t)(0x21 + (y - DY0) * DW + (x - DX0));
+        };
+
+        // 8bpp host pixels, packed, doubled: eight pixels per 64-bit beat.
+        // planes 0, drawdepth 1, RWPACKED, hostdepth 1, RWDOUBLE,
+        // compare disabled, logicop SRC.
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 10) | (1u << 8)
+                        | (1u << 7) | (1u << 3) | 0u);
+        // DRAW, block, COLORHOST, stop on both axes.
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 6) | (1u << 8) | (1u << 9));
+        wr(R_XYSTARTI,  ((uint32_t)DX0 << 16) | (uint32_t)DY0);
+        wr(R_XYENDI,    ((uint32_t)(DX0 + DW - 1) << 16)
+                        | (uint32_t)(DY0 + DH - 1));
+
+        bool beats_ok = true;
+        for (int y = DY0; y < DY0 + DH && beats_ok; y++)
+            for (int x = DX0; x < DX0 + DW && beats_ok; x += 8) {
+                uint64_t beat = 0;
+                for (int j = 0; j < 8; j++)
+                    beat |= (uint64_t)px_val(x + j, y) << (56 - 8*j);
+                beats_ok = nd_beat_wr(beat);
+            }
+        for (int i = 0; i < 2000 && dut->gfx_busy; i++) tick();
+
+        uint64_t dmiss = 0, dwrong = 0;
+        for (int y = DY0; y < DY0 + DH; y++)
+            for (int x = DX0; x < DX0 + DW; x++) {
+                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
+                if (!written.count(a)) { dmiss++; continue; }
+                if ((fb[a] & 0xFF) != px_val(x, y)) dwrong++;
+            }
+        printf("\nVDMA host port: %dx%d image as %d beats\n", DW, DH,
+               DW * DH / 8);
+        check("every beat was accepted", beats_ok);
+        check("the engine went idle after the last beat", !dut->gfx_busy);
+        check("every DMA'd pixel reached memory", dmiss == 0);
+        check("every DMA'd pixel carried its own byte", dwrong == 0);
+
+        // Read the first eight pixels of the first row back through the same
+        // port: OP_READ, host mode - the GIO->MEM direction of Ng1PixelDma.
+        wr(R_DRAWMODE0, 1 | (1u << 2) | (1u << 8) | (1u << 9));
+        wr(R_XYSTARTI,  ((uint32_t)DX0 << 16) | (uint32_t)DY0);
+        wr(R_XYENDI,    ((uint32_t)(DX0 + DW - 1) << 16)
+                        | (uint32_t)(DY0 + DH - 1));
+        uint64_t got = 0, wantv = 0;
+        bool rd_ok = nd_beat_rd(got);
+        for (int j = 0; j < 8; j++)
+            wantv |= (uint64_t)px_val(DX0 + j, DY0) << (56 - 8*j);
+        if (rd_ok && got != wantv)
+            printf("  read beat %016llx, expected %016llx\n",
+                   (unsigned long long)got, (unsigned long long)wantv);
+        check("a DMA read beat returned the pixels just drawn",
+              rd_ok && got == wantv);
+    }
+
     printf(failures ? "\nREX3FILL: FAIL\n" : "\nREX3FILL: PASS\n");
     delete dut;
     return failures ? 1 : 0;
