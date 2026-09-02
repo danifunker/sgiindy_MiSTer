@@ -124,7 +124,39 @@ Plus a fifth, found while building the fix against IRIS's walk loop:
 
 ## Board result
 
-(recorded after the fit)
+**Build 12** (commits `19d44ea`+`c8cb25b`): the PROM's 64 MB VDMA clear ran
+for real on hardware (beacon: mode=5a, engine idle, memadr advanced, no
+fault) and IRIX booted - but the boot then CRAWLED for half an hour and
+never started X. The beacon told the story in three lines: `L1_MASK=0xA2`
+(IRIX unmasks the retrace bit at gfx init), `l1_stat=0x80` with IP3 held,
+and every sampled CPU PC inside `exception_ip12`/`VEC_int`/`intr`. The
+"vertical retrace level" I had wired to LOCAL1 bit 7 was VC2's raw blanking
+level - high most of the frame and impossible for the ISR to retire - so
+the machine spent its life in the interrupt dispatcher.
+
+The correct line is **REX3's VRINT latch**: set at each retrace, held until
+the CPU reads STATUS (0x1338) - the read deasserts it, in IRIS and MAME
+both. And the consumer confirms it: on IP24, `ng1_init` installs
+`ip24_newportInterrupt` on GIO levels 0 and 2, and that handler's FIRST
+action is an unconditional STATUS read, then bit 5 dispatches to
+`ip24_newportRetrace`. np_rex3 already maintained exactly this latch for
+STATUS bit 5; build 13 (`1532d5d`) makes it the interrupt line too.
+
+**Build 13** (`1532d5d`, deployed 2026-09-02): **the IRIX login screen is
+on the screen.** The X11 login chooser draws completely - the user icons,
+the EZsetup image tile, the IRIS logo, the buttons - and the machine sits
+at it healthy. The beacon closes every loop of the diagnosis: `mode=50
+xlate=1 ie=1`, `gio_adr=0x1f0f0a30` (REX3 HOSTRW0|GO, exactly as read out
+of Ng1PixelDma), engine `beats` == REX3 `wr_beats` == 4802 with `drops=0`
+(every beat the MC sent arrived), `cause=0 int=0 eng=IDLE` between
+transfers (the ISR retires each one - thousands of interrupt-mode DMAs
+with no timeout). The multi-row image tiles also prove the DR_STEP
+row-boundary fix: rows land in their rectangle, unskewed.
+
+Fit note: build 13's worst-case setup slack is -0.059 ns on a path
+outside the listed core clock domains (build 12 fit the same RTL family
+at +0.487) - fitter seed noise, and the board runs; a re-seed is the
+cheap fix if instability ever points here.
 
 ## Still open
 
