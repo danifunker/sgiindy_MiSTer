@@ -195,6 +195,54 @@ Fit note: build 14's worst-case setup is -0.166 ns, same
 outside-the-core-domains path family as builds 12/13; every listed clock
 domain is positive (min +2.4 ns).
 
+## Round four: the black login panel - FASTCLEAR (and the CID clip)
+
+Build 14 put colour on the monitor and the user pointed at the remaining
+wrongness: the clogin panel's background was black. Ground truth came
+from booting the SAME disk image in IRIS beside the board (iris-ci +
+snapshot): the panel should be white - and IRIS's snapshot showed
+identical XMAP mode tables and identical (all-zero) colour-map pages,
+which killed every display-side theory. The difference was in the
+FRAMEBUFFER: IRIS's panel holds white indices, ours held zeros. The fill
+itself drew zeros.
+
+The mechanism, from IRIS's rex3: **FASTCLEAR** (DRAWMODE1 bit 17). When
+set - with cidmatch 0xF and no host data - every drawn pixel takes
+COLORVRAM replicated to the plane depth, ignoring the colour source, the
+logic op, and the patterns. Xsgi fills every large background that way.
+np_rex3 accepted the bit and ignored it, so the panel fill used a stale
+colour source: index 0. Black.
+
+Implemented (`d9eb4aa`): FASTCLEAR exactly per IRIS (COLORVRAM through
+the existing per-depth replication, logicop forced to SRC, patterns
+bypassed - the fill fast path still applies), plus the **CID clip**
+(CLIPMODE[12:9] != 0xF gates DRAW writes on the aux planes' low nibble,
+X's occluded-window clipping) via the dst-read path. The PROM's traced
+boot runs everything that draws at cidmatch=0xF, so the gate never
+touches the boot path - checked in the replay trace, not assumed.
+
+Board result: (build 15, recorded below)
+
+## Why it is slow, measured
+
+None of this round's items - and none of "Still open" below - are speed
+fixes. The slowness has four independent causes:
+
+* **The CPU sustains roughly a 16 MHz R4400's throughput** (the PROM's
+  own measured figure; a real Indy is 100-175 MHz). This dominates boot
+  time, fsck time, and X startup. docs/10 has the architecture.
+* **Every deploy power-cuts the guest**, so every boot re-runs a full
+  fsck over a dirty 2 GB EFS - five to ten minutes at this CPU speed.
+  Not a core bug; a clean shutdown before redeploys (or a pre-cleaned
+  image) removes it.
+* **No Ethernet carrier** adds two-plus minutes of rc-script timeouts.
+* **The display refreshes at ~14 Hz** (PIX_DIV=2, newport.sv header):
+  everything on screen feels slow regardless of compute. The road to
+  ~27 Hz is the frame-buffer fetch-width change described in
+  docs/18-mister-integration.md (stop fetching 8 bytes to use 1), and
+  the rasteriser's 1-pixel-per-DDR3-round-trip is the same story for
+  drawing speed. Real projects, separate from correctness.
+
 ## Still open
 
 * The CD-ROM `cmd=0xc9` CDB-length disagreement and the `sd_lba`
