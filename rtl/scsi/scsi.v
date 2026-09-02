@@ -2045,9 +2045,18 @@ reg [7:0] msg_byte;
 reg [16:0] cmd_wait;
 wire       cmd_timeout = cmd_wait[16];
 always @(posedge clk) begin
-	// Any byte arriving, or any phase that is not "waiting for a first CDB
-	// byte", puts this back to zero.
-	if(rst || (phase != PHASE_CMD_IN) || stb_adv || (cmd_cnt != 4'd0)) cmd_wait <= 17'd0;
+	// Any byte arriving puts this back to zero, so it times the gap SINCE the
+	// last CDB byte, not just the wait for the first one. It used to be
+	// gated on cmd_cnt==0, which left one park reachable: a CDB-length
+	// disagreement (the initiator believes 6 bytes, the decode above wants
+	// 10 - IRIX's vendor 0xc9 to the CD-ROM, docs/29) had the target REQ'ing
+	// for byte 7 forever and holding BSY until the next bus reset. Timing
+	// every inter-byte gap makes ANY length disagreement self-heal: the bus
+	// goes free, the initiator reports the disconnect, the driver retries or
+	// fails the one command instead of the whole bus. A real initiator
+	// delivers CDB bytes microseconds apart, three orders of magnitude
+	// inside this bound.
+	if(rst || (phase != PHASE_CMD_IN) || stb_adv) cmd_wait <= 17'd0;
 	else if(!cmd_timeout) cmd_wait <= cmd_wait + 17'd1;
 end
 
@@ -2930,15 +2939,15 @@ always @(posedge clk) begin
 		end
 
 		else if(phase == PHASE_CMD_IN) begin
-			// NOBODY IS SENDING A COMMAND: LET THE BUS GO. Reached only when
-			// the connection opened with a MESSAGE OUT and no CDB followed,
-			// which is the IP24 PROM finishing its synchronous-transfer
-			// negotiation. A real initiator ends such a connection itself;
-			// this bus gives it no way to (see the MESSAGE OUT arm above), so
-			// the target has to notice. The counter is reset by every byte, so
-			// this can only fire before the first one - once a CDB has started
-			// arriving the timeout is out of the picture and a slow initiator
-			// is never cut off mid-command.
+			// NOBODY IS SENDING A COMMAND (OR THE REST OF ONE): LET THE BUS
+			// GO. Two ways here: a connection that opened with MESSAGE OUT
+			// and no CDB behind it (the IP24 PROM's synchronous-transfer
+			// negotiation), and an initiator that stopped mid-CDB because its
+			// length decode disagrees with the one above (docs/29's vendor
+			// 0xc9). A real initiator ends the first itself and never causes
+			// the second; this bus gives it no way to end anything, so the
+			// target has to notice both. The counter is reset by every byte,
+			// so an initiator that is still sending is never cut off.
 			if(cmd_timeout) phase <= PHASE_IDLE;
 			// check if a full command is in the buffer
 			else if(cmd_cpl) begin

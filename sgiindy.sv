@@ -170,21 +170,23 @@ wire [15:0] sd_buff_dout;
 wire [15:0] sd_buff_din[VDNUM];
 wire        sd_buff_wr;
 
-// The chipset presents ONE lba and ONE read-back word for all of its targets,
-// because only one of them is ever mid-transfer. hps_io wants an array, so the
-// same wires go to every slot.
-wire [31:0] scsi_sd_lba;
-wire [15:0] scsi_sd_buff_din;
+// The chipset presents a PER-TARGET lba and read-back word, and each menu
+// slot takes its own target's pair - hps_io reads sd_lba[slot] for the slot
+// it is servicing, so this is what keeps a disk request and a CD request that
+// overlap from serving each other's addresses (docs/29's last-match-wins
+// mux, retired 2026-09-02).
+wire [31:0] scsi_sd_lba      [7];
+wire [15:0] scsi_sd_buff_din [7];
 wire  [6:0] scsi_sd_rd, scsi_sd_wr, scsi_sd_ack, scsi_img_mounted;
 
 assign sd_lba[0] = 0;
-assign sd_lba[1] = scsi_sd_lba;
-assign sd_lba[2] = scsi_sd_lba;
-assign sd_lba[3] = scsi_sd_lba;
+assign sd_lba[1] = scsi_sd_lba[1];
+assign sd_lba[2] = scsi_sd_lba[2];
+assign sd_lba[3] = scsi_sd_lba[6];
 assign sd_buff_din[0] = 0;
-assign sd_buff_din[1] = scsi_sd_buff_din;
-assign sd_buff_din[2] = scsi_sd_buff_din;
-assign sd_buff_din[3] = scsi_sd_buff_din;
+assign sd_buff_din[1] = scsi_sd_buff_din[1];
+assign sd_buff_din[2] = scsi_sd_buff_din[2];
+assign sd_buff_din[3] = scsi_sd_buff_din[6];
 
 // Menu slot -> SCSI ID. Slot 1 is ID 1, slot 2 is ID 2, slot 3 is ID 6, which
 // is where SGI put the internal CD-ROM and where CDROM_IDS elaborates one.

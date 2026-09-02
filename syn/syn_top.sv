@@ -50,9 +50,9 @@ module syn_top (
         lfsr <= {lfsr[62:0], lfsr[63] ^ lfsr[62] ^ lfsr[60] ^ lfsr[59] ^ SEED};
 
     // ---- the core --------------------------------------------------------
-    logic [31:0] scsi_sd_lba;
+    logic [31:0] scsi_sd_lba      [7];
     logic  [6:0] scsi_sd_rd, scsi_sd_wr;
-    logic [15:0] scsi_sd_buff_din;
+    logic [15:0] scsi_sd_buff_din [7];
     logic        ram_req, ram_we;
     logic [31:0] ram_addr;
     logic [63:0] ram_wdata;
@@ -148,8 +148,22 @@ module syn_top (
     );
 
     // ---- reduce every output to one pin ----------------------------------
+    // The per-target LBA/read-back arrays cannot sit in a concatenation, so
+    // fold them first - every element still feeds the pin, so none may be
+    // optimised away.
+    logic [31:0] lba_fold;
+    logic [15:0] din_fold;
+    always_comb begin
+        lba_fold = '0;
+        din_fold = '0;
+        for (int k = 0; k < 7; k++) begin
+            lba_fold ^= scsi_sd_lba[k];
+            din_fold ^= scsi_sd_buff_din[k];
+        end
+    end
+
     always_ff @(posedge CLK_50)
-        OUT_BIT <= ^{scsi_sd_lba, scsi_sd_rd, scsi_sd_wr, scsi_sd_buff_din,
+        OUT_BIT <= ^{lba_fold, scsi_sd_rd, scsi_sd_wr, din_fold,
                      ram_req, ram_we, ram_addr, ram_wdata, ram_be,
                      prom_req, prom_addr,
                      gio_req, gio_we, gio_addr, gio_wdata, gio_be,

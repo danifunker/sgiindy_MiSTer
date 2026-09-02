@@ -44,13 +44,20 @@ module sim_top
     // C++ (sim_devices.cpp) the way hps_io does on hardware.
     input  wire  [6:0] scsi_img_mounted,
     input  wire [31:0] scsi_img_blocks,
-    output wire [31:0] scsi_sd_lba,
+    // FLAT, not unpacked arrays, and only at this boundary: Verilator 5.020
+    // gives an unpacked-array TOP-LEVEL port a raw C array while the internal
+    // signal is VlUnpacked, and the glue it then generates between the two
+    // does not compile (and at -O3 the mismatch surfaces earlier, as the
+    // no-location internal fault). Packed vectors dodge the whole path, and
+    // the layout is chosen so the C++ stays natural: [32*k +: 32] of the LBA
+    // is word k of the VlWide, so top->scsi_sd_lba[i] still reads target i.
+    output wire [7*32-1:0] scsi_sd_lba,
     output wire  [6:0] scsi_sd_rd,
     output wire  [6:0] scsi_sd_wr,
     input  wire  [6:0] scsi_sd_ack,
     input  wire  [7:0] scsi_sd_buff_addr,
     input  wire [15:0] scsi_sd_buff_dout,
-    output wire [15:0] scsi_sd_buff_din,
+    output wire [7*16-1:0] scsi_sd_buff_din,
     input  wire [31:0] mem_mb,
     input  wire        scsi_sd_buff_wr,
 
@@ -137,6 +144,14 @@ module sim_top
     // the truth than 50 MHz is. The margin matters: the routine restarts
     // forever if the loop measures more than 10000 counts, and at this setting
     // it measures about 2000.
+    // The core's per-target arrays, packed onto the flat ports above.
+    logic [31:0] scsi_sd_lba_arr      [7];
+    logic [15:0] scsi_sd_buff_din_arr [7];
+    for (genvar k = 0; k < 7; k++) begin : g_sd_flat
+        assign scsi_sd_lba[32*k +: 32]      = scsi_sd_lba_arr[k];
+        assign scsi_sd_buff_din[16*k +: 16] = scsi_sd_buff_din_arr[k];
+    end
+
     sgi_indy #(.MEM_MB(64), .RTC_TICK_DIV(5000), .PIT_TICK_DIV(5)) u_core
     (
         .clk           (clk),
@@ -152,13 +167,13 @@ module sim_top
 
         .scsi_img_mounted (scsi_img_mounted),
         .scsi_img_blocks  (scsi_img_blocks),
-        .scsi_sd_lba      (scsi_sd_lba),
+        .scsi_sd_lba      (scsi_sd_lba_arr),
         .scsi_sd_rd       (scsi_sd_rd),
         .scsi_sd_wr       (scsi_sd_wr),
         .scsi_sd_ack      (scsi_sd_ack),
         .scsi_sd_buff_addr(scsi_sd_buff_addr),
         .scsi_sd_buff_dout(scsi_sd_buff_dout),
-        .scsi_sd_buff_din (scsi_sd_buff_din),
+        .scsi_sd_buff_din (scsi_sd_buff_din_arr),
         .mem_mb           (mem_mb),
         .scsi_sd_buff_wr  (scsi_sd_buff_wr),
 

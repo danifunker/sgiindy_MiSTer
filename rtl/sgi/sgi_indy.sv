@@ -74,13 +74,13 @@ module sgi_indy #(
     // simulation from sim_blkdevice.
     input  logic  [6:0] scsi_img_mounted,
     input  logic [31:0] scsi_img_blocks,
-    output logic [31:0] scsi_sd_lba,
+    output logic [31:0] scsi_sd_lba [7],
     output logic  [6:0] scsi_sd_rd,
     output logic  [6:0] scsi_sd_wr,
     input  logic  [6:0] scsi_sd_ack,
     input  logic  [7:0] scsi_sd_buff_addr,
     input  logic [15:0] scsi_sd_buff_dout,
-    output logic [15:0] scsi_sd_buff_din,
+    output logic [15:0] scsi_sd_buff_din [7],
 
     // Megabytes of DRAM actually fitted. Drives the MC's bank decode; on
     // hardware this is a constant and folds away.

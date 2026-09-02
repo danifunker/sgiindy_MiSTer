@@ -97,7 +97,12 @@ public:
                 if ((want_rd || want_wr) && d.mounted) {
                     d.busy      = true;
                     d.writing   = want_wr;
-                    d.lba       = top->scsi_sd_lba;
+                    // Per-slot, like hps_io: the LBA of THIS target, not a
+                    // shared mux another requester could have overwritten.
+                    // The port is a flat 224-bit vector (see sim_top.sv), but
+                    // each LBA is one aligned 32-bit word of it, so word i of
+                    // the VlWide IS target i.
+                    d.lba       = top->scsi_sd_lba[i];
                     d.countdown = XFER_CYCLES;
                     if (!d.writing) d.read_block(d.lba, d.sector);
                 }
@@ -139,7 +144,10 @@ public:
                     top->scsi_sd_buff_addr = (uint8_t)idx;
                 if (idx >= 1 && idx <= 256) {
                     int prev = idx - 1;
-                    uint16_t w = top->scsi_sd_buff_din;
+                    // Flat 112-bit port: target i's 16 bits sit at [16*i +: 16],
+                    // two lanes to a 32-bit VlWide word.
+                    uint16_t w = (uint16_t)(top->scsi_sd_buff_din[i >> 1]
+                                            >> ((i & 1) * 16));
                     d.sector[prev * 2]     = (uint8_t)(w >> 8);
                     d.sector[prev * 2 + 1] = (uint8_t)(w & 0xff);
                 }

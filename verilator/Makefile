@@ -134,9 +134,15 @@ CPUTEST_W = +incdir+$(RTL)/scsi -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno
 $(RTL)/cpu/generated/r4300_wrap.v:
 	../tools/gen_r4300_verilog.sh
 
+# WM_OPT rather than -O3 since 2026-09-02: the per-target scsi_sd_lba /
+# scsi_sd_buff_din arrays (the docs/29 last-match-wins fix) tipped -O3 into
+# the same no-location Verilator 5.020 internal fault the wholemachine and
+# cputest-rex3-debug targets already work around. WM_OPT is defined below
+# with those targets; it costs about 2x in sim speed and is the flag set
+# that is known to elaborate this whole design.
 cputest: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir --top-module sim_top \
-	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I.." $(WM_W) \
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
@@ -274,9 +280,10 @@ cputest-rex3-debug: $(RTL)/cpu/generated/r4300_wrap.v
 # table or a timing table is wrong this is the only place the wrongness is
 # visible: the transfer either carried the byte or it did not.
 #   make cputest-dcb-debug && ./obj_dir_dcbdbg/Vsim_top --prom ... 2>&1 | less
+# WM_OPT for the same reason as cputest above.
 cputest-dcb-debug: $(RTL)/cpu/generated/r4300_wrap.v
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_dcbdbg --top-module sim_top \
-	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) +define+DCB_DEBUG \
+	   $(WM_OPT) -CFLAGS "-O2 -std=c++17 -I.." $(WM_W) +define+DCB_DEBUG \
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 

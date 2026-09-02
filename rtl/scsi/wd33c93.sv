@@ -223,6 +223,10 @@ module wd33c93 #(
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
+    // CDB1 names a vendor/reserved group and the OWN ID register holds no
+    // usable CDB size - the part refuses before touching the bus. NetBSD's
+    // sbicreg.h names it SBIC_CSR_UNK_GROUP; IRIS carries the same constant.
+    localparam logic [7:0] S_UNKNOWN_GROUP  = 8'h87;
 
     // ---- COMMAND PHASE register values -------------------------------------
     // The chip walks this register through a Select-and-Transfer so a driver
@@ -367,8 +371,25 @@ module wd33c93 #(
     // byte, which is why every boot this project has ever done looked fine.
     logic       sat_cdb_sent;
     wire  [2:0] cdb_group = reg_file[R_CDB1][7:5];
+    // Vendor and reserved groups (3, 4, 6, 7) have no length rule, and the
+    // part's answer is the OWN ID register: startwd93 (IRIX 5.3 /unix,
+    // 0x880b1678) writes the request's true CDB length into register 0x00
+    // before loading the CDB and issuing Select-and-Transfer, exactly as the
+    // 33C93A datasheet's CDB-size field asks. This model used to fall back to
+    // 6 for those groups, so IRIX's 10-byte 0xC9 to the CD-ROM went out as 6
+    // bytes, the target REQ'd for byte 7 forever, and every desktop login
+    // printed "SCSI cmd=0xc9 timeout ... Resetting SCSI bus" until the next
+    // bus reset (docs/29). The register is safe to read here: nothing outside
+    // the reset paths consumes its ID bits, and a chip/software reset restores
+    // it before they do.
+    wire  [3:0] cdb_size_reg   = reg_file[R_OWN_ID][3:0];
+    wire        cdb_size_ok    = (cdb_size_reg >= 4'd1) && (cdb_size_reg <= 4'd12);
+    wire        cdb_group_known = (cdb_group == 3'd0) || (cdb_group == 3'd1)
+                                || (cdb_group == 3'd2) || (cdb_group == 3'd5);
     wire  [3:0] cdb_len   = (cdb_group == 3'd1 || cdb_group == 3'd2) ? 4'd10
                           : (cdb_group == 3'd5)                      ? 4'd12
+                          : (cdb_group == 3'd0)                      ? 4'd6
+                          : cdb_size_ok                              ? cdb_size_reg
                           :                                            4'd6;
     wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND)
                           || (phase == PH_MSG_OUT);
@@ -656,6 +677,19 @@ module wd33c93 #(
                                                 sat_identify_sent <= 1'b1;
                                                 sat_cdb_sent      <= 1'b1;
                                                 state             <= ST_SAT_PHASE;
+                                            end else if (!cdb_group_known && !cdb_size_ok) begin
+                                                // A vendor/reserved group with
+                                                // no CDB size in OWN ID: the
+                                                // part cannot know how many
+                                                // bytes to send, and refusing
+                                                // here - before any bus
+                                                // activity - is what the real
+                                                // chip does. A driver that
+                                                // meant it (IRIX) writes the
+                                                // size first and never sees
+                                                // this.
+                                                reg_file[R_SCSI_STATUS] <= S_UNKNOWN_GROUP;
+                                                int_pending <= 1'b1;
                                             end else begin
                                                 scsi_atn  <= (din == C_SEL_ATN_XFER);
                                                 cip       <= 1'b1;
@@ -1269,7 +1303,17 @@ module wd33c93 #(
                     dbr      <= 1'b0;
                     dma_req  <= 1'b0;
                     sat_paused <= 1'b0;
-                    reg_file[R_SCSI_STATUS] <= S_SELECT_XFER_OK;
+                    // 0x16 is only the truth if the walk got a status byte.
+                    // A target that went bus-free before STATUS (scsi.v's
+                    // mid-CDB starvation timeout is the one way to get there)
+                    // is an unexpected disconnect, and reporting it as OK
+                    // would hand the driver a stale status byte for a command
+                    // the target never ran. 0x85 with the Command Phase
+                    // register left where the walk stopped is what the part
+                    // reports and what handle_intr's 0x85 arm keys on.
+                    reg_file[R_SCSI_STATUS] <=
+                        (reg_file[R_CMD_PHASE] < CP_STATUS_RECVD)
+                            ? S_DISCONNECT : S_SELECT_XFER_OK;
                     int_pending <= 1'b1;
                     state    <= ST_IDLE;
                 end

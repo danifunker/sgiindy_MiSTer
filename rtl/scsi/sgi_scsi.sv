@@ -79,13 +79,13 @@ module sgi_scsi #(
     // ---- block device, from hps_io / the harness -------------------------
     input  logic [NUM_TARGETS-1:0]  img_mounted,
     input  logic [31:0]             img_blocks,
-    output logic [31:0]             sd_lba,
+    output logic [31:0]             sd_lba      [NUM_TARGETS],
     output logic [NUM_TARGETS-1:0]  sd_rd,
     output logic [NUM_TARGETS-1:0]  sd_wr,
     input  logic [NUM_TARGETS-1:0]  sd_ack,
     input  logic  [7:0]             sd_buff_addr,
     input  logic [15:0]             sd_buff_dout,
-    output logic [15:0]             sd_buff_din,
+    output logic [15:0]             sd_buff_din [NUM_TARGETS],
     input  logic                    sd_buff_wr,
 
     // SGI: DDR3 debug beacon words (docs/28). [0] bus/HPS live, [1] wd33c93,
@@ -292,11 +292,26 @@ module sgi_scsi #(
         end
     endgenerate
 
-    // Only the target currently on the bus has an outstanding block request.
-    always_comb begin
-        sd_lba = 32'h0;
+    // PER SLOT, NOT MUXED. This used to be a last-match-wins mux over every
+    // requesting target ("only the target currently on the bus has an
+    // outstanding block request" - docs/29 showed that is a hope, not an
+    // invariant): with the disk and the CD requesting together, the
+    // higher-numbered target's LBA won for BOTH, and the disk's block was
+    // served from the CD's address. hps_io reads sd_lba[slot] for the slot it
+    // is servicing, so each slot simply gets its own target's lines and the
+    // collision cannot exist. A CD install - disk writes against CD reads all
+    // day - is the workload that made this worth fixing before it fired.
+    always_comb
         for (int k = 0; k < NUM_TARGETS; k++)
-            if (sd_rd[k] || sd_wr[k]) sd_lba = t_lba[k];
+            sd_lba[k] = t_lba[k];
+
+    // The live-request view of the same thing, for the beacon word only: the
+    // encoding predates the per-slot split and the decoder expects one LBA.
+    logic [31:0] lba_live;
+    always_comb begin
+        lba_live = 32'h0;
+        for (int k = 0; k < NUM_TARGETS; k++)
+            if (sd_rd[k] || sd_wr[k]) lba_live = t_lba[k];
     end
 
     // The write flush, muxed the same way and off the same request lines. This
@@ -309,19 +324,16 @@ module sgi_scsi #(
     // the other side has to sample with that delay, and verilator/sim_scsi.h
     // does.
     //
-    // SELECTED BY THE ACK, NOT BY THE REQUEST. sd_wr is the request line and
-    // scsi.v drops it the moment the ack arrives (`if(io_ack) io_wr <= 0`),
-    // but the flush that follows runs for the whole ack session - hundreds of
-    // cycles. Muxing on sd_wr therefore selects the right target for the first
-    // cycle or two and then feeds zeros to the rest of the block, which reads
-    // back as a disk full of zeros with the first word or two correct: the
-    // same symptom as this output being tied off, and the reason to say out
-    // loud which line holds for the length of a session. sd_ack is that line.
-    always_comb begin
-        sd_buff_din = 16'h0000;
+    // Per slot for the same reason as sd_lba above. The mux this replaces
+    // keyed on sd_wr||sd_ack, which held for the length of one ack session -
+    // right for a single session, and wrong the moment a second target
+    // raised sd_wr during it (the later index won and fed its bytes into the
+    // first target's flush). The reader takes sd_buff_din[slot] with the
+    // one-cycle RAM delay described at the target's port; that contract is
+    // per target and unchanged.
+    always_comb
         for (int k = 0; k < NUM_TARGETS; k++)
-            if (sd_wr[k] || sd_ack[k]) sd_buff_din = t_din[k];
-    end
+            sd_buff_din[k] = t_din[k];
 
     // SGI: DDR3 debug beacon assembly (docs/28).
     // [0]: {sd_rd, sd_wr, sd_ack, t_bsy (7 bits each),
@@ -330,7 +342,7 @@ module sgi_scsi #(
     assign dbg_bcn[0] = { sd_rd, sd_wr, sd_ack, t_bsy,
                           b_rst, b_sel, b_atn, b_ack,
                           bus_bsy, bus_msg, bus_cd, bus_io, bus_req,
-                          sd_lba[26:0] };
+                          lba_live[26:0] };
     assign dbg_bcn[1] = wd_bcn;
     assign dbg_bcn[2] = t_bcn_a[1];
     assign dbg_bcn[3] = t_bcn_b[1];
