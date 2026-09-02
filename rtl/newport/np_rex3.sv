@@ -101,7 +101,16 @@ module np_rex3 #(
 
     // ---- from VC2 ---------------------------------------------------------
     input  logic        vert_int,
-    output logic        gfx_busy
+    output logic        gfx_busy,
+    // THE RETRACE INTERRUPT LINE IS THE VRINT LATCH, NOT A TIMING LEVEL.
+    // Set at the start of each vertical retrace, held until the CPU reads
+    // STATUS (0x1338, not USERSTATUS), which is what deasserts INT2 LOCAL1
+    // bit 7 - IRIS and MAME both model exactly this, and the driver's ISR
+    // depends on it: build 12 wired the raw vblank level there instead, the
+    // ISR could never retire it, and the machine spent ~80% of its cycles
+    // in exception_ip12/VEC_int - a boot that crawled for half an hour and
+    // never reached X (docs/33).
+    output logic        vrint_irq
 );
 
     // ---- register offsets -------------------------------------------------
@@ -444,6 +453,7 @@ module np_rex3 #(
     // that let the PROM write registers into running commands for as long as
     // this core has had graphics.
     assign gfx_busy = (dr != DR_IDLE) || (dcbst != DCB_IDLE);
+    assign vrint_irq = vrint;
 
     // THE FILL PATH. A plain painted block with a byte-clean write mask and a
     // logic op that ignores the destination needs no read and returns no data,

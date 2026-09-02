@@ -100,9 +100,11 @@ module newport #(
     output logic  [7:0] vid_b,
 
     output logic        gfx_irq,        // REX3's vertical retrace interrupt
-    // The vertical retrace LEVEL, for INT2 LOCAL1 bit 7: high for the whole
-    // vertical blank, exactly the shape IRIS's vblank callback drives into
-    // its IOC. IRIX's ng1 takes its retrace interrupt from this line.
+    // The vertical retrace line for INT2 LOCAL1 bit 7: REX3's VRINT latch,
+    // set at each retrace and held until the CPU reads STATUS - the read is
+    // what deasserts the line, in IRIS and MAME both. NOT the raw vblank
+    // timing level: build 12 wired that here and the un-retirable interrupt
+    // starved the whole machine (docs/33).
     output logic        vblank_irq,
     output logic [31:0] dbg_nd,       // np_rex3's VDMA beat counters
 
@@ -234,6 +236,7 @@ module newport #(
     );
 
     // ---- the rasteriser --------------------------------------------------------
+    logic r3_vrint;
     np_rex3 #(
         .FB_STRIDE_LOG2 (FB_STRIDE_LOG2),
         .FB_LINES       (FB_LINES),
@@ -270,7 +273,8 @@ module newport #(
         .fb_rdata  (fbw_rdata),
         .fb_ack    (fbw_ack),
         .vert_int  (vc2_vint),
-        .gfx_busy  ()
+        .gfx_busy  (),
+        .vrint_irq (r3_vrint)
     );
 
     // ---- the display chain -----------------------------------------------------
@@ -427,6 +431,6 @@ module newport #(
     assign de    = de_q;
 
     assign gfx_irq    = vc2_vint;
-    assign vblank_irq = vc2_vblank;
+    assign vblank_irq = r3_vrint;
 
 endmodule

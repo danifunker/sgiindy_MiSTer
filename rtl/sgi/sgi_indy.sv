@@ -825,8 +825,10 @@ module sgi_indy #(
         // ng1_dma_intr on local vector 4 and SLEEPS on it for every pixel
         // DMA X issues - `ng1 pixel dma write timeout` was this bit being
         // hardwired zero as much as it was the engine moving no data.
-        // L1 bit 7 is the graphics board's vertical retrace, high across
-        // each vertical blank, the level IRIS's vblank callback drives.
+        // L1 bit 7 is the graphics board's vertical retrace: REX3's VRINT
+        // latch, set per retrace and cleared by the CPU's STATUS read -
+        // which is what retires the interrupt. Wiring the raw vblank level
+        // here instead starved the machine (docs/33, build 12).
         .l0_source ({3'b000, mc_dma_int, 2'b00,
                      scsi_irq | scsi_dma_irq, 1'b0}),
         .l1_source ({np_vblank, 7'h00}),
