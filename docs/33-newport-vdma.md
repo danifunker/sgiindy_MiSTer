@@ -221,7 +221,11 @@ X's occluded-window clipping) via the dst-read path. The PROM's traced
 boot runs everything that draws at cidmatch=0xF, so the gate never
 touches the boot path - checked in the replay trace, not assumed.
 
-Board result: (build 15, recorded below)
+**Board result (build 15, 2026-09-02): the login screen matches IRIS's
+render of the same image.** The panel background is white, the
+previously-invisible "Login name:" label and text field show, and every
+element sits where the reference puts it. Setup slack +0.404 ns - fully
+positive this fit.
 
 ## Why it is slow, measured
 
