@@ -73,8 +73,16 @@ if grep -q "Found .* instances of uninferred RAM logic" "$LOG"; then
 fi
 
 log "=== quartus_fit, quartus_asm, quartus_sta ==="
+# SEED=n picks the fitter's placement seed. The HDMI PLL domain (the MiSTer
+# scaler) sits within a fraction of a nanosecond of its constraint on this
+# design - build 17 met it by 0.055 ns, build 18 missed by 0.176 ns with the
+# same RTL - and a missed setup there shows up as pixels dropped at fixed
+# screen positions on the HDMI output. A different seed is the remedy.
+FIT_ARGS=""
+[ -n "${SEED:-}" ] && { FIT_ARGS="--seed=$SEED"; log "fitter seed $SEED"; }
 for STAGE in fit asm sta; do
-    "$QUARTUS_BIN/quartus_$STAGE" "$PROJECT_NAME" -c "$PROJECT_NAME" >> "$LOG" 2>&1 || {
+    EXTRA=""; [ "$STAGE" = fit ] && EXTRA="$FIT_ARGS"
+    "$QUARTUS_BIN/quartus_$STAGE" "$PROJECT_NAME" -c "$PROJECT_NAME" $EXTRA >> "$LOG" 2>&1 || {
         log "ERROR: quartus_$STAGE failed. Errors from the log:"
         grep -E "^Error|Error \([0-9]+\)" "$LOG" | head -20 | sed 's/^/    /'
         exit 1; }
