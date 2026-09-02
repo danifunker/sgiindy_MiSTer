@@ -128,6 +128,9 @@ module sim_top
     wire        fbr_req, fbr_ack;
     wire [31:0] fbr_addr;
     wire [63:0] fbr_rdata;
+    wire        fba_req, fba_ack;
+    wire [31:0] fba_addr;
+    wire [63:0] fba_rdata;
 
     // RTC_TICK_DIV: 5000 clocks per centisecond instead of the hardware
     // 500000, so the machine's clock runs a hundred times faster than the
@@ -218,6 +221,12 @@ module sim_top
         .fbr_addr      (fbr_addr),
         .fbr_rdata     (fbr_rdata),
         .fbr_ack       (fbr_ack),
+        .fba_req       (fba_req),
+        .fba_addr      (fba_addr),
+        .fba_rdata     (fba_rdata),
+        .fba_ack       (fba_ack),
+        .aux_mark      (),
+        .aux_mark_line (),
 
         .vid_ce_pix    (vid_ce_pix),
         .vid_hsync     (vid_hsync),
@@ -287,5 +296,11 @@ module sim_top
     sim_ram u_fbr  (.clk(clk), .space(32'd3), .req(fbr_req), .we(1'b0),
                     .addr(fbr_addr), .wdata(64'd0), .be(8'd0),
                     .rdata(fbr_rdata), .ack(fbr_ack));
+    // The display's second serial port, for the auxiliary plane region. On
+    // MiSTer a line cache with a per-line flag table sits here; against this
+    // one-cycle memory the plain read is the same picture.
+    sim_ram u_fba  (.clk(clk), .space(32'd3), .req(fba_req), .we(1'b0),
+                    .addr(fba_addr), .wdata(64'd0), .be(8'd0),
+                    .rdata(fba_rdata), .ack(fba_ack));
 
 endmodule

@@ -97,3 +97,10 @@ verilator/obj_fast/
 
 # de-CRLF working copy of the CPU lowering script (see docs/25)
 tools/.gen_r4300_verilog.unix.sh
+
+# de-CRLF working copies and one-off driver scripts for WSL (dotfiles beside
+# the CRLF originals, the same reason tools/.gen_r4300_verilog.unix.sh is here)
+tests/.*.sh
+verilator/.*.sh
+verilator/.Makefile.unix
+verilator/.lintstub/

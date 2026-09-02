@@ -98,6 +98,11 @@ module np_rex3 #(
     output logic  [7:0] fb_be,
     input  logic [63:0] fb_rdata,
     input  logic        fb_ack,
+    // A visible value (overlay or popup bits) was just written into the
+    // auxiliary planes of frame buffer line `aux_mark_line`. The display
+    // side's flag table (rtl/mister/fb_linecache.sv, TRACK_ZERO) needs it.
+    output logic        aux_mark,
+    output logic [10:0] aux_mark_line,
 
     // ---- from VC2 ---------------------------------------------------------
     input  logic        vert_int,
@@ -425,11 +430,18 @@ module np_rex3 #(
     // ======================================================================
     //  Draw engine
     // ======================================================================
-    typedef enum logic [2:0] {
-        DR_IDLE, DR_SETUP, DR_SRC_RD, DR_DST_RD, DR_WR, DR_STEP, DR_FILL, DR_DRAIN
+    typedef enum logic [3:0] {
+        DR_IDLE, DR_SETUP, DR_SRC_RD, DR_DST_RD, DR_WR, DR_STEP, DR_FILL, DR_DRAIN,
+        // The second write of an auxiliary pixel: its window-ID nibble into
+        // the drawing slot's spare byte. Returns to `dr_after`.
+        DR_CID
     } dr_state_t;
 
-    dr_state_t   dr;
+    dr_state_t   dr, dr_after;
+    dr_state_t   fill_next;              // DR_FILL's next state (assigned below)
+    logic signed [16:0] cid_x;           // the pixel DR_CID writes for
+    logic [10:0] cid_y;
+    logic  [3:0] cid_val;
     logic signed [16:0] cx, cy;          // running integer position
     logic signed [16:0] cx_end, cy_end;
     logic signed [16:0] cx_save;
@@ -438,7 +450,7 @@ module np_rex3 #(
     logic        span_clamped;
     logic        first_pix;
     logic [23:0] src_pix;                // pixel read for SCR2SCR
-    logic [63:0] dst_word;
+    logic [31:0] dst_half;               // the destination pixel's slot
     logic  [2:0] host_left;              // pixels remaining in a host word
     logic [63:0] host_shift;
     // Writes issued into the frame buffer that have not been acknowledged.
@@ -561,15 +573,28 @@ module np_rex3 #(
     wire signed [16:0] src_x = fb_col(cx, 1'b0);
     wire        [10:0] src_y = fb_row(cy, 1'b0);
 
-    // Eight bytes per pixel: the drawing planes and the auxiliary planes are
-    // 24 bits each and share one 64-bit word, which is the width of every
-    // other port in this core. The top byte of each half is unused - a real
-    // Newport pixel is 48 bits and this rounds it up rather than packing two
-    // pixels across a word boundary.
-    function automatic logic [31:0] fb_byte_addr(input logic signed [16:0] x,
-                                                 input logic [10:0] y);
-        fb_byte_addr = FB_BASE
-                     + (((({21'b0, y}) << FB_STRIDE_LOG2) + {21'b0, x[10:0]}) << 3);
+    // FOUR BYTES PER PIXEL PER PLANE SET, IN TWO REGIONS. The drawing planes
+    // and the auxiliary planes are 24 bits each; each lives in its own region
+    // as a 32-bit slot per pixel on the 2048-pixel stride, two pixels to a
+    // 64-bit word - pixel x in the low half when x is even, the high half when
+    // it is odd, picked with the port's byte enables. The auxiliary region
+    // starts 8 MB above the drawing one. This is IRIS's shape (rex3.rs keeps
+    // fb_rgb and fb_aux as two arrays), and it is what lets the display fetch
+    // half as much per pixel: see rtl/mister/fb_linecache.sv and docs/18.
+    //
+    // THE SPARE BYTE OF A DRAWING SLOT CARRIES A COPY OF THE WINDOW-ID NIBBLE
+    // (aux[3:0], the same four bits the CID clip compares), kept current by a
+    // second write whenever byte 0 of the auxiliary slot changes. It is there
+    // so that a CID-clipped draw into the drawing planes - which is most of
+    // what X does under an overlapping window - still costs one read and one
+    // write per pixel rather than two reads. Popup and window-ID writes are
+    // rare next to that and pay the extra write.
+    localparam logic [31:0] AUX_OFF = 32'h0080_0000;
+    function automatic logic [31:0] fb_slot_addr(input logic signed [16:0] x,
+                                                 input logic [10:0] y,
+                                                 input logic aux);
+        fb_slot_addr = FB_BASE + (aux ? AUX_OFF : 32'h0)
+                     + (((({21'b0, y}) << FB_STRIDE_LOG2) + {21'b0, x[10:0]}) << 2);
     endfunction
 
     // ---- clipping ---------------------------------------------------------
@@ -605,15 +630,20 @@ module np_rex3 #(
     end
 
     // ---- plane read/write --------------------------------------------------
-    // A frame buffer word is {8'b0, aux[23:0], 8'b0, rgb[23:0]}. The aux half
-    // carries the overlay at [23:8], the popup at [7:6]/[3:2] and the window
-    // ID at [5:4]/[1:0], two buffers of each, which is the layout the PROM's
-    // plane write masks describe: OLAY 0xFFFF00, PUP 0x0000CC, CID 0x000033.
+    // A drawing slot is {4'b0, cid[3:0], rgb[23:0]}; an auxiliary slot is
+    // {8'b0, aux[23:0]}. The aux value carries the overlay at [23:8], the
+    // popup at [7:6]/[3:2] and the window ID at [5:4]/[1:0], two buffers of
+    // each, which is the layout the PROM's plane write masks describe: OLAY
+    // 0xFFFF00, PUP 0x0000CC, CID 0x000033. A destination read fetches the
+    // slot of whichever plane set is being drawn; `dst_half` is that slot.
     wire is_aux_plane = (dm1_planes == 3'd4) || (dm1_planes == 3'd5)
                      || (dm1_planes == 3'd6);
-    wire [23:0] dst_rgb = dst_word[23:0];
-    wire [23:0] dst_aux = dst_word[55:32];
-    wire [23:0] dst_plane = is_aux_plane ? dst_aux : dst_rgb;
+    wire [23:0] dst_rgb = dst_half[23:0];
+    wire [23:0] dst_aux = dst_half[23:0];
+    wire [23:0] dst_plane = dst_half[23:0];
+    // The window-ID nibble the CID clip compares: aux[3:0], read from the
+    // auxiliary slot itself or from its copy in the drawing slot.
+    wire  [3:0] cid_nib = is_aux_plane ? dst_half[3:0] : dst_half[27:24];
 
     // The destination value the logic op sees, in the plane's own units.
     logic [23:0] dst_val;
@@ -725,18 +755,28 @@ module np_rex3 #(
                       || !mask_byte_clean || cid_gate;
 
     wire [23:0] plane_val = need_dst_read ? plane_new : amplified;
-    wire [63:0] fb_word_new = is_aux_plane
-                            ? {dst_word[63:56], plane_val, dst_word[31:0]}
-                            : {dst_word[63:24], plane_val};
+    // The new slot, in both halves of the port word so that the byte enables
+    // alone decide which pixel it lands on. Byte 3 of a drawing slot is never
+    // written here - that is the window-ID copy, which DR_CID maintains.
+    wire [31:0] slot_new    = {8'h00, plane_val};
+    wire [63:0] fb_word_new = {slot_new, slot_new};
 
-    // Byte enables for the skip-the-read path. The 64-bit pixel word is
-    // {8'b0, aux[23:0], 8'b0, rgb[23:0]}, so the auxiliary planes are bytes
-    // 1..3 and the drawing planes bytes 5..7, and `be[7-i]` guards byte i.
+    // Byte enables: `be[k]` guards bits [8k+7:8k] of the port word. With the
+    // read path the whole 24-bit plane value is exact and all three plane
+    // bytes go; without it only the bytes the write mask covers completely.
     wire [2:0] plane_be = {|wrmask[23:16], |wrmask[15:8], |wrmask[7:0]};
-    wire [7:0] fb_be_masked = need_dst_read
-                            ? 8'hFF
-                            : (is_aux_plane ? {1'b0, plane_be, 4'b0}
-                                            : {5'b0, plane_be});
+    wire [3:0] slot_be  = need_dst_read ? 4'b0111 : {1'b0, plane_be};
+    wire [7:0] fb_be_masked = dst_x[0] ? {slot_be, 4'b0000} : {4'b0000, slot_be};
+
+    // An auxiliary write that touches byte 0 changes aux[3:0], so the copy in
+    // the drawing slot has to follow (DR_CID). And one that puts anything the
+    // display can see - overlay or popup bits - into a line tells the display
+    // side's flag table about it (fb_linecache's TRACK_ZERO).
+    wire cid_copy_need = is_aux_plane && slot_be[0];
+    wire aux_visible   = is_aux_plane
+                       && ((slot_be[2] && (plane_val[23:16] != 8'h0))
+                        || (slot_be[1] && (plane_val[15:8]  != 8'h0))
+                        || (slot_be[0] && (plane_val[3:2]   != 2'b0)));
 
     // ---- host pixel packing ------------------------------------------------
     // HOSTDEPTH picks the slot width: 12bpp and 32bpp use 16- and 32-bit
@@ -954,7 +994,8 @@ module np_rex3 #(
             dr <= DR_IDLE; cx <= 17'sd0; cy <= 17'sd0; cx_end <= 17'sd0;
             cy_end <= 17'sd0; cx_save <= 17'sd0; zbit <= 5'd31;
             span_left <= 6'd32; span_clamped <= 1'b0; first_pix <= 1'b0;
-            src_pix <= 24'h0; dst_word <= 64'h0; host_left <= 3'd0;
+            src_pix <= 24'h0; dst_half <= 32'h0; host_left <= 3'd0;
+            dr_after <= DR_IDLE; cid_x <= 17'sd0; cid_y <= 11'd0; cid_val <= 4'h0;
             host_shift <= 64'h0;
             config_r <= 32'h0;
             vrint <= 1'b0; videoint <= 1'b0;
@@ -1302,12 +1343,21 @@ module np_rex3 #(
                         span_left <= 6'd32;
                         ystart    <= {5'b0, y_step[15:0], 11'b0};
                         xstart    <= xsave;
-                        if (!dm0_stopony || y_at_end) dr <= DR_DRAIN;
                     end else begin
                         zbit   <= (zbit == 5'd0) ? 5'd31 : zbit - 5'd1;
                         cx     <= x_step;
                         xstart <= {5'b0, x_step[15:0], 11'b0};
-                        if (!eff_stoponx) dr <= DR_DRAIN;
+                    end
+                    // Where the walk goes next; through DR_CID first if the
+                    // pixel just written needs its window-ID copy refreshed.
+                    if (fb_req && cid_copy_need) begin
+                        cid_x    <= dst_x;
+                        cid_y    <= dst_y;
+                        cid_val  <= plane_val[3:0];
+                        dr_after <= fill_next;
+                        dr       <= DR_CID;
+                    end else begin
+                        dr <= fill_next;
                     end
                 end
 
@@ -1320,12 +1370,12 @@ module np_rex3 #(
                 DR_DRAIN: dr <= DR_IDLE;
 
                 DR_SRC_RD: if (fb_ack) begin
-                    src_pix <= fb_rdata[23:0];
+                    src_pix <= src_x[0] ? fb_rdata[55:32] : fb_rdata[23:0];
                     dr      <= need_dst_read ? DR_DST_RD : DR_WR;
                 end
 
                 DR_DST_RD: if (fb_ack) begin
-                    dst_word <= fb_rdata;
+                    dst_half <= dst_x[0] ? fb_rdata[63:32] : fb_rdata[31:0];
                     dr       <= DR_WR;
                 end
 
@@ -1338,8 +1388,18 @@ module np_rex3 #(
                     else if (dm0_colorhost)
                         host_shift <= host_shift << host_step;
                     if (host_mode) host_left <= host_left - 3'd1;
-                    dr <= DR_STEP;
+                    if (fb_req && cid_copy_need) begin
+                        cid_x    <= dst_x;
+                        cid_y    <= dst_y;
+                        cid_val  <= plane_val[3:0];
+                        dr_after <= DR_STEP;
+                        dr       <= DR_CID;
+                    end else begin
+                        dr <= DR_STEP;
+                    end
                 end
+
+                DR_CID: if (fb_ack) dr <= dr_after;
 
                 DR_STEP: begin
                     first_pix <= 1'b0;
@@ -1414,7 +1474,18 @@ module np_rex3 #(
                  || (row_done && dm0_skiplast)
                  || (!clip_ok)
                  || (!zpat_hit && !dm0_zpopaque)
-                 || (cid_gate && (dst_word[35:32] != cid_match));
+                 || (cid_gate && (cid_nib != cid_match));
+
+    // DR_FILL's next state, kept apart so that a detour through DR_CID can
+    // come back to it. Without STOPONX one pixel is the whole primitive.
+    always_comb begin
+        if (row_done) fill_next = (!dm0_stopony || y_at_end) ? DR_DRAIN : DR_FILL;
+        else          fill_next = eff_stoponx ? DR_FILL : DR_DRAIN;
+    end
+
+    // The window-ID copy: byte 3 of the drawing slot of the pixel DR_CID was
+    // entered for, and nothing else.
+    wire [31:0] cid_slot = {4'b0, cid_val, 24'h0};
 
     always_comb begin
         fb_req   = 1'b0;
@@ -1425,28 +1496,48 @@ module np_rex3 #(
         case (dr)
             DR_SRC_RD: begin
                 fb_req  = 1'b1;
-                fb_addr = fb_byte_addr(src_x, src_y);
+                fb_addr = fb_slot_addr(src_x, src_y, is_aux_plane);
             end
             DR_DST_RD: begin
                 fb_req  = 1'b1;
-                fb_addr = fb_byte_addr(dst_x, dst_y);
+                fb_addr = fb_slot_addr(dst_x, dst_y, is_aux_plane);
             end
             DR_FILL: begin
                 fb_req   = !skip_pix;
                 fb_we    = 1'b1;
-                fb_addr  = fb_byte_addr(dst_x, dst_y);
+                fb_addr  = fb_slot_addr(dst_x, dst_y, is_aux_plane);
                 fb_wdata = fb_word_new;
                 fb_be    = fb_be_masked;
             end
             DR_WR: begin
                 fb_req   = (dm0_opcode != OP_READ) && !skip_pix;
                 fb_we    = 1'b1;
-                fb_addr  = fb_byte_addr(dst_x, dst_y);
+                fb_addr  = fb_slot_addr(dst_x, dst_y, is_aux_plane);
                 fb_wdata = fb_word_new;
                 fb_be    = fb_be_masked;
             end
+            DR_CID: begin
+                fb_req   = 1'b1;
+                fb_we    = 1'b1;
+                fb_addr  = fb_slot_addr(cid_x, cid_y, 1'b0);
+                fb_wdata = {cid_slot, cid_slot};
+                fb_be    = cid_x[0] ? 8'h80 : 8'h08;
+            end
             default: ;
         endcase
+    end
+
+    // To the display side's per-line flag table: this line now holds
+    // something the compositor can see in the auxiliary planes.
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            aux_mark      <= 1'b0;
+            aux_mark_line <= 11'd0;
+        end else begin
+            aux_mark      <= fb_req && fb_ack && fb_we && aux_visible
+                          && (dr == DR_FILL || dr == DR_WR);
+            aux_mark_line <= dst_y;
+        end
     end
 
 endmodule

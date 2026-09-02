@@ -52,6 +52,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/newport/np_bt445.sv
 # part with a test: verilator/tb_ddr3.cpp, `make -C verilator ddr3test`.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/ddr3_mux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/fb_linecache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/fb_fetch_arb.sv
 
 # The PLL. sys/pll_q17.qip expects rtl/pll.qip and pulls it in itself, so it
 # is deliberately NOT listed here - naming it twice is a duplicate-entity

@@ -50,6 +50,42 @@ static uint64_t accepted = 0, presented = 0;
 // Every distinct address REX3 ever asserted a write to. The difference between
 // this and `written` is the set of pixels it believes it drew and did not.
 static std::set<uint32_t> intended;
+// Every byte that actually landed, as (word address << 3) | byte lane k, where
+// lane k is bits [8k+7:8k] - the shape the port's byte enables use.
+static std::set<uint64_t> written_bytes;
+
+// THE FRAME BUFFER LAYOUT (np_rex3.sv): four bytes a pixel per plane set, a
+// 32-bit slot per pixel, two to a 64-bit word with the EVEN pixel in the low
+// half; the auxiliary planes sit 8 MB above the drawing planes. `fb` is keyed
+// by the 8-byte word address; REX3 presents the slot's own byte address and
+// picks its half with the byte enables.
+static uint32_t slot_addr(int x, int y, bool aux)
+{
+    return (aux ? 0x00800000u : 0u) + (((((uint32_t)y) << 11) + (uint32_t)x) << 2);
+}
+static uint32_t word_addr(uint32_t a) { return a & ~7u; }
+static uint32_t slot_val(int x, int y, bool aux)
+{
+    uint32_t w = word_addr(slot_addr(x, y, aux));
+    uint64_t v = fb.count(w) ? fb[w] : 0;
+    return (x & 1) ? (uint32_t)(v >> 32) : (uint32_t)v;
+}
+static void set_slot(int x, int y, bool aux, uint32_t s)
+{
+    uint32_t w = word_addr(slot_addr(x, y, aux));
+    uint64_t v = fb.count(w) ? fb[w] : 0;
+    if (x & 1) v = (v & 0x00000000FFFFFFFFull) | ((uint64_t)s << 32);
+    else       v = (v & 0xFFFFFFFF00000000ull) | (uint64_t)s;
+    fb[w] = v;
+}
+// The pixel's colour index byte reached memory: lane 0 of the even pixel's
+// slot, lane 4 of the odd one's.
+static bool pix_written(int x, int y)
+{
+    uint32_t w = word_addr(slot_addr(x, y, false));
+    return written_bytes.count(((uint64_t)w << 3) | (uint64_t)((x & 1) ? 4 : 0)) != 0;
+}
+static uint8_t pix_index(int x, int y) { return (uint8_t)(slot_val(x, y, false) & 0xFF); }
 
 static void bridge_before_edge()
 {
@@ -59,8 +95,9 @@ static void bridge_before_edge()
     if (dut->fb_req && dut->fb_we) intended.insert(dut->fb_addr);
 
     auto commit = [&]() {
+        uint32_t wa = word_addr(busy_addr);
         if (busy_is_write) {
-            uint64_t old = fb.count(busy_addr) ? fb[busy_addr] : 0;
+            uint64_t old = fb.count(wa) ? fb[wa] : 0;
             uint64_t val = 0;
             for (int i = 0; i < 8; i++) {
                 int shift = 56 - 8 * i;              // byte 0 is the top one
@@ -68,11 +105,12 @@ static void bridge_before_edge()
                 uint64_t by = en ? ((busy_data >> shift) & 0xFF)
                                  : ((old       >> shift) & 0xFF);
                 val |= by << shift;
+                if (en) written_bytes.insert(((uint64_t)wa << 3) | (uint64_t)(7 - i));
             }
-            fb[busy_addr] = val;
+            fb[wa] = val;
             written.insert(busy_addr);
         } else {
-            dut->fb_rdata = fb.count(busy_addr) ? fb[busy_addr] : 0;
+            dut->fb_rdata = fb.count(wa) ? fb[wa] : 0;
         }
         dut->fb_ack = 1;
         accepted++;
@@ -192,18 +230,15 @@ int main(int argc, char **argv)
     uint64_t missing = 0, wrongcolour = 0;
     for (int y = Y0; y <= Y1; y++)
         for (int x = X0; x <= X1; x++) {
-            uint32_t a = (uint32_t)(((y << 11) + x) << 3);
-            if (!written.count(a)) { missing++; continue; }
-            if ((fb[a] & 0xFF) != 0x5A) wrongcolour++;
+            if (!pix_written(x, y)) { missing++; continue; }
+            if (pix_index(x, y) != 0x5A) wrongcolour++;
         }
     if (getenv("REX3_MAP")) {
         printf("  coverage map (# written, . missing), rows \n");
         for (int y = Y0; y <= Y1; y++) {
             printf("    y=%2d ", y);
-            for (int x = X0; x <= X1; x++) {
-                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
-                putchar(written.count(a) ? '#' : '.');
-            }
+            for (int x = X0; x <= X1; x++)
+                putchar(pix_written(x, y) ? '#' : '.');
             putchar('\n');
         }
     }
@@ -288,9 +323,8 @@ int main(int argc, char **argv)
         uint64_t dmiss = 0, dwrong = 0;
         for (int y = DY0; y < DY0 + DH; y++)
             for (int x = DX0; x < DX0 + DW; x++) {
-                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
-                if (!written.count(a)) { dmiss++; continue; }
-                if ((fb[a] & 0xFF) != px_val(x, y)) dwrong++;
+                if (!pix_written(x, y)) { dmiss++; continue; }
+                if (pix_index(x, y) != px_val(x, y)) dwrong++;
             }
         printf("\nVDMA host port: %dx%d image as %d beats\n", DW, DH,
                DW * DH / 8);
@@ -344,10 +378,8 @@ int main(int argc, char **argv)
 
         uint64_t fc_wrong = 0;
         for (int y = FY0; y < FY0 + FH; y++)
-            for (int x = FX0; x < FX0 + FW; x++) {
-                uint32_t a = (uint32_t)(((y << 11) + x) << 3);
-                if (!written.count(a) || (fb[a] & 0xFF) != 0x37) fc_wrong++;
-            }
+            for (int x = FX0; x < FX0 + FW; x++)
+                if (!pix_written(x, y) || pix_index(x, y) != 0x37) fc_wrong++;
         printf("\nFASTCLEAR: %dx%d fill, %llu pixels wrong\n", FW, FH,
                (unsigned long long)fc_wrong);
         check("FASTCLEAR writes COLORVRAM through logicop DST and zpat 0",
@@ -356,11 +388,13 @@ int main(int argc, char **argv)
         // CID clip: pre-set the aux low nibble to 5 for the left half of a
         // row only, then draw the whole row with cidmatch=5. Only the left
         // half may change.
+        // The nibble lives in the auxiliary slot AND as a copy in byte 3 of
+        // the drawing slot, which is where a drawing-plane draw reads it.
         const int CY = 320, CX0 = 200, CWD = 16;
         for (int x = CX0; x < CX0 + CWD; x++) {
-            uint32_t a = (uint32_t)(((CY << 11) + x) << 3);
-            uint64_t aux = (x < CX0 + CWD/2) ? 5ull : 0ull;
-            fb[a] = (aux << 32) | 0x11;         // old pixel index 0x11
+            uint32_t aux = (x < CX0 + CWD/2) ? 5u : 0u;
+            set_slot(x, CY, true,  aux);
+            set_slot(x, CY, false, (aux << 24) | 0x11);   // old pixel index 0x11
         }
         wr(R_ZPATTERN_, 0xFFFFFFFF);
         wr(R_COLORI,    0x00000042);
@@ -374,18 +408,55 @@ int main(int argc, char **argv)
 
         uint64_t cid_wrong = 0;
         for (int x = CX0; x < CX0 + CWD; x++) {
-            uint32_t a = (uint32_t)(((CY << 11) + x) << 3);
             uint8_t want = (x < CX0 + CWD/2) ? 0x42 : 0x11;
-            if ((fb[a] & 0xFF) != want) {
+            if (pix_index(x, CY) != want) {
                 cid_wrong++;
                 if (cid_wrong <= 4)
                     printf("  cid x=%d got %02x want %02x\n", x,
-                           (unsigned)(fb[a] & 0xFF), want);
+                           (unsigned)pix_index(x, CY), want);
             }
         }
         printf("CID clip: %llu pixels wrong\n", (unsigned long long)cid_wrong);
         check("the CID clip draws only where the aux nibble matches",
               cid_wrong == 0);
+        // And the copy that draw read must still match the auxiliary slot -
+        // a drawing-plane write may not disturb byte 3.
+        uint64_t copy_wrong = 0;
+        for (int x = CX0; x < CX0 + CWD; x++)
+            if ((slot_val(x, CY, false) >> 24) != (slot_val(x, CY, true) & 0xF))
+                copy_wrong++;
+        check("a drawing-plane write leaves the window-ID copy alone",
+              copy_wrong == 0);
+
+        // THE COPY IS MAINTAINED BY THE RASTERISER. Draw into the popup
+        // planes (planes 5, the PROM's PUP mask 0xCC) across the same row
+        // with a value that sets popup bits, and byte 3 of every drawing slot
+        // must follow aux[3:0] - DR_CID's second write.
+        wr(R_WRMASK,    0x000000CC);
+        wr(R_COLORI,    0x00000003);                   // both popup bits
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (0u << 3) | 5u);
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));
+        wr(R_XYSTARTI,  ((uint32_t)CX0 << 16) | (uint32_t)CY);
+        wr(R_XYENDI | GO, ((uint32_t)(CX0 + CWD - 1) << 16) | (uint32_t)CY);
+        for (int i = 0; i < 200000 && dut->gfx_busy; i++) tick();
+        wr(R_WRMASK,    0x00FFFFFF);
+
+        uint64_t pup_unchanged = 0, pup_copy_wrong = 0;
+        for (int x = CX0; x < CX0 + CWD; x++) {
+            uint32_t aux = slot_val(x, CY, true);
+            if ((aux & 0xC) == 0) pup_unchanged++;
+            if ((slot_val(x, CY, false) >> 24) != (aux & 0xF)) {
+                pup_copy_wrong++;
+                if (pup_copy_wrong <= 4)
+                    printf("  copy x=%d drawing slot %08x aux slot %08x\n", x,
+                           (unsigned)slot_val(x, CY, false), (unsigned)aux);
+            }
+        }
+        printf("popup draw: %llu pixels without popup bits, %llu copies wrong\n",
+               (unsigned long long)pup_unchanged, (unsigned long long)pup_copy_wrong);
+        check("a popup-plane draw set the popup bits", pup_unchanged == 0);
+        check("and refreshed the window-ID copy in every drawing slot",
+              pup_copy_wrong == 0);
     }
 
     printf(failures ? "\nREX3FILL: FAIL\n" : "\nREX3FILL: PASS\n");

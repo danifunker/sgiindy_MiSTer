@@ -46,10 +46,14 @@ module newport #(
     // THE RASTER'S GEOMETRY DOES NOT CHANGE EITHER WAY - the timing table's
     // durations are in units of two pixel clocks - so this decides when the
     // pixels come out and not which ones. What it costs is the frame rate:
-    // about 14 Hz rather than 27. The way back to one is to stop fetching
-    // eight bytes per pixel to use one of them; see fb_linecache.sv's header
-    // and docs/18-mister-integration.md.
-    parameter int          PIX_DIV        = 2
+    // about 14 Hz at two rather than 27 at one.
+    //
+    // ONE AGAIN, AND THIS TIME THE FETCH WAS HALVED FIRST: the frame buffer is
+    // two plane sets of four bytes a pixel, the display fetches the drawing
+    // planes at 0.39 words a clock and the auxiliary planes only on lines
+    // that hold something (fb_linecache.sv's TRACK_ZERO). tb_linecache.cpp
+    // is built with the same PIX_DIV and must keep passing at it.
+    parameter int          PIX_DIV        = 1
 ) (
     input  logic        clk,
     input  logic        reset,
@@ -84,11 +88,21 @@ module newport #(
     input  logic [63:0] fbw_rdata,
     input  logic        fbw_ack,
 
-    // ---- frame buffer: the display's serial port --------------------------
+    // ---- frame buffer: the display's serial ports -------------------------
+    // One per plane set: `fbr` reads the drawing planes, `fba` the auxiliary
+    // planes 8 MB above them. Both answer a cycle after the request.
     output logic        fbr_req,
     output logic [31:0] fbr_addr,
     input  logic [63:0] fbr_rdata,
     input  logic        fbr_ack,
+    output logic        fba_req,
+    output logic [31:0] fba_addr,
+    input  logic [63:0] fba_rdata,
+    input  logic        fba_ack,
+    // The rasteriser wrote something visible into the auxiliary planes of
+    // this line - for the per-line flag table in front of `fba` on MiSTer.
+    output logic        aux_mark,
+    output logic [10:0] aux_mark_line,
 
     // ---- video out ---------------------------------------------------------
     output logic        ce_pix,
@@ -279,6 +293,8 @@ module newport #(
         .fb_be     (fbw_be),
         .fb_rdata  (fbw_rdata),
         .fb_ack    (fbw_ack),
+        .aux_mark      (aux_mark),
+        .aux_mark_line (aux_mark_line),
         .vert_int  (vc2_vint),
         .gfx_busy  (),
         .vrint_irq (r3_vrint)
@@ -348,26 +364,43 @@ module newport #(
     );
 
     // ---- pixel readout ----------------------------------------------------------
-    // One read per pixel out of the serial port. A real board clocks a whole
-    // scanline out of the VRAM shift register at once; a line buffer here
-    // would do the same job and cost a block RAM, and is the obvious change
-    // if this port ever becomes the bottleneck.
+    // Two reads per pixel out of the serial ports - one from each plane set,
+    // four bytes a pixel, two pixels to a word (np_rex3.sv has the layout).
+    // A real board clocks a whole scanline out of the VRAM shift registers at
+    // once; on MiSTer rtl/mister/fb_linecache.sv does that job behind each of
+    // these ports, and the auxiliary one is mostly served without a fetch.
+    // Neither port is waited for: the answer lands a cycle after the request,
+    // and the pixel's half of the word is picked with the x bit remembered
+    // from the request. `pix_word` keeps the old {aux, rgb} shape so that the
+    // compositor below reads exactly what it always did.
     logic [63:0] pix_word;
     logic        pix_valid;
+    logic [23:0] slot_rgb, slot_aux;
+    logic        req_x0;
 
+    wire [31:0] slot_off = (((({21'b0, vc2_y}) << FB_STRIDE_LOG2) + {21'b0, vc2_x}) << 2);
     assign fbr_req  = ce_pix && vc2_de;
-    assign fbr_addr = FB_BASE
-                    + (((({21'b0, vc2_y}) << FB_STRIDE_LOG2) + {21'b0, vc2_x}) << 3);
+    assign fbr_addr = FB_BASE + slot_off;
+    assign fba_req  = ce_pix && vc2_de;
+    assign fba_addr = FB_BASE + 32'h0080_0000 + slot_off;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            pix_word  <= 64'h0;
+            slot_rgb  <= 24'h0;
+            slot_aux  <= 24'h0;
             pix_valid <= 1'b0;
-        end else if (fbr_ack) begin
-            pix_word  <= fbr_rdata;
-            pix_valid <= 1'b1;
+            req_x0    <= 1'b0;
+        end else begin
+            if (ce_pix) req_x0 <= vc2_x[0];
+            if (fbr_ack) begin
+                slot_rgb  <= req_x0 ? fbr_rdata[55:32] : fbr_rdata[23:0];
+                pix_valid <= 1'b1;
+            end
+            if (fba_ack)
+                slot_aux  <= req_x0 ? fba_rdata[55:32] : fba_rdata[23:0];
         end
     end
+    assign pix_word = {8'h00, slot_aux, 8'h00, slot_rgb};
 
     // THE CURSOR IS ONE STAGE AHEAD AND HAS TO BE HELD BACK. It is generated
     // from VC2's own counters, which is where the frame buffer ADDRESS comes

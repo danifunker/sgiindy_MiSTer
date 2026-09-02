@@ -322,6 +322,7 @@ ddr3test:
 #   make linecachetest && ./obj_dir_lcache/Vfb_linecache
 linecachetest:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_lcache --top-module fb_linecache \
+	   -GTRACK_ZERO=1 \
 	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vfb_linecache $(RTL)/mister/fb_linecache.sv tb_linecache.cpp

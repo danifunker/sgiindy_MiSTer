@@ -139,22 +139,29 @@ inline bool dump_video_ppm(const std::string &path, const VideoCapture &vc)
 }
 
 // The frame buffer store as the rasteriser left it, without going through the
-// video path. Eight bytes a pixel: the drawing planes in the low word and the
-// auxiliary planes in the high one. `palette` is CMAP page zero when the guest
-// has loaded one, and nullptr means show the raw index as grey.
+// video path. Four bytes a pixel in the drawing-plane region: a 32-bit slot
+// per pixel, two to a 64-bit word with the EVEN pixel in the low half - and
+// the store is big-endian per word, so the even pixel's slot is bytes 4..7 of
+// its word and the odd pixel's bytes 0..3. (The auxiliary planes sit 8 MB
+// above and are not shown here.) `as_index` shows the raw index as grey.
+inline size_t vram_slot_offset(int xx, int yy, int stride)
+{
+    return ((size_t)yy * stride + (size_t)(xx ^ 1)) * 4;
+}
+
 inline void vram_to_rgba(const uint8_t *vram, size_t vram_bytes,
                          int w, int h, int stride,
                          bool as_index, uint32_t *out, int out_stride)
 {
     for (int yy = 0; yy < h; yy++) {
         for (int xx = 0; xx < w; xx++) {
-            size_t off = ((size_t)yy * stride + xx) * 8;
+            size_t off = vram_slot_offset(xx, yy, stride);
             uint32_t px = 0xFF000000u;
-            if (off + 8 <= vram_bytes) {
-                // Big-endian store: byte 4 is the top of the low word.
-                uint32_t rgb = ((uint32_t)vram[off + 5] << 16)
-                             | ((uint32_t)vram[off + 6] << 8)
-                             |  (uint32_t)vram[off + 7];
+            if (off + 4 <= vram_bytes) {
+                // Big-endian slot: byte 0 is the window-ID copy, 1..3 the rgb.
+                uint32_t rgb = ((uint32_t)vram[off + 1] << 16)
+                             | ((uint32_t)vram[off + 2] << 8)
+                             |  (uint32_t)vram[off + 3];
                 if (as_index) {
                     uint8_t i = (uint8_t)(rgb & 0xFF);
                     px |= ((uint32_t)i << 16) | ((uint32_t)i << 8) | i;

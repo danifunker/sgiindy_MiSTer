@@ -267,6 +267,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/newport/np_cmap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/newport/np_bt445.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/ddr3_mux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/fb_linecache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister/fb_fetch_arb.sv
 set_global_assignment -name VHDL_FILE rtl/cpu/prim/RamMLAB.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/prim/dpram.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/r4300/SyncFifoFallThroughMLAB.vhd -library mem

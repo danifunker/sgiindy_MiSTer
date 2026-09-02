@@ -228,15 +228,19 @@ bool dump_framebuffer_ppm(const std::string &path, int w, int h, bool index)
     std::vector<uint8_t> row((size_t)w * 3);
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-            size_t off = ((size_t)y * VRAM_STRIDE + x) * 8;
+            // Four bytes a pixel in the drawing-plane region, two pixels to
+            // a big-endian 64-bit word with the even pixel in the low half -
+            // so the even pixel's slot is bytes 4..7 of its word and the odd
+            // pixel's bytes 0..3 (sim_video_cap.h's vram_slot_offset).
+            size_t off = ((size_t)y * VRAM_STRIDE + (size_t)(x ^ 1)) * 4;
             uint8_t r = 0, g = 0, b = 0;
-            if (off + 8 <= g_dev.vram.size()) {
-                // The drawing planes are the low 24 bits of the low word, and
-                // the store is big-endian, so they are bytes 5..7. CMAP holds
-                // colour as 0x00BBGGRR, and so does a 24-bit pixel.
-                uint8_t b2 = g_dev.vram.bytes[off + 5];
-                uint8_t g2 = g_dev.vram.bytes[off + 6];
-                uint8_t r2 = g_dev.vram.bytes[off + 7];
+            if (off + 4 <= g_dev.vram.size()) {
+                // Byte 0 of a slot is the window-ID copy; the drawing planes
+                // are bytes 1..3. CMAP holds colour as 0x00BBGGRR, and so
+                // does a 24-bit pixel.
+                uint8_t b2 = g_dev.vram.bytes[off + 1];
+                uint8_t g2 = g_dev.vram.bytes[off + 2];
+                uint8_t r2 = g_dev.vram.bytes[off + 3];
                 if (index) { r = g = b = r2; }
                 else       { r = r2; g = g2; b = b2; }
             }

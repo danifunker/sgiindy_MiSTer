@@ -145,6 +145,14 @@ module sgi_indy #(
     output logic [31:0] fbr_addr,
     input  logic [63:0] fbr_rdata,
     input  logic        fbr_ack,
+    // The display's second serial port (auxiliary planes) and the line mark
+    // that feeds the flag table in front of it. See newport.sv.
+    output logic        fba_req,
+    output logic [31:0] fba_addr,
+    input  logic [63:0] fba_rdata,
+    input  logic        fba_ack,
+    output logic        aux_mark,
+    output logic [10:0] aux_mark_line,
 
     // ---- video out -------------------------------------------------------
     output logic        vid_ce_pix,
@@ -925,6 +933,12 @@ module sgi_indy #(
         .fbr_addr  (fbr_addr),
         .fbr_rdata (fbr_rdata),
         .fbr_ack   (fbr_ack),
+        .fba_req   (fba_req),
+        .fba_addr  (fba_addr),
+        .fba_rdata (fba_rdata),
+        .fba_ack   (fba_ack),
+        .aux_mark      (aux_mark),
+        .aux_mark_line (aux_mark_line),
         .ce_pix    (vid_ce_pix),
         .hsync     (vid_hsync),
         .vsync     (vid_vsync),

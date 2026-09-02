@@ -37,7 +37,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 15
+NWORDS = 16
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
            "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
@@ -192,6 +192,13 @@ def dec(ws):
         out.extend(dec_vdma(ws[11], ws[12], ws[13]))
     if len(ws) > 14 and bits(w0, 47, 40) >= 7:
         out.extend(dec_disp(ws[14]))
+    if len(ws) > 15 and bits(w0, 47, 40) >= 8:
+        # w15: the display line caches (docs/36). rgb_miss and aux_miss are
+        # pixels served black because the line was not resident; aux_skips
+        # is lines the auxiliary cache published as zeros without a fetch.
+        w15 = ws[15]
+        out.append("lcache: rgb_miss=%d aux_miss=%d aux_skips=%d"
+                   % (bits(w15, 63, 48), bits(w15, 47, 32), bits(w15, 31, 0)))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",

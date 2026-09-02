@@ -8,12 +8,14 @@ screen, everything from the frame buffer to the pixels is working and a wrong
 picture is the rasteriser's; if it does not, the fault is on the read side and
 what REX3 wrote never mattered.
 
-LAYOUT. newport.sv reads one 64-BIT WORD PER PIXEL:
-    fbr_addr = FB_BASE + (((y << 11) + x) << 3)
-so the stride is 2048 pixels and a pixel is eight bytes. The colour index is
-`pix_word[7:0]`, and the core numbers its bytes big-endian within the
-doubleword while the ARM reads it little-endian, so **the index is the FIRST
-byte of each eight-byte group as the ARM sees it**.
+LAYOUT. The drawing planes are a 32-BIT SLOT PER PIXEL on a 2048-pixel stride,
+two pixels to a 64-bit word with the even pixel in the low half (np_rex3.sv):
+    slot = FB_BASE + (((y << 11) + x) << 2)
+The colour index is the low byte of the slot. The core numbers its bytes
+big-endian within the doubleword while the ARM reads it little-endian, so as
+the ARM sees it **the index of pixel x is byte (y * 2048 + x) * 4** - the first
+byte of each four-byte group, linear in x. The auxiliary planes are a second
+region 8 MB above and are left alone here.
 
 Usage (on the MiSTer):
     fb_poke.py bars      # 16 vertical bars stepping the index by 16
@@ -24,6 +26,7 @@ Usage (on the MiSTer):
 import mmap, os, sys
 
 FB, W, H, STRIDE, PAGE = 0x34000000, 1280, 1024, 2048, 4096
+BPP = 4
 
 
 def mapping(phys, length):
@@ -42,9 +45,9 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "bars"
     arg = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x40
 
-    # one row of W pixels x 8 bytes, rebuilt per row only when it depends on y
+    # one row of W pixels x BPP bytes, rebuilt per row only when it depends on y
     for y in range(H):
-        row = bytearray(W * 8)
+        row = bytearray(W * BPP)
         for x in range(W):
             if mode == "bars":
                 v = (x * 16 // W) * 16
@@ -53,13 +56,13 @@ def main():
             elif mode == "fill":
                 v = arg & 0xFF
             elif mode == "sig":
-                row[x * 8:x * 8 + 8] = bytes((0xE0 + j) & 0xFF for j in range(8))
+                row[x * BPP:x * BPP + BPP] = bytes((0xE0 + j) & 0xFF for j in range(BPP))
                 continue
             else:
                 sys.exit("mode: bars | ramp | fill <n> | sig")
-            row[x * 8] = v
-        m, off = mapping(FB + (y * STRIDE) * 8, W * 8)
-        m[off:off + W * 8] = bytes(row)
+            row[x * BPP] = v
+        m, off = mapping(FB + (y * STRIDE) * BPP, W * BPP)
+        m[off:off + W * BPP] = bytes(row)
         m.close()
     print(f"wrote {mode} over {W}x{H}")
 

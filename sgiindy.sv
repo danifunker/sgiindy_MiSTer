@@ -428,12 +428,25 @@ wire  [7:0] fbw_be;
 wire        fbr_req, fbr_ack;
 wire [31:0] fbr_addr;
 wire [63:0] fbr_rdata;
+// The second serial port: the auxiliary planes, and the rasteriser's mark
+// that keeps its line cache's flag table honest.
+wire        fba_req, fba_ack;
+wire [31:0] fba_addr;
+wire [63:0] fba_rdata;
+wire        aux_mark;
+wire [10:0] aux_mark_line;
 
+// One burst port on the mux, two line caches behind fb_fetch_arb.
 wire        lc_req, lc_taken, lc_valid;
 wire [31:0] lc_addr;
 wire  [7:0] lc_burst;
 wire [63:0] lc_dout;
-wire        lc_miss;
+wire        lc_miss, la_miss;
+wire        lr_req, lr_taken, lr_valid, la_req, la_taken, la_valid;
+wire [31:0] lr_addr, la_addr;
+wire  [7:0] lr_burst, la_burst;
+wire [63:0] lr_dout, la_dout;
+wire [31:0] la_skips;
 
 wire        vid_ce_pix, vid_hsync, vid_vsync, vid_de;
 wire  [7:0] vid_r, vid_g, vid_b;
@@ -502,6 +515,12 @@ sgi_indy u_core
 	.fbr_addr         (fbr_addr),
 	.fbr_rdata        (fbr_rdata),
 	.fbr_ack          (fbr_ack),
+	.fba_req          (fba_req),
+	.fba_addr         (fba_addr),
+	.fba_rdata        (fba_rdata),
+	.fba_ack          (fba_ack),
+	.aux_mark         (aux_mark),
+	.aux_mark_line    (aux_mark_line),
 
 	.vid_ce_pix       (vid_ce_pix),
 	.vid_hsync        (vid_hsync),
@@ -609,7 +628,8 @@ assign UART_TXD = (status[16:15] == 2'd1) ? dbg_serial(dbg_bit_a)
 
 assign DDRAM_CLK = clk_sys;
 
-fb_linecache u_linecache
+// The drawing planes: every line, every frame.
+fb_linecache #(.TRACK_ZERO(1'b0)) u_linecache
 (
 	.clk       (clk_sys),
 	.reset     (reset),
@@ -619,16 +639,74 @@ fb_linecache u_linecache
 	.px_rdata  (fbr_rdata),
 	.px_ack    (fbr_ack),
 	.vs        (vid_vsync),
+	.mark      (1'b0),
+	.mark_line (11'd0),
+
+	.fbr_req       (lr_req),
+	.fbr_addr      (lr_addr),
+	.fbr_burst     (lr_burst),
+	.fbr_taken     (lr_taken),
+	.fbr_dout      (lr_dout),
+	.fbr_dout_valid(lr_valid),
+
+	.miss      (lc_miss),
+	.dbg_skips (),
+	.dbg_miss_mark (status[14])
+);
+
+// The auxiliary planes: only the lines the rasteriser has put something
+// visible on, which on a desktop is almost none of them (fb_linecache.sv,
+// TRACK_ZERO). The rest are published as zeros without a fetch.
+fb_linecache #(.TRACK_ZERO(1'b1)) u_auxcache
+(
+	.clk       (clk_sys),
+	.reset     (reset),
+
+	.px_req    (fba_req),
+	.px_addr   (fba_addr),
+	.px_rdata  (fba_rdata),
+	.px_ack    (fba_ack),
+	.vs        (vid_vsync),
+	.mark      (aux_mark),
+	.mark_line (aux_mark_line),
+
+	.fbr_req       (la_req),
+	.fbr_addr      (la_addr),
+	.fbr_burst     (la_burst),
+	.fbr_taken     (la_taken),
+	.fbr_dout      (la_dout),
+	.fbr_dout_valid(la_valid),
+
+	.miss      (la_miss),
+	.dbg_skips (la_skips),
+	.dbg_miss_mark (1'b0)
+);
+
+fb_fetch_arb u_fetch_arb
+(
+	.clk       (clk_sys),
+	.reset     (reset),
+
+	.a_req        (lr_req),
+	.a_addr       (lr_addr),
+	.a_burst      (lr_burst),
+	.a_taken      (lr_taken),
+	.a_dout       (lr_dout),
+	.a_dout_valid (lr_valid),
+
+	.b_req        (la_req),
+	.b_addr       (la_addr),
+	.b_burst      (la_burst),
+	.b_taken      (la_taken),
+	.b_dout       (la_dout),
+	.b_dout_valid (la_valid),
 
 	.fbr_req       (lc_req),
 	.fbr_addr      (lc_addr),
 	.fbr_burst     (lc_burst),
 	.fbr_taken     (lc_taken),
 	.fbr_dout      (lc_dout),
-	.fbr_dout_valid(lc_valid),
-
-	.miss      (lc_miss),
-	.dbg_miss_mark (status[14])
+	.fbr_dout_valid(lc_valid)
 );
 
 ddr3_mux u_mem
@@ -697,8 +775,22 @@ ddr3_mux u_mem
 // Runs on pll_locked alone - a guest reset must not stop the reporting.
 // Build 12 (ver=6) added words 11-13: the MC VDMA engine, its descriptor
 // addresses, and REX3's beat counters. Build 14 (ver=7) adds word 14: the
-// display-interpretation word - DID and mode entry in use (docs/33).
-localparam int BCN_WORDS = 15;
+// display-interpretation word - DID and mode entry in use (docs/33). ver=8
+// adds word 15: the two display line caches - drawing-plane misses, auxiliary
+// misses, and lines the auxiliary cache published as zeros without a fetch
+// (docs/36) - which is how the PIX_DIV=1 bandwidth budget is checked live.
+localparam int BCN_WORDS = 16;
+
+reg [15:0] lc_miss_cnt, la_miss_cnt;
+always @(posedge clk_sys) begin
+	if (~pll_locked) begin
+		lc_miss_cnt <= 16'd0;
+		la_miss_cnt <= 16'd0;
+	end else begin
+		if (lc_miss) lc_miss_cnt <= lc_miss_cnt + 16'd1;
+		if (la_miss) la_miss_cnt <= la_miss_cnt + 16'd1;
+	end
+end
 reg  [5:0]  bcn_div;
 reg  [3:0]  bcn_idx;
 reg  [31:0] bcn_beat;
@@ -707,7 +799,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h07, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h08, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -722,6 +814,7 @@ assign bcn_src[11] = vdma_bcn[0];
 assign bcn_src[12] = vdma_bcn[1];
 assign bcn_src[13] = vdma_bcn[2];
 assign bcn_src[14] = vdma_bcn[3];
+assign bcn_src[15] = { lc_miss_cnt, la_miss_cnt, la_skips };
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin

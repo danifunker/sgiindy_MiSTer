@@ -156,8 +156,18 @@ whether the model is as unhelpful as the bridge.
 
 ### 0. The frame buffer stores eight bytes a pixel to display one of them
 
-**This is now the single most valuable change left in this file's scope, and
-hardware is what promoted it.** The store is one 64-bit word per pixel - 24
+**DONE 2026-09-02 (docs/36), with one correction to the arithmetic below.**
+The compositor added in docs/33 reads the auxiliary planes for every pixel
+too (popup bits and the overlay byte), so "the display reads RGB only" no
+longer held. What landed: two regions of four bytes a pixel (drawing planes
+at `FB_BASE`, auxiliary planes 8 MB above, two pixels to a 64-bit word), a
+line cache per region behind `fb_fetch_arb`, and a per-line "anything visible
+in the auxiliary planes" flag table (`fb_linecache.sv`, `TRACK_ZERO`) so the
+auxiliary stream is only fetched on lines that need it. `PIX_DIV` is 1. The
+history below is kept as written.
+
+**This was the single most valuable change left in this file's scope, and
+hardware is what promoted it.** The store was one 64-bit word per pixel - 24
 bits of drawing planes, 24 of auxiliary, on a 2048-pixel stride - so a visible
 line is 1344 words. At one core clock per pixel that is **0.80 words a clock
 against a DDR3 port whose absolute peak is 1.00**, before the CPU or the

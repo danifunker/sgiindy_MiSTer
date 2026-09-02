@@ -599,7 +599,8 @@ int main(int argc, char **argv)
             int tw = 0, th = 0;
             GLuint tex = 0;
             if (vid_show_vram) {
-                // 8 bytes a pixel on a 2048-pixel stride. Rebuilt at most once
+                // 4 bytes a pixel on a 2048-pixel stride, drawing planes
+                // only (vram_to_rgba has the layout). Rebuilt at most once
                 // a frame: it is 1.3 M pixels and the machine is not going to
                 // change them faster than the display can show it.
                 tw = 1280; th = 1024;
