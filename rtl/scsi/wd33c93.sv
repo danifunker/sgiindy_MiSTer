@@ -169,23 +169,10 @@ module wd33c93 #(
     // wrong one. `0x80 | phase` made a MESSAGE OUT request arrive as 0x86, and
     // the PROM answered a status it did not recognise by disconnecting.
     localparam logic [7:0] S_SERVICE_REQ    = 8'h88;
-    // "Unexpected information phase": the same low-three-bits-are-the-phase
-    // encoding as S_SERVICE_REQ, but the 0x48 base means "a command WAS in
-    // progress when the target asked for this" - it is how the chip reports a
-    // Select-and-Transfer paused by its own Transfer Count while the target
-    // still wants a data phase. IRIX's wd93 routes the whole group through
-    // unex_info(), reloads the count and the DMA chain, and resumes with
-    // another Select-and-Transfer (see the resume arm at C_SEL_XFER below).
-    // IRIS posts exactly these values from the same situation
-    // (src/wd33c93a.rs queue_interrupt(TRANSFER_COUNT, 0x48/0x49) in its
-    // chunked DMA paths). NOTE the data phases DO NOT follow base|phase: the
-    // group's low bit is inverted for them - 0x48 is DATA IN (phase 001) and
-    // 0x49 is DATA OUT (phase 000), the opposite of what 0x48|phase gives.
-    // COMMAND (0x4A), STATUS (0x4B), MSG OUT (0x4E) and MSG IN (0x4F) do land
-    // on 0x48|phase, but the pause only ever fires in a data phase, so only
-    // these two are used.
-    localparam logic [7:0] S_UNEX_RECV_DATA = 8'h48;  // unexpected DATA IN
-    localparam logic [7:0] S_UNEX_SEND_DATA = 8'h49;  // unexpected DATA OUT
+    // The transfer-count-exhausted-mid-data-phase codes 0x18 (DATA OUT) /
+    // 0x19 (DATA IN) are S_XFER_DATA_OUT/IN above. The pause interrupt in
+    // ST_SAT_PHASE reports those - see the comment there for why not the
+    // 0x48/0x49 unexpected-phase group (docs/29).
     localparam logic [7:0] S_INVALID_CMD    = 8'h40;
     localparam logic [7:0] S_SELECT_TIMEOUT = 8'h42;
     localparam logic [7:0] S_DISCONNECT     = 8'h85;
@@ -948,16 +935,25 @@ module wd33c93 #(
                         if (&sat_pause_cnt) begin
                             cip         <= 1'b0;
                             dbr         <= 1'b0;
-                            // 0x48 RECV (DATA IN) / 0x49 SEND (DATA OUT).
-                            // NOT base|phase: this group inverts the I/O bit
-                            // for the data phases (IRIS posts 0x48 from its
-                            // DMA-IN pause, 0x49 from DMA-OUT; only its
-                            // COMMAND/STATUS/MSG codes follow base|phase).
-                            // The pause fires only in a data phase, so these
-                            // two are exhaustive.
+                            // TRANSFER-COUNT EXHAUSTED, TARGET STILL IN THE
+                            // DATA PHASE. The SBIC's own code for this is
+                            // 0x19 "xfer done, target sending DATA IN" / 0x18
+                            // "... DATA OUT" (IRIS ST_TR_DATAIN/OUT), NOT the
+                            // 0x48/0x49 unexpected-phase group - those are
+                            // IRIS's DMA-chain-EOX pause, a different trigger,
+                            // and the board proved the difference: with 0x48
+                            // the wd33c93 raised the interrupt (intp=1) but
+                            // IRIX never serviced it and hung, because the DMA
+                            // descriptor carried no XIE (beacon: dstate=IDLE
+                            // eox, xie=0), so IRIX is watching the chip status,
+                            // and 0x48 is not the code its count-done path
+                            // reads. 0x18|phase gives the right value for both
+                            // data directions (0x18 DATA OUT=000, 0x19 DATA
+                            // IN=001), and the pause only fires in a data
+                            // phase. docs/29.
                             reg_file[R_SCSI_STATUS] <=
-                                (phase == PH_DATA_IN) ? S_UNEX_RECV_DATA
-                                                      : S_UNEX_SEND_DATA;
+                                (phase == PH_DATA_IN) ? S_XFER_DATA_IN
+                                                      : S_XFER_DATA_OUT;
                             int_pending <= 1'b1;
                             // dma_in_data is left alone: the data phase is
                             // still open, and the resume path below re-enters
