@@ -37,12 +37,16 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
+NWORDS = 9
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
+DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
+           "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
+           "DESC_END", "COMPLETE", "?14", "?15"]
 
 
 def rdwords():
-    raw = _m.read_phys(BASE, 64)
-    return struct.unpack("<8Q", raw)
+    raw = _m.read_phys(BASE, NWORDS * 8)
+    return struct.unpack("<%dQ" % NWORDS, raw)
 
 
 def bits(w, hi, lo):
@@ -65,8 +69,22 @@ def dec_target(a, b, name):
                bits(b, 31, 8), bits(b, 7, 0), " ".join(flags) or "-"))
 
 
+def dec_hpc3(w):
+    flags = []
+    for bit, label in ((59, "active"), (58, "INT"), (57, "dir_in"),
+                       (56, "eox"), (55, "xie"), (54, "dev_req"),
+                       (53, "dev_ack"), (52, "dev_dirin"), (51, "dev_eop"),
+                       (50, "dma_req"), (49, "dma_ack"), (48, "dma_we")):
+        if bits(w, bit, bit):
+            flags.append(label)
+    return ("hpc3-dma: dstate=%s bc=%d cbp=0x%08x [%s]"
+            % (DSTATES[bits(w, 63, 60)], bits(w, 47, 32), bits(w, 31, 0),
+               " ".join(flags) or "-"))
+
+
 def dec(ws):
-    w0, w1, w2, w3, w4, w5, w6, w7 = ws
+    w0, w1, w2, w3, w4, w5, w6, w7 = ws[:8]
+    w8 = ws[8] if len(ws) > 8 else 0
     out = []
     magic = bits(w0, 63, 48)
     if magic != 0xBEC0:
@@ -88,6 +106,7 @@ def dec(ws):
                   bits(w2, 5, 5), bits(w2, 4, 0)))
     out.append(dec_target(w3, w4, "id1:"))
     out.append(dec_target(w5, w6, "id6:"))
+    out.append(dec_hpc3(w8))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",

@@ -153,7 +153,15 @@ module hpc3_scsi_dma (
     output logic        dev_reset,
 
     // ---- interrupt -------------------------------------------------------
-    output logic        irq           // control[0], the XIE interrupt
+    output logic        irq,          // control[0], the XIE interrupt
+
+    // SGI: DDR3 debug beacon (docs/29) - the DMA channel's live state, to see
+    // whether IRIX's segmented-read completion interrupt is firing. Pure tap.
+    //   [63:60] dstate [59] ctrl_active [58] ctrl_int [57] ctrl_dir
+    //   [56] desc_eox  [55] desc_xie    [54] dev_req  [53] dev_ack
+    //   [52] dev_dir_in [51] dev_eop    [50] dma_req  [49] dma_ack [48] dma_we
+    //   [47:32] bc[15:0]  [31:0] cbp
+    output logic [63:0] dbg_dma
 );
 
     // ---- register file ----------------------------------------------------
@@ -516,5 +524,11 @@ module hpc3_scsi_dma (
             endcase
         end
     end
+
+    // SGI: DDR3 debug beacon tap (docs/29). Pure observation.
+    assign dbg_dma = { dstate, ctrl_active, ctrl_int, ctrl_dir,
+                       desc_eox, desc_xie, dev_req, dev_ack, dev_dir_in,
+                       dev_eop, dma_req, dma_ack, dma_we,
+                       bc[15:0], cbp };
 
 endmodule

@@ -69,6 +69,10 @@ module sgi_hpc3 (
     output logic        scsi_dev_reset,
 
     output logic        scsi_dma_irq,
+
+    // SGI: DDR3 debug beacon (docs/29) - the SCSI0 DMA channel's live state.
+    output logic [63:0] dbg_scsi0_dma,
+
     // Combinational: 0 means this offset is not decoded here at all, and the
     // access should fall through to the core's unclaimed-cycle path.
     output logic        claimed
@@ -191,7 +195,8 @@ module sgi_hpc3 (
         .dev_rdata  (scsi_dev_rdata),
         .dev_reset  (scsi_dev_reset),
 
-        .irq        (scsi_dma_irq)
+        .irq        (scsi_dma_irq),
+        .dbg_dma    (dbg_scsi0_dma)
     );
 
     // ---- the DMA interrupt status register -------------------------------

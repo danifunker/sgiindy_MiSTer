@@ -214,7 +214,10 @@ module sgi_indy #(
 
     // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
     // the top's beacon writer. Pure observation.
-    output logic [63:0] dbg_scsi_bcn [7]
+    output logic [63:0] dbg_scsi_bcn [7],
+    // The HPC3 SCSI0 DMA channel's live state (docs/29), a separate beacon
+    // word - the engine lives in sgi_hpc3, not sgi_scsi.
+    output logic [63:0] dbg_hpc3_dma
 );
 
     localparam logic [31:0] RAM_BASE   = 32'h0800_0000;   // low local memory
@@ -622,7 +625,8 @@ module sgi_indy #(
         .scsi_dev_rdata  (scsi_dev_rdata),
         .scsi_dev_reset  (scsi_dev_reset),
 
-        .scsi_dma_irq    (scsi_dma_irq)
+        .scsi_dma_irq    (scsi_dma_irq),
+        .dbg_scsi0_dma   (dbg_hpc3_dma)
     );
 
     //------------------------------------------------------------------
