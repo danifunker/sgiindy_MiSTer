@@ -237,7 +237,17 @@ present", the state IRIS models as `hal2_absent_read`. The PROM skips its
 HAL2 init, hinv prints no audio line, IRIX never loads `kdsp_a2`. The
 register file stays for when the DMA channel and the sample pipeline exist.
 `tests/run-scsi.sh` and `run-cdrom.sh` stop on the CD-ROM line now (it is
-the last hinv line) and run-scsi forbids the audio line. Fitted as build 18.
+the last hinv line) and run-scsi forbids the audio line. Sim-verified with
+the whole machine: `run-prom` PASS, `run-scsi` PASS, `run-cdrom` PASS (the
+PROM boots, lists the disk and the drive, prints no audio line). Fitted as
+build 18 together with the fetch-path fixes.
+
+**Verified on the board, build 18:** toolchest System -> System Shutdown
+posts its "Power off and set boot time ... Are you sure?" dialog with the
+CPU idling (beacon PCs in the idle loop, none in `bzero`), an error dialog
+that rings the bell earlier in the same session did not freeze anything,
+and clicking Ok shut IRIX down cleanly back to the PROM - the first clean
+shutdown this board has had, so the next boot fscks nothing.
 
 ## 4. Item 4 scoping, from reading rather than guessing
 
