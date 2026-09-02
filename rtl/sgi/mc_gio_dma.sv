@@ -219,11 +219,19 @@ module mc_gio_dma (
     // ---- beat geometry, computed in S_BEAT --------------------------------
     wire [2:0] lane0_c = vaddr[2:0];
     wire [3:0] max0_c  = 4'd8 - {1'b0, lane0_c};
-    // Fill moves exactly four bytes a step, saturating the count; copies
-    // move up to eight.
+    // Fill steps four bytes at a time in IRIS - but an aligned ascending
+    // fill with eight or more to go writes the pattern twice per beat and
+    // covers eight, which leaves the identical memory image in half the
+    // writes. That is not a luxury: the PROM's boot clear is ONE descriptor
+    // covering all of RAM (2048 lines of 32 KB at 0xbfc01264), the CPU polls
+    // RUN for the whole of it, and a slower-than-the-old-engine fill pushed
+    // the sim boot past its stuck detector. Descending or unaligned fills
+    // keep the reference's four-byte steps. Copies move up to eight bytes.
     logic [3:0] len_c;
     always_comb begin
-        if (kind == K_FILL)           len_c = 4'd4;
+        if (kind == K_FILL)
+            len_c = (dir_up && lane0_c == 3'd0 && byte_count >= 16'd8)
+                    ? 4'd8 : 4'd4;
         else if (byte_count >= 16'd8) len_c = 4'd8;
         else                          len_c = byte_count[3:0];
     end
@@ -362,11 +370,12 @@ module mc_gio_dma (
                     n0       <= n0_c;
                     xl_for_b <= 1'b0;
                     case (kind)
-                        // Fill is a 4-byte write beat with the pattern
-                        // preloaded; it reuses the copy path's scatter.
-                        K_FILL:  begin beat <= {fill, 32'h0}; state <= S_MEMA; end
-                        K_M2G:   begin beat <= 64'h0;         state <= S_MEMA; end
-                        default: begin beat <= 64'h0;         state <= S_GIO;  end
+                        // Fill is a write beat with the pattern preloaded in
+                        // both words - the byte enables trim a 4-byte step -
+                        // reusing the copy path's scatter.
+                        K_FILL:  begin beat <= {fill, fill}; state <= S_MEMA; end
+                        K_M2G:   begin beat <= 64'h0;        state <= S_MEMA; end
+                        default: begin beat <= 64'h0;        state <= S_GIO;  end
                     endcase
                 end
 
@@ -441,12 +450,12 @@ module mc_gio_dma (
                         state <= S_STEP;
                 end
 
-                // The step every finished beat takes. Fill steps by its
-                // fixed four in either direction; copies ascend by what
-                // they moved.
+                // The step every finished beat takes. An ascending fill or
+                // copy advances by what the beat moved; a descending fill
+                // steps its reference four.
                 S_STEP: begin
-                    if (kind == K_FILL)
-                        vaddr <= dir_up ? vaddr + 32'd4 : vaddr - 32'd4;
+                    if (kind == K_FILL && !dir_up)
+                        vaddr <= vaddr - 32'd4;
                     else
                         vaddr <= vaddr + {28'h0, beat_len};
                     byte_count <= (byte_count > {12'h0, beat_len})
