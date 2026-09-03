@@ -4,8 +4,8 @@ Paste everything below the line as the opening message of a fresh session.
 This follows [39](39-burst-fills-dcache.md), the session of 2026-09-02/03
 that assessed the R4600 swap, built burst line fills instead, tried two
 16 KB data caches that both killed IRIX's init, and shipped build 21 with
-the original 8 KB cache and one-round-trip fills. Written 2026-09-03, with
-option 1 below already in the worktree and its gates running.
+the original 8 KB cache and one-round-trip fills. Written 2026-09-03.
+Option 1 below is a PLAN: nothing of it is in the tree.
 
 ---
 
@@ -31,14 +31,12 @@ option 1 below already in the worktree and its gates running.
   Enter, wait for that screen. The pointer walk: 40 steps of (-40,-40) to
   the corner, then aim for the window CENTRE with the deltas divided by ~1.8
   (the 1:1 `xset m 0 0` was not in effect), screenshot, click, type.
-* **Option 1 (below) is IMPLEMENTED in the worktree, UNCOMMITTED, gates
-  running when this was written**: `rtl/cpu/r4300/cpu_datacache.vhd`
-  (16 KB, `tlb_unstall` port, `ce_fetch` on the unstall clock), `cpu.vhd`
-  (`EXECacheAddr(13 downto 12)` from the mini-TLB), `r4300_wrap.vhd`
-  (`SETTLE_CLOCKS` 2048), `rtl/cpu/r4300/UPSTREAM.md` (describes it). If
-  the worktree is gone, the change is small enough to redo from the
-  description in UPSTREAM.md and section 1 below. Do NOT merge it to `main`
-  before the IRIX boot in the simulator has passed init.
+* **Nothing of option 1 is in the tree.** The data cache on `main` is the
+  R4300's 8 KB one (`rtl/cpu/r4300/cpu_datacache.vhd` unchanged from
+  upstream); `rtl/cpu/generated/r4300_wrap.v` is gitignored and was deleted
+  from the worktree, so the first `make -C verilator ...` regenerates it
+  (6-9 minutes, GHDL, the LLVM shim from `local-toolchain`). Do NOT merge a
+  new cache to `main` before the IRIX boot in the simulator has passed init.
 * **The IRIX boot in the simulator is a GATE now**, the only one that
   caught the two dead caches: `verilator/obj_dir/Vsim_top --prom
   roms/IP24_Indy/ip24prom.070-9101-011.bin --no-gfx --disk
@@ -103,9 +101,9 @@ class of bug, on the board or in the simulator.
 
 ## The queue
 
-### 1. Option 1: 16 KB direct-mapped, PHYSICALLY indexed (in the worktree; finish it)
+### 1. Option 1: 16 KB direct-mapped, PHYSICALLY indexed (do this first)
 
-The design, as implemented: `cpu_TLB_data.vhd`'s mini-TLB compares
+The design: `cpu_TLB_data.vhd`'s mini-TLB compares
 `calcMemAddr` combinationally in the execute cycle and produces
 `TLB_dataAddrOutFound`, so in `cpu.vhd`
 
@@ -113,9 +111,9 @@ The design, as implemented: `cpu_TLB_data.vhd`'s mini-TLB compares
                              else TLB_dataAddrOutFound(13 downto 12)  when EXETLBMapped = '1'
                              else calcMemAddr(13 downto 12);
 
-and the cache reads its tag AGAIN on the unstall clock (`ce_fetch` extended
-with the new `tlb_unstall` input) because the read it did on the miss clock
-used `Found` bits that were not yet valid; the execute stage still presents
+and the cache reads its tag AGAIN on the unstall clock (extend `ce_fetch`
+with a new `tlb_unstall` input wired to `TLB_dataUnStall`) because the read
+it did on the miss clock used `Found` bits that were not yet valid; the execute stage still presents
 the same access on that clock (decode is frozen through the stall) and
 stage 4 consumes the read one clock later exactly as after an ordinary
 fetch. Unmapped regions translate to themselves in those bits. Index cache
@@ -131,8 +129,19 @@ sit in front of the tag RAM's address, and the core clock had +2.772 ns on
 build 21 - then the board: `tests/run-cputest-hw.sh --no-build` (`ld_miss`
 should stay ~13 ticks; the gain is fewer misses, which the bench group does
 not measure - `i_cached`/`st_cached` must stay 1.0 CPI), IRIX to the
-desktop, toolchest, `init 0`. Then commit, UPSTREAM.md already describes it,
-docs/41.
+desktop, toolchest, `init 0`. Then commit with the `-- SGI:` markers and a
+table in `rtl/cpu/r4300/UPSTREAM.md`, and docs/41.
+
+The cache file itself is upstream's with one more index bit everywhere
+(`tag_address_a/b` and `tag_addr_cmd` 10 bits, `tag_read_addr` 14, the
+`_1x/_2x` copies 10, `cache_addr_a` and `cache_address_b` 11, `clearAddr`
+10 and `10x"3FF"`, tag RAM `addr_width 10`, data RAM 11, `read_hit` and the
+Create-Dirty compare on `tag_compare(19 downto 2)` against `RW_addr(31
+downto 14)`, `fillAddr`/`writeback_addr` from `RW_addr(13 downto 4)`, the
+export block's `(13 downto 4)` and `0 to 1023`), the `tlb_unstall` port,
+and `SETTLE_CLOCKS` 2048 in `r4300_wrap.vhd` for the 1024-entry clear.
+Twenty-odd hunks; the session that wrote this had them scripted and they
+all applied cleanly.
 
 If it fails timing, the shortest fix is to register nothing and instead
 give the tag RAM the virtual bits when unmapped and the mini-TLB bits when
