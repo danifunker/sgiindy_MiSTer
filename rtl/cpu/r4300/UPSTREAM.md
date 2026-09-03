@@ -69,7 +69,7 @@ reasoning and the safety argument for the cache-geometry report.
 | `cpu_cop0.vhd` | `PRId` reports `0x0440` | An R4400PC is what an Indy has; `hinv` and IRIX both key off it |
 | `cpu_FPU.vhd` | `FIR` reports revision 5, not 0x0A | The R4000-family FPU identity |
 | `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of 32 | Not optional once `PRId` says R4400: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search is sequential, so the cost is one address bit and 16 more cycles worst case |
-| `cpu_cop0.vhd` | `Config` reports 16 KB/16-byte for both caches | R4400 geometry. Both errors are in the safe direction for index-based flushes — see `docs/10` |
+| `cpu_cop0.vhd` | `Config` reports 16 KB with 32-byte lines for both caches (IC = DC = 2, IB = DB = 1) | Since docs/39 that is the TRUTH for both caches, and it has to be: IRIX's `Create_Dirty_Exclusive` sweeps step by the reported data line, and a step finer than the real line marks bytes dirty that were never written. Before docs/39 it reported 16-byte lines over a 32-byte instruction cache and an 8 KB data cache, which `docs/10` argued was safe in that direction (and it was) |
 | `cpu.vhd` | COP2 is always unusable, `Cause.CE = 2` | An R4400 has no coprocessor 2; the R4300's data latch made `mfc2` succeed |
 | `cpu.vhd` | MIPS IV COP1 function codes 0x11/0x12/0x13/0x15/0x16 raise Reserved Instruction | They reached the FPU and came back as Unimplemented Operation, which makes an R4400 look like an R5000 to software probing for MIPS IV |
 
@@ -123,6 +123,22 @@ are untouched and remain CP0's own. `tests/run-int.sh` exercises the whole path
 from an 8254 counter to an Interrupt exception, both directly on IP4 and
 through INT2's mappable summary on IP2, and checks that masking at either end
 stops it.
+
+### The data cache — 16 KB with 32-byte lines (docs/39)
+
+The R4300's 8 KB / 16-byte data cache was the smallest thing in the machine,
+and on the board every word of a fill cost a whole DDR3 round trip (about 18
+cycles: a 16-byte line was 36, a 32-byte instruction line about 72). The
+geometry here is the one `MiSTer-devel/Arcade-KillerInstinct_MiSTer` gave this
+same file for its R4600 (`rtl/cpu/cpu_datacache.vhd` at `bfdb073`,
+2026-09-01), transcribed hunk for hunk; the fill itself became one burst
+request in `r4300_bus.sv`, which is outside the vendored tree.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_datacache.vhd` | 512 lines of 32 bytes, indexed on address bits 13:5 with the tag compared on 31:14; the writeback is four beats; the fill receiver is KI's clk1x beat counter (`fill_line_saved`, `fill_beat_2x`) instead of upstream's clk2x address chase | Twice the capacity and twice the line of the R4300's cache, matching the instruction cache. KI's writeback carries the read address one state ahead of the beat, and their `tb_ki_datacache_writeback` is why: the cache RAM read is registered, and the two-beat original never had to notice. KI's write-through mode, `LITTLE_ENDIAN` generic and debug port are not carried over |
+| `cpu.vhd` | a data fill is `mem_size = "100"` at a 32-byte-aligned address, the same as an instruction fill; the write FIFO is 16 deep, was 8 | A dirty line is four beats with no ready handshake, started as soon as `writefifo_block` drops with up to three entries already queued. Eight entries held seven before `Full`; four beats plus a fetch landing in the gap can reach it, two beats never could |
+| `cpu_cop0.vhd` | `Config.DB = 1`, and `IB = 1` too | The truth, see the presentation table above |
 
 `DATACACHETLBON` is now 1 in `r4300_wrap.vhd` (upstream default 0), which is a
 port value rather than a source change but belongs with them: with KSEG0 cached

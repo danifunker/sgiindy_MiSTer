@@ -175,6 +175,7 @@ int main(int argc, char **argv)
     dut->reset = 1; dut->clk = 0;
     dut->fbr_req = dut->dl_req = dut->ram_req = dut->prom_req = dut->fbw_req = 0;
     dut->fbr_burst = 1;
+    dut->ram_burst = 1;
     dut->ram_we = dut->fbw_we = 0;
     dut->DDRAM_BUSY = 0; dut->DDRAM_DOUT_READY = 0;
     for (int i = 0; i < 8; i++) tick();
@@ -234,15 +235,25 @@ int main(int argc, char **argv)
                 m->expect = prom_shadow.count(a) ? prom_shadow[a] : 0;
                 dut->prom_addr = a; dut->prom_req = 1;
             } else if (m == &m_ram) {
+                // THE CPU'S PORT READS BURSTS SINCE docs/39: a line fill is
+                // one request for 2 or 4 words, answered a word at a time
+                // with ram_last on the final one. Writes stay single.
                 m->is_write = (rng() % 2) == 0;
+                m->got = 0;
                 if (m->is_write) {
                     uint64_t v = garbage();
                     m->shadow[a] = v;
+                    m->burst = 1;
                     dut->ram_wdata = v; dut->ram_be = 0xFF;
                 } else {
+                    static const int bursts[4] = {1, 2, 4, 4};
+                    m->burst = bursts[rng() % 4];
+                    a &= ~(uint32_t)(m->burst * 8 - 1);      // line-aligned
+                    m->addr = a;
                     m->expect = m->shadow.count(a) ? m->shadow[a] : 0;
                 }
                 dut->ram_addr = a; dut->ram_we = m->is_write; dut->ram_req = 1;
+                dut->ram_burst = m->burst;
             } else {
                 m->is_write = (rng() % 2) == 0;
                 if (m->is_write) {
@@ -287,10 +298,24 @@ int main(int argc, char **argv)
             }
         }
         if (dut->ram_ack) {
-            if (!m_ram.is_write && dut->ram_rdata != m_ram.expect)
-                fail("ram read", m_ram.addr, m_ram.expect, dut->ram_rdata);
-            m_ram.busy = false; m_ram.acked++;
-            if (m_ram.wait_cycles > m_ram.worst_wait) m_ram.worst_wait = m_ram.wait_cycles;
+            // One ack per word, in address order, each checked against the
+            // shadow at ITS address; the count must close exactly where
+            // ram_last says it does.
+            if (!m_ram.is_write) {
+                uint32_t a = m_ram.addr + (uint32_t)m_ram.got * 8;
+                uint64_t want = m_ram.shadow.count(a) ? m_ram.shadow[a] : 0;
+                if (dut->ram_rdata != want) fail("ram read", a, want, dut->ram_rdata);
+            }
+            m_ram.got++;
+            bool done = m_ram.got >= m_ram.burst;
+            if ((bool)dut->ram_last != done) {
+                fail("ram_last", m_ram.addr, done, dut->ram_last);
+                done = true;
+            }
+            if (done) {
+                m_ram.busy = false; m_ram.acked++;
+                if (m_ram.wait_cycles > m_ram.worst_wait) m_ram.worst_wait = m_ram.wait_cycles;
+            }
         }
         if (dut->prom_ack) {
             if (dut->prom_rdata != m_prom.expect)
@@ -319,6 +344,7 @@ int main(int argc, char **argv)
     // permanently one ack out of step - which reads exactly like the bug it is
     // meant to catch. It cost an hour of blaming the fix for the harness.
     dut->fbw_req = 0; dut->ram_req = 0; dut->prom_req = 0; dut->fbr_req = 0;
+    dut->ram_burst = 1;
     for (int i = 0; i < 512; i++) tick();
 
     printf("\nphase 3: a read-modify-write master that holds its request ...\n");

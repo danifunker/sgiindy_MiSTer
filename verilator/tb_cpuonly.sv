@@ -31,8 +31,19 @@ module tb_cpuonly
     input  logic        dcache_en,
     input  logic  [4:0] irq_lines,
     input  logic  [7:0] lat,
+    // Whether the memory streams a line fill (one request, N words, `last`
+    // on the final one) or answers every request with one word and lets
+    // r4300_bus fetch the rest one at a time. Both are legitimate responders
+    // on the SGI bus - main memory is the first kind, the PROM the second -
+    // so every case runs both ways and must agree.
+    input  logic        burst_en,
 
     output logic  [5:0] cpu_error,
+    // Requests taken and words acknowledged. With bursts on and a cache on,
+    // the second outruns the first; that is how the C++ side knows a burst
+    // actually happened rather than being quietly answered word by word.
+    output logic [31:0] n_req_o,
+    output logic [31:0] n_ack_o,
     // Exposed so a test can watch the bus rather than infer it from results.
     output logic        bus_req_o,
     output logic        bus_we_o,
@@ -77,11 +88,11 @@ module tb_cpuonly
         .fill_data_ready  (fill_data_ready)
     );
 
-    logic        bus_req, bus_we, bus_ack;
+    logic        bus_req, bus_we, bus_ack, bus_last;
     logic [31:0] bus_addr;
     logic [63:0] bus_wdata, bus_rdata;
     logic  [7:0] bus_be;
-    logic  [2:0] bus_aoff;
+    logic  [2:0] bus_aoff, bus_burst;
 
     r4300_bus u_bus (
         .clk             (clk),
@@ -104,8 +115,10 @@ module tb_cpuonly
         .bus_wdata       (bus_wdata),
         .bus_be          (bus_be),
         .bus_aoff        (bus_aoff),
+        .bus_burst       (bus_burst),
         .bus_rdata       (bus_rdata),
-        .bus_ack         (bus_ack)
+        .bus_ack         (bus_ack),
+        .bus_last        (bus_last)
     );
 
     assign bus_req_o   = bus_req;
@@ -127,18 +140,30 @@ module tb_cpuonly
     logic        busy;
     logic [31:0] held_addr;
     logic  [7:0] cnt;
+    logic  [2:0] left;       // words still owed after the one being answered
+    logic [31:0] n_req, n_ack;
+    assign n_req_o = n_req;
+    assign n_ack_o = n_ack;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            busy    <= 1'b0;
-            bus_ack <= 1'b0;
+            busy     <= 1'b0;
+            bus_ack  <= 1'b0;
+            bus_last <= 1'b1;
+            left     <= 3'd0;
+            n_req    <= 32'd0;
+            n_ack    <= 32'd0;
         end else begin
-            bus_ack <= 1'b0;
+            bus_ack  <= 1'b0;
+            bus_last <= 1'b1;
             if (!busy) begin
                 if (bus_req) begin
+                    n_req     <= n_req + 32'd1;
                     held_addr <= bus_addr;
                     cnt       <= lat;
                     busy      <= 1'b1;
+                    left      <= (burst_en && !bus_we && bus_burst > 3'd1)
+                                 ? bus_burst - 3'd1 : 3'd0;
                     if (bus_we) begin
                         for (int i = 0; i < 8; i++)
                             if (bus_be[7-i])
@@ -148,9 +173,18 @@ module tb_cpuonly
             end else if (cnt != 0) begin
                 cnt <= cnt - 8'd1;
             end else begin
+                // The first word after `lat` idle clocks, the rest of a
+                // burst on the clocks straight after it, as DDR3 streams.
                 bus_rdata <= mem[held_addr[19:3]];
                 bus_ack   <= 1'b1;
-                busy      <= 1'b0;
+                n_ack     <= n_ack + 32'd1;
+                if (left != 3'd0) begin
+                    bus_last  <= 1'b0;
+                    left      <= left - 3'd1;
+                    held_addr <= held_addr + 32'd8;
+                end else begin
+                    busy      <= 1'b0;
+                end
             end
         end
     end

@@ -15,6 +15,11 @@
 //  combinational answer: it keeps the ack edge that r4300_bus hands to
 //  cpu.vhd's mem_done clean, and it means nothing here accidentally depends
 //  on zero-delay memory.
+//
+//  A read may be a BURST of up to four words (`burst`), answered one word a
+//  cycle with `ack` on each and `last` on the final one. That is the shape of
+//  rtl/mister/ddr3_mux.sv's main-memory port, and the CPU's line fills use
+//  it, so they take the same path here that they take on the board.
 //============================================================================
 
 `ifndef SIM_LATENCY
@@ -31,8 +36,10 @@ module sim_ram
     input  wire [31:0] addr,
     input  wire [63:0] wdata,
     input  wire  [7:0] be,
+    input  wire  [2:0] burst,     // words per read, 1..4; 0 reads as 1
     output reg  [63:0] rdata,
-    output reg         ack
+    output reg         ack,
+    output reg         last       // with ack: the final word of the request
 );
 
     import "DPI-C" function longint unsigned sgi_dpi_read
@@ -41,12 +48,29 @@ module sim_ram
         (input int unsigned space, input int unsigned addr,
          input longint unsigned data, input byte unsigned be);
 
+    reg  [2:0] left = 3'd0;        // words still owed after this one
+    reg [31:0] next_addr = 32'd0;
+
     always @(posedge clk) begin
-        ack <= 1'b0;
+        ack  <= 1'b0;
+        last <= 1'b1;
         if (req) begin
-            if (we) sgi_dpi_write(space, addr, wdata, be);
-            else    rdata <= sgi_dpi_read(space, addr);
-            ack <= 1'b1;
+            if (we) begin
+                sgi_dpi_write(space, addr, wdata, be);
+                ack <= 1'b1;
+            end else begin
+                rdata     <= sgi_dpi_read(space, addr);
+                ack       <= 1'b1;
+                last      <= (burst <= 3'd1);
+                left      <= (burst <= 3'd1) ? 3'd0 : burst - 3'd1;
+                next_addr <= addr + 32'd8;
+            end
+        end else if (left != 3'd0) begin
+            rdata     <= sgi_dpi_read(space, next_addr);
+            ack       <= 1'b1;
+            last      <= (left == 3'd1);
+            left      <= left - 3'd1;
+            next_addr <= next_addr + 32'd8;
         end
     end
 

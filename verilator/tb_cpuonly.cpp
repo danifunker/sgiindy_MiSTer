@@ -231,9 +231,15 @@ public:
 struct Result {
     bool done, exception;
     uint32_t value, hi, cause, epc, badv;
+    uint32_t reqs, acks;     // bus requests taken, words acknowledged
+    bool same(const Result &o) const {
+        return done == o.done && value == o.value && hi == o.hi
+            && cause == o.cause && epc == o.epc && badv == o.badv;
+    }
 };
 
-static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, long budget)
+static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, bool burst,
+                      long budget)
 {
     h.clear();
     uint32_t pc = 0xbfc00000;
@@ -252,6 +258,7 @@ static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, long
     h.top->dcache_en = dc;
     h.top->irq_lines = 0;
     h.top->lat = (uint8_t)lat;
+    h.top->burst_en = burst;
     for (int i = 0; i < 32; i++) h.tick();
     h.top->reset = 0;
 
@@ -281,6 +288,8 @@ static Result run_one(Harness &h, const Case &c, int lat, bool ic, bool dc, long
     r.epc       = h.peek32(OUT_EPC);
     r.badv      = h.peek32(OUT_BADV);
     r.exception = (r.cause != 0);
+    r.reqs      = h.top->n_req_o;
+    r.acks      = h.top->n_ack_o;
     return r;
 }
 
@@ -314,6 +323,12 @@ int main(int argc, char **argv)
 
     Harness h;
     int fails = 0, runs = 0;
+    // A LINE FILL IS ONE BURST NOW (docs/39), and the memory here can answer
+    // it either way: streaming, as main memory does on the board, or one word
+    // per request, as the PROM does. Every case runs both ways at every
+    // latency and the two must agree in every register - and at least one
+    // burst has to have been streamed, or the check is checking nothing.
+    long burst_runs = 0, burst_seen = 0;
 
     for (const Case &c : CASES) {
         printf("\n== %s\n   %s\n", c.name, c.asks);
@@ -327,13 +342,25 @@ int main(int argc, char **argv)
             static const char *names[4] = { "i=off d=off", "i=on  d=off",
                                             "i=off d=on ", "i=on  d=on " };
             for (int lat = 0; lat <= maxlat; lat++) {
-                Result r = run_one(h, c, lat, ic, dc, budget);
-                runs++;
+                Result r  = run_one(h, c, lat, ic, dc, false, budget);
+                Result rb = run_one(h, c, lat, ic, dc, true,  budget);
+                runs += 2;
                 bool ok = c.expect_exception
                         ? r.exception
                         : (r.done && !r.exception && r.value == c.expect_value
                            && (!c.check_hi || r.hi == c.expect_hi));
                 if (!ok) fails++;
+                if (!rb.same(r)) {
+                    fails++;
+                    printf("     %s lat=%-3d BURST DISAGREES: value=0x%08x/0x%08x "
+                           "cause=0x%08x/0x%08x done=%d/%d\n",
+                           names[mode], lat, r.value, rb.value, r.cause, rb.cause,
+                           r.done, rb.done);
+                }
+                if (dc) {
+                    burst_runs++;
+                    if (rb.acks > rb.reqs) burst_seen++;
+                }
                 bool merged = false;
                 for (Seen &s : seen)
                     if (s.value == r.value && s.hi == r.hi && s.cause == r.cause && s.epc == r.epc
@@ -363,6 +390,12 @@ int main(int argc, char **argv)
         }
     }
 
+    printf("\nline fills streamed as bursts in %ld of %ld data-cache runs\n",
+           burst_seen, burst_runs);
+    if (burst_runs && !burst_seen) {
+        printf("   FAILED: no burst was ever streamed - r4300_bus is not asking for lines\n");
+        fails++;
+    }
     printf("\n%d runs, %d against expectation\n", runs, fails);
     return fails ? 1 : 0;
 }

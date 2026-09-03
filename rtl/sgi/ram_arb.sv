@@ -84,7 +84,12 @@ module ram_arb (
     input  logic [31:0] cpu_addr,
     input  logic [63:0] cpu_wdata,
     input  logic  [7:0] cpu_be,
+    // Words to read, 1..4: a cache line fill. Part of the payload, so held
+    // like the address. The port answers one `cpu_ack` per word and marks
+    // the final one with `cpu_last`; a write is one word, one ack.
+    input  logic  [2:0] cpu_burst,
     output logic        cpu_ack,
+    output logic        cpu_last,
 
     // ---- the DMA engines, already muxed into one ------------------------
     // `dma_req` is HELD until `dma_ack`.
@@ -106,7 +111,9 @@ module ram_arb (
     output logic [31:0] ram_addr,
     output logic [63:0] ram_wdata,
     output logic  [7:0] ram_be,
-    input  logic        ram_ack
+    output logic  [2:0] ram_burst,
+    input  logic        ram_ack,
+    input  logic        ram_last
 );
 
     // Whether this port has a transaction outstanding, and whose it is. Both
@@ -140,7 +147,10 @@ module ram_arb (
             if (cpu_go | dma_go) begin
                 inflight  <= 1'b1;
                 owner_dma <= dma_go;
-            end else if (ram_ack) begin
+            end else if (ram_ack && ram_last) begin
+                // A burst is one transaction until its LAST word: the port
+                // is still streaming, and a request issued into it now would
+                // be dropped exactly as before.
                 inflight  <= 1'b0;
             end
         end
@@ -151,8 +161,11 @@ module ram_arb (
     assign ram_addr  = dma_go ? dma_addr  : cpu_addr;
     assign ram_wdata = dma_go ? dma_wdata : cpu_wdata;
     assign ram_be    = dma_go ? dma_be    : cpu_be;
+    // The DMA engines move one word per transaction and have no burst input.
+    assign ram_burst = dma_go ? 3'd1      : cpu_burst;
 
     assign cpu_ack     = ram_ack & ~owner_dma;
+    assign cpu_last    = ram_last;
     assign dma_ack     = ram_ack &  owner_dma;
     assign dma_granted = dma_go;
 

@@ -407,10 +407,11 @@ end
 
 ////////////////////////   THE MACHINE   /////////////////////////
 
-wire        ram_req, ram_we, ram_ack;
+wire        ram_req, ram_we, ram_ack, ram_last;
 wire [31:0] ram_addr;
 wire [63:0] ram_wdata, ram_rdata;
 wire  [7:0] ram_be;
+wire  [2:0] ram_burst;
 
 wire        prom_req, prom_ack;
 wire [31:0] prom_addr;
@@ -479,8 +480,10 @@ sgi_indy u_core
 	.ram_addr         (ram_addr),
 	.ram_wdata        (ram_wdata),
 	.ram_be           (ram_be),
+	.ram_burst        (ram_burst),
 	.ram_rdata        (ram_rdata),
 	.ram_ack          (ram_ack),
+	.ram_last         (ram_last),
 
 	.prom_req         (prom_req),
 	.prom_addr        (prom_addr),
@@ -732,8 +735,10 @@ ddr3_mux u_mem
 	.ram_addr  (ram_addr),
 	.ram_wdata (ram_wdata),
 	.ram_be    (ram_be),
+	.ram_burst (ram_burst),
 	.ram_rdata (ram_rdata),
 	.ram_ack   (ram_ack),
+	.ram_last  (ram_last),
 
 	.prom_req  (prom_req),
 	.prom_addr (prom_addr),

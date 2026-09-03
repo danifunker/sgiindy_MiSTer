@@ -104,10 +104,11 @@ module sim_top
     output wire [39:0] int2_state
 );
 
-    wire        ram_req, ram_we, ram_ack;
+    wire        ram_req, ram_we, ram_ack, ram_last;
     wire [31:0] ram_addr;
     wire [63:0] ram_wdata, ram_rdata;
     wire  [7:0] ram_be;
+    wire  [2:0] ram_burst;
 
     wire        prom_req, prom_ack;
     wire [31:0] prom_addr;
@@ -185,8 +186,10 @@ module sim_top
         .ram_addr      (ram_addr),
         .ram_wdata     (ram_wdata),
         .ram_be        (ram_be),
+        .ram_burst     (ram_burst),
         .ram_rdata     (ram_rdata),
         .ram_ack       (ram_ack),
+        .ram_last      (ram_last),
 
         .prom_req      (prom_req),
         .prom_addr     (prom_addr),
@@ -276,31 +279,37 @@ module sim_top
 
     sim_ram u_ram  (.clk(clk), .space(32'd0), .req(ram_req),  .we(ram_we),
                     .addr(ram_addr),  .wdata(ram_wdata), .be(ram_be),
-                    .rdata(ram_rdata), .ack(ram_ack));
+                    .burst(ram_burst),
+                    .rdata(ram_rdata), .ack(ram_ack), .last(ram_last));
 
+    // Single-word ports, as on the board: ddr3_mux's PROM port does not
+    // burst, so a line fill that lands in the PROM is fetched word by word
+    // here too.
     sim_ram u_prom (.clk(clk), .space(32'd1), .req(prom_req), .we(1'b0),
-                    .addr(prom_addr), .wdata(64'd0), .be(8'd0),
-                    .rdata(prom_rdata), .ack(prom_ack));
+                    .addr(prom_addr), .wdata(64'd0), .be(8'd0), .burst(3'd1),
+                    .rdata(prom_rdata), .ack(prom_ack), .last());
 
     sim_ram u_gio  (.clk(clk), .space(32'd2), .req(gio_req),  .we(gio_we),
                     .addr(gio_addr),  .wdata(gio_wdata), .be(gio_be),
-                    .rdata(gio_rdata), .ack(gio_ack));
+                    .burst(3'd1),
+                    .rdata(gio_rdata), .ack(gio_ack), .last());
 
     // Both frame buffer ports address the same C++ backing store, so the
     // harness can dump the screen as one image and the two ports behave the
     // way a real VRAM's two ports do.
     sim_ram u_fbw  (.clk(clk), .space(32'd3), .req(fbw_req), .we(fbw_we),
                     .addr(fbw_addr), .wdata(fbw_wdata), .be(fbw_be),
-                    .rdata(fbw_rdata), .ack(fbw_ack));
+                    .burst(3'd1),
+                    .rdata(fbw_rdata), .ack(fbw_ack), .last());
 
     sim_ram u_fbr  (.clk(clk), .space(32'd3), .req(fbr_req), .we(1'b0),
-                    .addr(fbr_addr), .wdata(64'd0), .be(8'd0),
-                    .rdata(fbr_rdata), .ack(fbr_ack));
+                    .addr(fbr_addr), .wdata(64'd0), .be(8'd0), .burst(3'd1),
+                    .rdata(fbr_rdata), .ack(fbr_ack), .last());
     // The display's second serial port, for the auxiliary plane region. On
     // MiSTer a line cache with a per-line flag table sits here; against this
     // one-cycle memory the plain read is the same picture.
     sim_ram u_fba  (.clk(clk), .space(32'd3), .req(fba_req), .we(1'b0),
-                    .addr(fba_addr), .wdata(64'd0), .be(8'd0),
-                    .rdata(fba_rdata), .ack(fba_ack));
+                    .addr(fba_addr), .wdata(64'd0), .be(8'd0), .burst(3'd1),
+                    .rdata(fba_rdata), .ack(fba_ack), .last());
 
 endmodule

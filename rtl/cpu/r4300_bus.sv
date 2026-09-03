@@ -36,14 +36,21 @@
 //  LSB in bits [39:32], for a store of one byte to doubleword offset 0.
 //
 //  CACHE LINE FILLS. cpu.vhd asks for a line by putting an ordinary read on
-//  mem_* and tagging it with mem_size: "010" is a data-cache line (16 bytes)
-//  and "100" an instruction-cache line (32 bytes); everything else is "001",
-//  a single access. The address is already aligned to the line by the write
-//  FIFO (cpu.vhd:749-770), and it is a normal physical address, so a fill is
-//  just N consecutive doubleword reads through the same decode as everything
-//  else - a line that ran off the end of a MEMCFG bank, or out of the PROM,
-//  would get whatever those devices answer beat by beat rather than needing a
-//  rule of its own.
+//  mem_* and tagging it with mem_size: "100" is a 32-byte line (both caches,
+//  since the data cache grew to 32-byte lines - docs/39) and "010" a 16-byte
+//  one; everything else is "001", a single access. The address is already
+//  aligned to the line by the write FIFO (cpu.vhd:749-770), and it is a
+//  normal physical address, so a fill goes through the same decode as
+//  everything else.
+//
+//  A FILL IS ONE BURST REQUEST, AND FALLS BACK TO WORD-AT-A-TIME. `bus_burst`
+//  carries the number of doublewords wanted (1, 2 or 4). Main memory streams
+//  them back with one bus_ack per word and `bus_last` on the final one; any
+//  other responder - the PROM, a hole in MEMCFG - answers one word with
+//  bus_last set, and this module then asks for the remainder one word at a
+//  time, exactly as every fill used to be done. Measured on the board
+//  (docs/39): each word of a fill used to cost a whole DDR3 round trip, ~18
+//  cycles, so a 32-byte line was ~72 cycles; a burst pays the trip once.
 //
 //  The DATA comes back on a different port. The caches do not read
 //  mem_dataRead; they take four (or two) beats on ddr3_DOUT/ddr3_DOUT_READY,
@@ -120,8 +127,14 @@ module r4300_bus
     // last write set - so a device with more than one register per doubleword
     // has to select on this instead.
     output logic  [2:0] bus_aoff,
+    // Doublewords wanted, 1..4; held with the rest of the payload until the
+    // first bus_ack. See "CACHE LINE FILLS" above for the contract.
+    output logic  [2:0] bus_burst,
     input  logic [63:0] bus_rdata,
-    input  logic        bus_ack
+    input  logic        bus_ack,
+    // With bus_ack: this is the responder's final word for the request. A
+    // responder that cannot burst sets it on its only word.
+    input  logic        bus_last
 );
 
     // Byte-reverse: little-endian lanes <-> big-endian bus.
@@ -184,6 +197,7 @@ module r4300_bus
                                             : {mem_address[31:4], 4'b0000};
                             fill_beat  <= 2'd0;
                             fill_last  <= (mem_size == SZ_ILINE) ? 2'd3 : 2'd1;
+                            bus_burst  <= (mem_size == SZ_ILINE) ? 3'd4 : 3'd2;
                             // Safe to raise here: no device answers in the
                             // cycle it is asked, so the first beat cannot
                             // arrive before this has been taken and dropped.
@@ -192,6 +206,7 @@ module r4300_bus
                         end else begin
                             aoff      <= mem_address[2:0];
                             bus_addr  <= {mem_address[31:3], 3'b000};
+                            bus_burst <= 3'd1;
                             bus_wdata <= bswap64(wdata_le);
                             // be[7-L] guards bus_wdata[63-8L -: 8], which
                             // carries lane L, so the mask reverses with it.
@@ -224,8 +239,18 @@ module r4300_bus
                             state     <= S_FILLEND;
                         end else begin
                             fill_beat <= fill_beat + 2'd1;
+                            // The address tracks the word in flight whether
+                            // it is streaming or not, so a re-issue starts
+                            // where the responder stopped and a bus trace
+                            // shows every word at its own address.
                             bus_addr  <= bus_addr + 32'd8;
-                            bus_req   <= 1'b1;
+                            if (bus_last) begin
+                                // The responder stopped short of the line:
+                                // ask for what is left, one request for all
+                                // of it, and let it decide again.
+                                bus_req   <= 1'b1;
+                                bus_burst <= 3'(fill_last - fill_beat);
+                            end
                         end
                     end
 

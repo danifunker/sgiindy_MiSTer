@@ -60,6 +60,7 @@ static long err_misroute  = 0;   // ack delivered to the wrong master
 static long err_unasked   = 0;   // ack delivered to a master that was idle
 static long err_payload   = 0;   // wrong address/direction presented at issue
 static long err_noack     = 0;   // ack cycle that reached neither master
+static long err_last      = 0;   // cpu_last disagreed with the port's ram_last
 
 // ---- the port: one transaction at a time, answered after LAT cycles -------
 static bool     port_busy      = false;
@@ -67,12 +68,14 @@ static int      port_delay     = 0;
 static bool     port_owner_dma = false;
 static uint32_t port_addr      = 0;
 static bool     port_we        = false;
+static int      port_left      = 0;      // words of a burst still to answer
 
 // ---- the CPU: a one-cycle pulse, payload held until acknowledged ----------
 static bool     cpu_waiting = false;   // issued, not yet answered
 static bool     cpu_drive   = false;   // present cpu_req this cycle
 static uint32_t cpu_addr    = 0x1000;
 static bool     cpu_we      = false;
+static int      cpu_burst   = 1;       // words asked for: a line fill is 2 or 4
 static int      cpu_gap     = 0;
 static long     cpu_done    = 0;
 
@@ -89,10 +92,13 @@ static long cycles = 0;
 static void tick()
 {
     // ---- what the port is presenting this cycle --------------------------
-    bool ram_ack = false;
+    // A burst streams: after the first word's latency the rest come one a
+    // cycle, and ram_last marks the final one. That is ddr3_mux's contract
+    // for the main-memory port since docs/39.
+    bool ram_ack = false, ram_last = true;
     if (port_busy) {
         if (port_delay > 0) port_delay--;
-        else                ram_ack = true;
+        else { ram_ack = true; ram_last = (port_left == 0); }
     }
 
     // ---- drive the masters ------------------------------------------------
@@ -104,6 +110,7 @@ static void tick()
     dut->cpu_addr  = cpu_addr;
     dut->cpu_wdata = 0x1111111100000000ULL | cpu_addr;
     dut->cpu_be    = 0xFF;
+    dut->cpu_burst = cpu_burst;
 
     dut->dma_req   = dma_on ? 1 : 0;
     dut->dma_we    = dma_we ? 1 : 0;
@@ -112,6 +119,7 @@ static void tick()
     dut->dma_be    = 0xFF;
 
     dut->ram_ack   = ram_ack ? 1 : 0;
+    dut->ram_last  = ram_last ? 1 : 0;
     dut->eval();
 
     // ---- sample BEFORE the edge, the way synchronous logic does -----------
@@ -121,11 +129,14 @@ static void tick()
     bool     s_grant   = dut->dma_granted;
     bool     s_cpu_ack = dut->cpu_ack;
     bool     s_dma_ack = dut->dma_ack;
+    bool     s_cpu_last = dut->cpu_last;
+    int      s_burst   = dut->ram_burst;
 
     // ---- check 1: the port is one deep ------------------------------------
     // A request presented while a transaction is outstanding is dropped by
     // ddr3_mux, silently. This is the check the old arbiter fails.
-    if (s_req && port_busy && !ram_ack) err_overlap++;
+    // A burst is one transaction until its LAST word.
+    if (s_req && port_busy && !(ram_ack && ram_last)) err_overlap++;
 
     // ---- checks 2, 3, 5: the acknowledgement went to its owner ------------
     if (ram_ack) {
@@ -135,6 +146,7 @@ static void tick()
         if (!port_owner_dma && s_dma_ack)             err_misroute++;
         if (s_cpu_ack && !cpu_waiting)                err_unasked++;
         if (s_dma_ack && !dma_on)                     err_unasked++;
+        if (s_cpu_ack && s_cpu_last != ram_last)      err_last++;
     } else {
         if (s_cpu_ack || s_dma_ack)                   err_unasked++;
     }
@@ -144,6 +156,9 @@ static void tick()
         uint32_t want_addr = s_grant ? dma_addr : cpu_addr;
         bool     want_we   = s_grant ? dma_we   : cpu_we;
         if (s_addr != want_addr || s_we != want_we) err_payload++;
+        // The burst count is payload too: a DMA cycle is always one word.
+        int want_burst = s_grant ? 1 : cpu_burst;
+        if (s_burst != want_burst) err_payload++;
     }
 
     // ---- the clock --------------------------------------------------------
@@ -159,7 +174,9 @@ static void tick()
     // already been answered to somebody else. Retiring by owner instead would
     // model a CPU that notices it has been lied to, and no CPU does - it also
     // stops the run at the first fault and hides how often it happens.
-    if (ram_ack) {
+    if (ram_ack && !ram_last) {
+        port_left--;                       // the next word follows next cycle
+    } else if (ram_ack) {
         port_busy = false;
         if (s_cpu_ack) { cpu_done++; cpu_waiting = false;
                          cpu_gap = 1 + (int)(rng() % 12); }
@@ -173,6 +190,7 @@ static void tick()
         port_owner_dma = s_grant;
         port_addr      = s_addr;
         port_we        = s_we;
+        port_left      = (s_we || s_burst < 1) ? 0 : s_burst - 1;
         port_delay     = atoi(getenv("RAMARB_LAT") ? getenv("RAMARB_LAT") : "20");
     }
 
@@ -184,6 +202,8 @@ static void tick()
         else {
             cpu_addr  = 0x1000 + ((cpu_done * 8) & 0xFFFF);
             cpu_we    = (rng() % 3) == 0;
+            // Reads are a mix of single words and 2- or 4-word line fills.
+            cpu_burst = cpu_we ? 1 : ((rng() % 3) == 0 ? 4 : ((rng() % 2) ? 2 : 1));
             cpu_drive = true;
         }
     }
@@ -199,11 +219,12 @@ static void tick()
 
 static void reset_all()
 {
-    port_busy = false; port_owner_dma = false; port_delay = 0;
-    cpu_waiting = false; cpu_drive = false; cpu_gap = 0; cpu_done = 0;
+    port_busy = false; port_owner_dma = false; port_delay = 0; port_left = 0;
+    cpu_waiting = false; cpu_drive = false; cpu_gap = 0; cpu_done = 0; cpu_burst = 1;
     dma_on = false; dma_gap = 0; dma_done = 0;
     dut->reset = 1;
-    dut->cpu_req = 0; dut->dma_req = 0; dut->ram_ack = 0;
+    dut->cpu_req = 0; dut->dma_req = 0; dut->ram_ack = 0; dut->ram_last = 1;
+    dut->cpu_burst = 1;
     for (int i = 0; i < 8; i++) { dut->eval(); dut->clk = 1; dut->eval();
                                  dut->clk = 0; dut->eval(); }
     dut->reset = 0;
@@ -211,20 +232,20 @@ static void reset_all()
 
 static int phase(const char *name, bool cpu_en, bool dma_en, int n)
 {
-    err_overlap = err_misroute = err_unasked = err_payload = err_noack = 0;
+    err_overlap = err_misroute = err_unasked = err_payload = err_noack = err_last = 0;
     cpu_enabled = cpu_en; dma_enabled = dma_en;
     reset_all();
     for (int i = 0; i < n; i++) tick();
 
-    long bad = err_overlap + err_misroute + err_unasked + err_payload + err_noack;
+    long bad = err_overlap + err_misroute + err_unasked + err_payload + err_noack + err_last;
     // A phase where a master was enabled and completed nothing is a deadlock,
     // and it reads as a pass unless it is checked for.
     bool stalled = (cpu_en && cpu_done == 0) || (dma_en && dma_done == 0);
 
     printf("  %-28s cpu %6ld  dma %6ld  overlap %5ld  misroute %5ld  "
-           "unasked %4ld  payload %4ld  %s\n",
+           "unasked %4ld  payload %4ld  last %4ld  %s\n",
            name, cpu_done, dma_done, err_overlap, err_misroute,
-           err_unasked, err_payload,
+           err_unasked, err_payload, err_last,
            (bad || stalled) ? (stalled ? "DEADLOCK" : "FAIL") : "ok");
     return (bad || stalled) ? 1 : 0;
 }

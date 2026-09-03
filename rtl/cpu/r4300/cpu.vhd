@@ -150,7 +150,7 @@ architecture arch of cpu is
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
    signal writefifo_block              : std_logic;
-   signal writefifo_cnt                : integer range 0 to 7;
+   signal writefifo_cnt                : integer range 0 to 15;   -- SGI: 16-deep FIFO
           
    signal writefifo_rd_1x              : std_logic := '0';
    signal writefifo_rd_93              : std_logic := '0';
@@ -806,7 +806,7 @@ begin
                writefifo_Din(106)           <= mem4_req64;
                writefifo_Din(107)           <= datacache_request;
                if (datacache_request = '1') then
-                  writefifo_Din( 95 downto 64) <= std_logic_vector(datacache_reqAddr(31 downto 4)) & "0000";
+                  writefifo_Din( 95 downto 64) <= std_logic_vector(datacache_reqAddr(31 downto 5)) & "00000";   -- SGI: 32-byte lines
                end if;
             elsif (mem1_request = '1' or instrcache_request = '1') then
                writefifo_wr                 <= '1';
@@ -852,7 +852,14 @@ begin
    iSyncFifo: entity mem.SyncFifoFallThroughMLAB
    generic map
    (
-      SIZE              => 8,
+      -- SGI: 16 deep, was 8. A dirty 32-byte line comes out of the data cache
+      -- as FOUR beats with no ready handshake (cpu_datacache.vhd's
+      -- WRITEBACK1WRITE..4WRITE), and it starts as soon as writefifo_block
+      -- drops, i.e. with up to three entries already queued. Eight entries
+      -- held seven before Full, which the old two-beat writeback could not
+      -- reach and four beats plus a fetch that lands in the gap can. The
+      -- block threshold stays at four; only the headroom above it grew.
+      SIZE              => 16,
       DATAWIDTH         => 108, -- 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache
       NEARFULLDISTANCE  => 4
    )
@@ -905,7 +912,7 @@ begin
                         mem_size          <= "001";
                         
                         if (writefifo_Dout(104) = '1' and writefifo_Dout(107) = '1') then
-                           mem_size          <= "010";
+                           mem_size          <= "100";   -- SGI: a 32-byte data line, four words
                            datacache_active  <= '1';
                         end if;
                         
@@ -3003,6 +3010,7 @@ begin
       clk1x             => clk1x,
       clk93             => clk93,
       clk2x             => clk2x,
+      reset_1x          => reset_1x,   -- SGI
       reset_93          => reset_93,
       ce_93             => ce_93,
       stall             => stall,

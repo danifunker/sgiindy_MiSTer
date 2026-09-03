@@ -108,8 +108,13 @@ module sgi_indy #(
     output logic [31:0] ram_addr,     // offset from the base of RAM
     output logic [63:0] ram_wdata,
     output logic  [7:0] ram_be,
+    // A read may ask for 1..4 consecutive words - the CPU's line fills do -
+    // and is then answered with one `ram_ack` per word, `ram_last` on the
+    // final one. See rtl/cpu/r4300_bus.sv and rtl/mister/ddr3_mux.sv.
+    output logic  [2:0] ram_burst,
     input  logic [63:0] ram_rdata,
     input  logic        ram_ack,
+    input  logic        ram_last,
 
     // ---- boot PROM (read-only) ------------------------------------------
     output logic        prom_req,
@@ -339,6 +344,8 @@ module sgi_indy #(
     logic [63:0] bus_wdata, bus_rdata;
     logic  [7:0] bus_be;
     logic  [2:0] bus_aoff;
+    logic  [2:0] bus_burst;
+    logic        bus_last;
 
     r4300_bus u_bus (
         .clk           (clk),
@@ -361,8 +368,10 @@ module sgi_indy #(
         .bus_wdata     (bus_wdata),
         .bus_be        (bus_be),
         .bus_aoff      (bus_aoff),
+        .bus_burst     (bus_burst),
         .bus_rdata     (bus_rdata),
-        .bus_ack       (bus_ack)
+        .bus_ack       (bus_ack),
+        .bus_last      (bus_last)
     );
 
     //------------------------------------------------------------------
@@ -482,6 +491,7 @@ module sgi_indy #(
     // as zero - see sgi_memmap.sv on why that matters to POST.
     wire cpu_ram_req = bus_req && sel_ram && mem_hit;
     wire cpu_ram_ack;
+    wire cpu_ram_last;
     wire dma_port_ack;
     wire dma_grant;
 
@@ -494,7 +504,9 @@ module sgi_indy #(
         .cpu_addr   (mem_off),
         .cpu_wdata  (bus_wdata),
         .cpu_be     (bus_be),
+        .cpu_burst  (bus_burst),
         .cpu_ack    (cpu_ram_ack),
+        .cpu_last   (cpu_ram_last),
 
         .dma_req    (dma_req && dma_hit),
         .dma_we     (dma_we),
@@ -509,7 +521,9 @@ module sgi_indy #(
         .ram_addr   (ram_addr),
         .ram_wdata  (ram_wdata),
         .ram_be     (ram_be),
-        .ram_ack    (ram_ack)
+        .ram_burst  (ram_burst),
+        .ram_ack    (ram_ack),
+        .ram_last   (ram_last)
     );
 
     // The engine's addresses are physical, so they go through the same MEMCFG
@@ -984,6 +998,12 @@ module sgi_indy #(
     assign bus_ack   = cpu_ram_ack | prom_ack | gio_ack | mc_ack | hpc3_ack
                      | ioc_ack | rtc_ack | scc_ack | kbd_ack | scsi_ack | none_ack | gio_absent_ack
                      | mem_hole_ack | gfx_ack | gfx_absent_ack;
+
+    // Only main memory streams a burst. Every other responder answers a
+    // burst request with its one word and says so, and r4300_bus fetches the
+    // rest of the line one word at a time - the PROM included, which is why
+    // a fill that lands there still works, only slowly.
+    assign bus_last  = cpu_ram_ack ? cpu_ram_last : 1'b1;
 
     // Mirror the SCC's 32-bit answer into both halves of the doubleword so the
     // read shift in r4300_bus lands on it whichever word was addressed.

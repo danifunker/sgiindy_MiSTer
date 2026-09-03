@@ -308,9 +308,12 @@ ramarbtest:
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vram_arb $(RTL)/sgi/ram_arb.sv tb_ramarb.cpp
 
+# -Wno-LATCH: the round-robin pick declares its candidate inside the for loop
+# of an always_comb, which Verilator 5.020 reads as a latch; WM_W carries the
+# same waiver for the whole machine.
 ddr3test:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3 --top-module ddr3_mux \
-	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) -Wno-LATCH \
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vddr3_mux $(RTL)/mister/ddr3_mux.sv tb_ddr3.cpp
 

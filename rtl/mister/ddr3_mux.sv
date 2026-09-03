@@ -28,9 +28,15 @@
 //  for an answer nobody had heard - which is exactly the bug the HPC3 DMA
 //  engine had, and it is written up in docs/13-scsi-dma-plan.md.
 //
-//  ONE TRANSACTION AT A TIME, AND BURSTS ONLY FOR THE DISPLAY. The CPU and the
-//  rasteriser both stall on their own bus and are latency-tolerant, so a
-//  single 64-bit word per transaction is the honest shape for them.
+//  ONE TRANSACTION AT A TIME. The rasteriser stalls on its own bus and is
+//  latency-tolerant, so a single 64-bit word per transaction is the honest
+//  shape for it. The CPU's ordinary accesses are single words too, but its
+//  CACHE LINE FILLS ARE BURSTS: `ram_burst` asks for 1..4 consecutive words
+//  and the port answers with one `ram_ack` per word, `ram_last` on the final
+//  one. Measured on the board before this existed (docs/39), a line fill was
+//  one full round trip PER WORD - 36 cycles for a 16-byte data line, ~72 for
+//  a 32-byte instruction line - and the round trip, not the word, is what a
+//  DDR3 access costs. A burst pays it once.
 //
 //  THE DISPLAY IS DIFFERENT AND THE ARITHMETIC IS WHY. A visible line is 1318
 //  pixels of eight bytes each, and it has one line time to arrive. Single-word
@@ -95,8 +101,14 @@ module ddr3_mux #(
     input  logic [31:0] ram_addr,
     input  logic [63:0] ram_wdata,
     input  logic  [7:0] ram_be,
+    // Words per READ, 1..4 (0 reads as 1; a write is always one word). Held
+    // with the rest of the payload until the transaction is taken.
+    input  logic  [2:0] ram_burst,
     output logic [63:0] ram_rdata,
+    // One per word of a burst, not one per transaction; `ram_last` marks the
+    // final word. A write is acknowledged once, with `ram_last` set.
     output logic        ram_ack,
+    output logic        ram_last,
 
     // ---- master 3: the PROM, read only -----------------------------------
     input  logic        prom_req,
@@ -151,7 +163,8 @@ module ddr3_mux #(
     logic [24:0]            p_addr [NM];   // already a DDR3 word address
     logic [63:0]            p_wdata[NM];
     logic  [7:0]            p_be   [NM];
-    logic  [7:0]            p_burst;      // the display's only
+    logic  [7:0]            p_burst;      // the display's
+    logic  [2:0]            p_rburst;     // the CPU's, 1..4
 
     // A byte offset within a region becomes a word address by dropping the low
     // three bits of both, which is the only place the byte/word distinction
@@ -267,6 +280,8 @@ module ddr3_mux #(
     assign fbw_rdata  = rdata_q;
     assign dl_ack     = ack_q[M_DL];
     assign ram_ack    = ack_q[M_RAM];
+    logic ram_last_q;
+    assign ram_last   = ram_last_q;
     assign prom_ack   = ack_q[M_PROM];
     assign fbw_ack    = ack_q[M_FBW];
 
@@ -298,6 +313,7 @@ module ddr3_mux #(
             pend           <= '0;
             rq_seen        <= '0;
             ack_q          <= '0;
+            ram_last_q     <= 1'b1;
             tst            <= T_IDLE;
             cur            <= '0;
             rr             <= 2'd0;
@@ -310,6 +326,7 @@ module ddr3_mux #(
             DDRAM_BURSTCNT <= 8'd1;
         end else begin
             ack_q       <= '0;
+            ram_last_q  <= 1'b1;
             fbr_taken_q <= 1'b0;
 
             // Latch every request the cycle it appears. A master that pulses
@@ -364,7 +381,9 @@ module ddr3_mux #(
                                        && rq_addr[i] == p_addr[i])) begin
                     pend[i]    <= 1'b1;
                     rq_seen[i] <= 1'b1;
-                    if (i == M_FBR) p_burst <= fbr_burst;
+                    if (i == M_FBR) p_burst  <= fbr_burst;
+                    if (i == M_RAM) p_rburst <= (ram_we || ram_burst == 3'd0)
+                                                ? 3'd1 : ram_burst;
                     p_we[i]    <= rq_we[i];
                     p_addr[i]  <= rq_addr[i];
                     p_wdata[i] <= rq_wdata[i];
@@ -375,14 +394,17 @@ module ddr3_mux #(
             case (tst)
                 T_IDLE: if (any) begin
                     cur            <= pick;
-                    burst_left     <= (pick == $clog2(NM)'(M_FBR))
-                                      ? {1'b0, p_burst} : 9'd1;
+                    burst_left     <= (pick == $clog2(NM)'(M_FBR)) ? {1'b0, p_burst}
+                                    : (pick == $clog2(NM)'(M_RAM)) ? {6'b0, p_rburst}
+                                    :                                 9'd1;
                     // Only the rotating group advances the pointer; the
                     // display is not in it and must not push anyone's turn.
                     if (pick != $clog2(NM)'(M_FBR) &&
                         pick != $clog2(NM)'(M_BCN)) rr <= 2'(pick - 1);
                     DDRAM_ADDR     <= {REGION, p_addr[pick]};
-                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_FBR)) ? p_burst : 8'd1;
+                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_FBR)) ? p_burst
+                                    : (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst}
+                                    :                                 8'd1;
                     DDRAM_DIN      <= p_wdata[pick];
                     DDRAM_BE       <= p_we[pick] ? p_be[pick] : 8'hFF;
                     DDRAM_RD       <= ~p_we[pick];
@@ -417,6 +439,13 @@ module ddr3_mux #(
                 default: if (DDRAM_DOUT_READY) begin
                     rdata_q    <= DDRAM_DOUT;
                     burst_left <= burst_left - 9'd1;
+                    // The CPU takes its burst word by word, each with an
+                    // ack, the way the display takes its stream: the
+                    // requester counts, and `ram_last` closes the count.
+                    if (cur == $clog2(NM)'(M_RAM)) begin
+                        ack_q[M_RAM] <= 1'b1;
+                        ram_last_q   <= (burst_left <= 9'd1);
+                    end
                     if (burst_left <= 9'd1) begin
                         pend[cur]  <= 1'b0;
                         ack_q[cur] <= 1'b1;
