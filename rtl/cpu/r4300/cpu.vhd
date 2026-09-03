@@ -2503,9 +2503,17 @@ begin
 
    ---------------------- load/store ------------------
    
-   EXECacheAddr(31 downto 3) <= calcMemAddr(31 downto 3);
-                                
-   EXECacheAddr(2 downto 0)  <= "000"                  when (decodeLoadType = LOADTYPE_LEFT64 or decodeLoadType = LOADTYPE_RIGHT64) else 
+   -- SGI: physically index the 16 KB data cache on bits 13:12. A virtually
+   -- indexed 16 KB direct-mapped cache aliases on bit 13 and kills IRIX init
+   -- (docs/40); the data mini-TLB translates 13:12 in this same execute cycle,
+   -- and the cache re-reads its tags on TLB_dataUnStall for the walk case.
+   EXECacheAddr(31 downto 14) <= calcMemAddr(31 downto 14);
+   EXECacheAddr(13 downto 12) <= TLB_dataAddrOutLookup(13 downto 12) when (TLB_dataUnStall = '1') else
+                                 TLB_dataAddrOutFound(13 downto 12)  when (EXETLBMapped = '1')    else
+                                 calcMemAddr(13 downto 12);
+   EXECacheAddr(11 downto 3)  <= calcMemAddr(11 downto 3);
+
+   EXECacheAddr(2 downto 0)  <= "000"                  when (decodeLoadType = LOADTYPE_LEFT64 or decodeLoadType = LOADTYPE_RIGHT64) else
                                 calcMemAddr(2) & "00"  when (decodeLoadType = LOADTYPE_LEFT or decodeLoadType = LOADTYPE_RIGHT) else 
                                 calcMemAddr(2 downto 0);  
    
@@ -3007,6 +3015,7 @@ begin
       ce_93             => ce_93,
       stall             => stall,
       stall4            => stall4,
+      tlb_unstall       => TLB_dataUnStall,   -- SGI: physical 16 KB index (docs/40)
       fifo_block        => writefifo_block,
       
       slow_in           => DATACACHESLOW,

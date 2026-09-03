@@ -129,11 +129,12 @@ architecture arch of r4300_wrap is
    -- The instruction cache survives it only because it latches fill_request
    -- separately from its state machine.
    --
-   -- So the settle has to outlast the longer of the two clears. 1024 is that
-   -- with a factor of two in hand, and it costs a thousand clocks once.
-   -- (docs/39 tried a 1024-entry data cache and had this at 2048; both the
-   -- cache and the settle went back.)
-   constant SETTLE_CLOCKS : integer := 1024;
+   -- So the settle has to outlast the longer of the two clears. The data
+   -- cache is now 1024 entries (docs/40's physically indexed 16 KB), so its
+   -- CLEARCACHE walks 0..1023; 2048 is that with a factor of two in hand, and
+   -- it costs two thousand clocks once. (The 8 KB cache cleared 512 entries
+   -- and this was 1024.)
+   constant SETTLE_CLOCKS : integer := 2048;
    signal settle    : integer range 0 to SETTLE_CLOCKS := SETTLE_CLOCKS;
 
    signal ss_reset  : std_logic := '1';
