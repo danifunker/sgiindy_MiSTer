@@ -40,8 +40,9 @@ module tb_cpuonly
 
     output logic  [5:0] cpu_error,
     // Requests taken and words acknowledged. With bursts on and a cache on,
-    // the second outruns the first; that is how the C++ side knows a burst
-    // actually happened rather than being quietly answered word by word.
+    // a line costs one request instead of one per word; that is how the C++
+    // side knows a burst actually happened rather than being quietly
+    // answered word by word.
     output logic [31:0] n_req_o,
     output logic [31:0] n_ack_o,
     // Exposed so a test can watch the bus rather than infer it from results.

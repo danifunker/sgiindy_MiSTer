@@ -554,14 +554,7 @@ begin
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
             if (PRESENT_AS_R4400) then
-               -- SGI: 16K/16K, 32-byte lines (IC = DC = 2, IB = DB = 1) - and
-               -- since docs/39 that is the TRUTH for both caches, not the
-               -- safe-direction lie docs/10 argued for. It has to be: IRIX's
-               -- Create_Dirty_Exclusive sweeps step by the reported line size,
-               -- and a step finer than the real line marks bytes dirty that
-               -- were never written. The R4400 takes IB/DB as boot-mode
-               -- options, so a 32-byte configuration is an R4400 too.
-               readValue(14 downto 4) <= "11001001011";
+               readValue(14 downto 4) <= "11001001000";   -- SGI: 16K/16K, 16 B lines
             else
                readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
             end if;

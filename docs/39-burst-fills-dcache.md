@@ -1,4 +1,4 @@
-# 39. The R4600 swap, assessed; burst line fills and a 16 KB data cache instead
+# 39. The R4600 swap, assessed; burst line fills instead, and why the data cache stayed 8 KB
 
 Written 2026-09-02/03. Follows [38](38-resume-r4600-cd-fill-net.md), whose
 item 1 was "swap the CPU for Killer Instinct's R4600". This is the record of
@@ -101,49 +101,125 @@ are met:
   must agree in every register, and at least one burst must have been
   streamed or the run fails.
 
-### 3b. The data cache: 16 KB with 32-byte lines
+### 3b. The data cache: two attempts to grow it, and why it is still 8 KB
 
-KI's geometry change to `cpu_datacache.vhd`, transcribed hunk for hunk into
-`rtl/cpu/r4300/cpu_datacache.vhd` and marked `-- SGI:` like every other local
-change (KI's write-through mode, `LITTLE_ENDIAN` generic and debug port left
-out). `cpu.vhd` issues the data fill as `mem_size = "100"` at a 32-byte
-address, exactly like an instruction fill, and its write FIFO went from 8 to
-16 deep: a dirty line is now four beats with no ready handshake, started with
-up to three entries already queued, and eight entries held seven before
-`Full`.
+**Attempt 1: KI's geometry whole** - 512 lines of 32 bytes, transcribed hunk
+for hunk, `Config` reporting the truth (IB = DB = 1). It passed every gate
+below, fitted clean, and **killed `init` on the board** ("PANIC: init died
+(why = 2, what = 0x9)") and, decisively, **in the simulator at 188,024,331
+cycles with the caches on**, while the `--no-dcache` boot ran straight past
+that point. The traced run's RAM dump showed the shape: exactly one page of
+`/sbin/init`'s text (va 0x7fc07000, phys 0x00399000) held zeros from +0x40
+to the end while every other loaded page was byte-perfect; the last 64
+user-mode PCs were init running through four consecutive `jal`s without
+taking any - a page of NOPs.
 
-`Config` now tells the truth: 16 KB with 32-byte lines for both caches
-(`IC = DC = 2, IB = DB = 1`). docs/10 argued that under-reporting a line size
-was safe, and for index-based flushes it is; but IRIX's `Create_Dirty_
-Exclusive` sweeps step by the reported data line size, and a step of 16 over
-real 32-byte lines marks the untouched half of a line dirty with whatever the
-cache RAM held, to be written back over memory later. An R4400 takes `IB` and
-`DB` as boot-mode options, so a 32-byte configuration is an R4400 too; the
-one test in IRIS's `cpu-tests` that asserted 16 bytes for an R4400
-(`cache/geometry`) now accepts either, with the reason in a comment.
+Two things were learned from the kernel binary on the way. `Create_Dirty_
+Exclusive`, the hazard docs/10 worried about, does not appear in `/unix` at
+all. And **IRIX 5.3 never reads `Config.IB`/`DB`: it hard-codes the primary
+data line size from `PRId`** - `__dcache_inval` (0x88002908) and
+`__dcache_wb_inval` (0x88002ccc) mask with `andi 0xf` and step `0x10` on
+the R4400 path, `0x1f`/`0x20` only on the R4600 path chosen by
+`config_cache` for imp 0x20. That is a real hazard for a 32-byte line under
+an R4400 presentation (a plain `Hit_Invalidate_D` at a 16-byte-aligned
+buffer edge discards the dirty other half of the line), and reason enough
+on its own not to change the line - but it is not what zeroed the page: a
+16-byte-stepped invalidate still visits every 32-byte line base.
 
-`rtl/cpu/r4300/UPSTREAM.md` has the change list.
+**Attempt 2: 16 KB of 16-byte lines** - the original file with one more
+index bit, everything else upstream's, `Config` back to 16 KB/16-byte. Same
+gates passed; **same death in the simulator, at 200,100,483 cycles, the
+same page of NOPs.** So the killer is the size, i.e. **the virtual index
+bit 13**. The R4300's data cache is virtually indexed and physically tagged;
+at 8 KB only bit 12 of the index is virtual, at 16 KB bits 13:12 are. IRIX
+colours pages for a 16 KB cache (`cachecolormask` = 3, `pagecoloralign`,
+`color_validation` flushing on a mismatch) - but evidently not on the path
+that zeroes a page through one virtual alias and invalidates it through
+another before DMA fills it: the zero lines stay dirty in the other index
+and are written back over the file data. A real R4400 has its secondary
+cache catch exactly this (the VCE machinery, `ecc_kvaddr_vcecolor` in the
+kernel); this core has no secondary cache and no VCE.
+
+So the data cache is the R4300's 8 KB again, unchanged, and a bigger one is
+a different design: physically indexed (feasible - the data mini-TLB in
+`cpu_TLB_data.vhd` produces `TLB_AddrOutFound` in the same cycle the cache
+reads its tags - but the tag read on a mini-TLB miss has to be redone after
+the walk), or two-way with 8 KB per way, which is what the real R4600 is
+and why IRIX's R4600 path colours on one bit. `UPSTREAM.md` records both
+attempts so they are not made a third time.
+
+What the data cache did get is the burst: its 16-byte line is one two-word
+request on the SGI bus instead of two round trips.
 
 ## 4. Gates
 
-Every gate the plan named, plus the two the burst path added.
+Every gate the plan named plus the two the burst path added, run on the
+final geometry (the 8 KB data cache, burst fills). Both 16 KB attempts
+passed every one of these too - which is the point of section 3b: this
+list could not see the failure, and the IRIX boot in the simulator now sits
+in it.
 
 | Gate | Result |
 |---|---|
-| `make -C verilator ddr3test` (RAM master now issues 1/2/4-word bursts, checked word by word with `ram_last`) | PASS |
+| `make -C verilator ddr3test` (RAM master issues 1/2/4-word bursts, checked word by word with `ram_last`) | PASS |
 | `make -C verilator ramarbtest` (CPU asks bursts; port streams; `cpu_last` checked) | PASS, all latencies 0..60 |
-| `make -C verilator cpuonly` (every case streamed AND word-by-word, 0..12 latency, all cache modes) | RESULTS_CPUONLY |
-| `tests/run-cputest.sh` (240 tests) | RESULTS_CPUTEST |
-| `tests/run-prom.sh` | RESULTS_PROM |
-| `tests/run-newport.sh` | RESULTS_NEWPORT |
-| `tests/run-rex3.sh` | RESULTS_REX3 |
-| `tests/run-scsi.sh` | RESULTS_SCSI |
+| `make -C verilator fetcharbtest`, `linecachetest` (rtl/mister changed) | PASS |
+| `make -C verilator cpuonly` (every case streamed AND word-by-word, 0..12 latency, all cache modes) | PASS: 728 runs, 0 against expectation; the 78 runs that fill do it in one request instead of two |
+| `tests/run-cputest.sh` (240 tests) | 2160 checks passed, 3 failed, the one failing test `fpu/vec_cvt_from_l` as before (the GHDL shift fix makes this box match the documented number; it was 2159/5 here before it) |
+| `tests/run-prom.sh` | PASS |
+| `tests/run-newport.sh` | PASS (1318x1065, the raster shows the store row for row) |
+| `tests/run-rex3.sh` | PASS (every checked pixel matches the command trace) |
+| `tests/run-scsi.sh` | PASS (POST with a disk on ID 1, hinv lists the disk and the CD-ROM, nothing forbidden) |
+| **the IRIX boot in the simulator** (`--disk 1=SGIIndy53-master.img`, stop on PANIC, ~22 min) | RESULTS_IRIXSIM |
 
 ## 5. The board
+
+### 5a. Build 20, the 32-byte first cut (fitted, benched, and dead)
+
+Commit `26b18fc` (+ `b372921`), seed 2, fitted from the worktree in 36
+minutes: 40,531 registers after synthesis, the same six uninferred arrays as
+build 19, every clock met including the HDMI PLL domain (+0.426 ns; build
+19 missed it by 0.162), 83% of the ALMs, rbf md5 `ff2067b9...`. The bench
+ran clean on it - and it is worth keeping the numbers because the fill
+path is what they measure and the fill path survives:
+
+| bench | build 19 | build 20 (32-byte line) | |
+|---|---:|---:|---|
+| `ld_miss` (one `lw` per 32-byte stride over 256 KB: every load a miss) | 18 ticks = **36 cycles** for a 16-byte line | 13 ticks = **26 cycles** for a 32-byte line | the round trip paid once |
+| `i_cached` / `st_cached` | 500 / 501 t/kinstr | 500 / 500 | unchanged, 1.0 CPI |
+| `ld_cached` | 945 | 944 | unchanged |
+| `i_uncached` / `ld_uncached` / `st_uncached` | 9782 / 8689 / 3161 | 9779 / 8689 / 3160 | unchanged |
+| `count_rate` | 25.0 MHz | 25.0 MHz | unchanged |
+
+Then IRIX: "PANIC: init died (why = 2, what = 0x9)", a crash dump to the
+swap partition of `SGIIndy53-wedged-fsck.img`, and section 3b.
+
+### 5b. Build 20b: the 8 KB data cache with burst fills
 
 RESULTS_BOARD
 
 ## 6. Traps paid for
+
+* **GHDL 4.1.0 lowers `shift_right` on a signed operand as Verilog's logical
+  `>>`.** cpu.vhd's 65-bit `calcResult_shiftR` is the one place it matters:
+  under Verilator `dsra 0x8000000000000000, 4` read `0x1800000000000000`
+  (one sign bit at position 64-n instead of a fill) and
+  `alu/dsll_dsrl_dsra` + `alu/dshift32_variants` failed. Pre-existing on
+  this box - the evening's pre-change binary gives the same 2159/5 - and
+  invisible on the board, where Quartus compiles the VHDL. The "2161/3"
+  the docs quote was a GHDL 6 number. `tools/gen_r4300_verilog.sh` now
+  rewrites the operator to `>>>` on the way out and prints the count.
+* `tests/baseline/iris-r4400.log` was never committed, so `run-cputest.sh`
+  dies in `compare.py` after the run; the suite's own `RESULT:` line in
+  `tests/out/r4300.log` is the number.
+* A fit from a worktree needs `build_id.v` (gitignored, written by the
+  framework's pre-flow script, which `scripts/build.sh`'s stage-by-stage
+  flow does not run) plus `roms/` and `tests/disks/` copied across for the
+  ratchets.
+* `pkill -f <pattern>` from inside `wsl.exe -- bash -lc '...'` matches the
+  `-lc` command line itself whenever the pattern appears in it; anchor the
+  pattern (`^bash /tmp/gates.sh`) or the kill takes your own shell and
+  nothing after it runs.
 
 * `cpu_datacache.vhd`'s line-index register grew to 14 bits; one assignment
   still fed it 13 and GHDL's **synthesis** reported it (`out of bound

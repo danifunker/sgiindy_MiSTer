@@ -1,13 +1,3 @@
--- SGI: 16 KB WITH 32-BYTE LINES, NOT THE R4300's 8 KB WITH 16-BYTE LINES.
--- The geometry change is the one MiSTer-devel/Arcade-KillerInstinct_MiSTer made
--- to this same file for its R4600 (rtl/cpu/cpu_datacache.vhd there, commit
--- bfdb073, 2026-09-01), transcribed hunk for hunk and marked `-- SGI:` like
--- every other local change: the index moves up one bit (13:5 instead of 12:4,
--- so the tag compare drops to 31:14), a line is four 64-bit words instead of
--- two, the writeback is four beats, and the fill receiver counts beats in the
--- clk1x domain instead of chasing them on clk2x. UPSTREAM.md has the reason;
--- docs/39 has the measurements that motivated it. KI's write-through mode,
--- little-endian generic and debug port are not carried over.
 library IEEE;
 use IEEE.std_logic_1164.all;  
 use IEEE.numeric_std.all;   
@@ -22,7 +12,6 @@ entity cpu_datacache is
       clk1x             : in  std_logic;
       clk93             : in  std_logic;
       clk2x             : in  std_logic;
-      reset_1x          : in  std_logic;   -- SGI: the fill receiver runs on clk1x
       reset_93          : in  std_logic;
       ce_93             : in  std_logic;
       stall             : in  unsigned(4 downto 0);
@@ -92,21 +81,19 @@ architecture arch of cpu_datacache is
    signal read_hit         : std_logic;
    
    signal tag_addr_1       : unsigned(31 downto 0) := (others => '0');
-   signal tag_addr_low     : unsigned(4 downto 0) := (others => '0');    -- SGI: 32-byte line
-   signal tag_read_addr    : unsigned(13 downto 0) := (others => '0');   -- SGI: 16 KB
+   signal tag_addr_low     : unsigned(3 downto 0) := (others => '0');
+   signal tag_read_addr    : unsigned(12 downto 0) := (others => '0');
    signal fillAddr         : unsigned(31 downto 0) := (others => '0');
 
    -- data
-   -- SGI: the fill receiver (see the clk1x process below)
-   signal fill_line_saved  : unsigned(8 downto 0) := (others => '0');
-   signal fill_line_2x     : unsigned(8 downto 0) := (others => '0');
-   signal fill_beat_2x     : unsigned(1 downto 0) := (others => '0');
-   signal fill_active_2x   : std_logic := '0';
-   signal fill_grant       : std_logic;
-   signal cache_ram_addr_a : std_logic_vector(10 downto 0);
+   signal tag_read_addr_1x : unsigned(8 downto 0) := (others => '0');
+   signal tag_read_addr_2x : unsigned(8 downto 0) := (others => '0');
+   
+   signal ram_grant_2x     : std_logic := '0';
+   signal cache_addr_a     : unsigned(9 downto 0) := (others => '0');
    signal cache_wr_a       : std_logic;
-
-   signal cache_address_b  : std_logic_vector(10 downto 0);   -- SGI: 2048 words
+   
+   signal cache_address_b  : std_logic_vector(9 downto 0);
    signal cache_data_b     : std_logic_vector(63 downto 0);
    signal cache_we_b       : std_logic;
    signal cache_be_b       : std_logic_vector(7 downto 0);
@@ -130,8 +117,6 @@ architecture arch of cpu_datacache is
       WRITEBACK1READ,
       WRITEBACK1WRITE,
       WRITEBACK2WRITE,
-      WRITEBACK3WRITE,   -- SGI: four beats to a 32-byte line
-      WRITEBACK4WRITE,   -- SGI
       WRITEBACKDONE,
       COMMANDPROCESS,
       COMMANDDONE
@@ -161,10 +146,6 @@ architecture arch of cpu_datacache is
    
 begin 
 
-   -- SGI: rdram_granted2X reaches both caches; only the one whose fill is the
-   -- active transaction may take it.
-   fill_grant <= ram_grant and ram_active;
-
    ce_fetch <= '1' when (stall = 0 and ce_93 = '1') else '0';
 
    ------------------ tags   
@@ -174,7 +155,7 @@ begin
                      '0';
                      
    tag_address_a  <= tag_addr_cmd when (tag_wren_cmd = '1') else
-                     std_logic_vector(tag_addr_1(13 downto 5));
+                     std_logic_vector(tag_addr_1(12 downto 4));
                      
    tag_data_a     <= tag_data_cmd when (tag_wren_cmd = '1') else
                      '1' & tag_compare(20 downto 0);
@@ -201,7 +182,7 @@ begin
       q_b         => tag_q_b
    ); 
    
-   tag_address_b <= std_logic_vector(tag_addr(13 downto 5));
+   tag_address_b <= std_logic_vector(tag_addr(12 downto 4));
    
    tag_compare   <= tag_newData when (tag_newEna = '1') else
                     tag_q_b;
@@ -224,65 +205,57 @@ begin
    --   q          => tag_q_b
    --);
    --
-   --tag_address_b <= std_logic_vector(tag_addr_1(13 downto 5));
+   --tag_address_b <= std_logic_vector(tag_addr_1(12 downto 4));
    
    --tag_compare   <= tag_q_b;
    
-   read_hit      <= '1' when (unsigned(tag_compare(19 downto 2)) = RW_addr(31 downto 14) and tag_compare(20) = '1') else '0';   -- SGI: index is 13:5
+   read_hit      <= '1' when (unsigned(tag_compare(19 downto 0)) = RW_addr(31 downto 12) and tag_compare(20) = '1') else '0';
   
    --------- data
    
-   -- SGI: the fill receiver, as Killer Instinct rewrote it. The line index is
-   -- taken from fill_line_saved - latched in IDLE, so it cannot be a stale
-   -- pipelined copy - on the grant, and the beat counter walks the four words
-   -- of the line as they arrive on ddr3_DOUT_READY. It is armed by the grant
-   -- and disarmed by the last beat or by the transaction ending, and every
-   -- write is gated on ram_active so a beat belonging to the instruction
-   -- cache's fill can never land here. All three clocks are one clock in this
-   -- core (r4300_wrap.vhd), so the domain names are historical.
    process (clk1x)
    begin
       if rising_edge(clk1x) then
-         if (reset_1x = '1') then
-            fill_active_2x <= '0';
-            fill_line_2x   <= (others => '0');
-            fill_beat_2x   <= (others => '0');
-         elsif (fill_grant = '1') then
-            fill_active_2x <= '1';
-            fill_line_2x   <= fill_line_saved;
-            fill_beat_2x   <= (others => '0');
-            if (ddr3_DOUT_READY = '1') then
-               fill_beat_2x <= "01";
-            end if;
-         elsif (ram_active = '0') then
-            fill_active_2x <= '0';
-         elsif (fill_active_2x = '1' and ddr3_DOUT_READY = '1') then
-            if (fill_beat_2x = "11") then
-               fill_active_2x <= '0';
-            else
-               fill_beat_2x <= fill_beat_2x + 1;
+         tag_read_addr_1x <= tag_read_addr(12 downto 4);
+      end if;
+   end process;
+   
+   process (clk2x)
+   begin
+      if rising_edge(clk2x) then
+      
+         tag_read_addr_2x <= tag_read_addr_1x;
+      
+         if (ram_grant = '1'and ram_active = '1') then
+            ram_grant_2x <= '1';
+         end if;
+         
+         if (ram_grant = '1') then
+            cache_addr_a <= tag_read_addr_2x & "0";
+         elsif (ddr3_DOUT_READY = '1') then
+            cache_addr_a <= cache_addr_a + 1;
+            if (ram_grant_2x = '1' and cache_addr_a(0) = '1') then
+               ram_grant_2x <= '0';
             end if;
          end if;
+         
       end if;
    end process;
 
-   cache_ram_addr_a <= std_logic_vector(fill_line_saved & "00") when (fill_grant = '1') else
-                       std_logic_vector(fill_line_2x & fill_beat_2x);
-
-   cache_wr_a       <= (fill_active_2x or fill_grant) and ddr3_DOUT_READY and ram_active;
+   cache_wr_a    <= ram_grant_2x and ddr3_DOUT_READY;
 
    gcache: for i in 0 to 7 generate
    begin
       icache: entity work.dpram
       generic map 
       ( 
-         addr_width  => 11,   -- SGI: 2048 words, 16 KB
+         addr_width  => 10,
          data_width  => 8
       )
       port map
       (
-         clock_a     => clk1x,   -- SGI: the receiver's clock
-         address_a   => cache_ram_addr_a,
+         clock_a     => clk2x,
+         address_a   => std_logic_vector(cache_addr_a),
          data_a      => ddr3_DOUT(((i * 8) + 7) downto (i*8)),
          wren_a      => cache_wr_a,
          
@@ -294,9 +267,9 @@ begin
       );
    end generate;
    
-   cache_address_b <= std_logic_vector(tag_read_addr(13 downto 3)) when (state /= IDLE) else 
-                      std_logic_vector(tag_addr_1(13 downto 3)) when (ce_fetch = '0' or write_ena = '1') else 
-                      std_logic_vector(tag_addr(13 downto 3));
+   cache_address_b <= std_logic_vector(tag_read_addr(12 downto 3)) when (state /= IDLE) else 
+                      std_logic_vector(tag_addr_1(12 downto 3)) when (ce_fetch = '0' or write_ena = '1') else 
+                      std_logic_vector(tag_addr(12 downto 3));
                
   
    write_be_rot    <= write_be when (RW_addr(2) = '0' and RW_64 = '0') else write_be(3 downto 0) & write_be(7 downto 4);
@@ -354,14 +327,14 @@ begin
             tag_newEna   <= '0';
             if (tag_wren_a = '1') then
                tag_newData  <= tag_data_a;
-               if (tag_address_a = std_logic_vector(tag_addr(13 downto 5))) then
+               if (tag_address_a = std_logic_vector(tag_addr(12 downto 4))) then
                   tag_newEna   <= '1';
                end if;
             end if;
          else
             if (tag_wren_a = '1') then
                tag_newData  <= tag_data_a;
-               if (tag_address_a = std_logic_vector(tag_addr_1(13 downto 5))) then
+               if (tag_address_a = std_logic_vector(tag_addr_1(12 downto 4))) then
                   tag_newEna   <= '1';
                end if;
             end if;
@@ -392,21 +365,20 @@ begin
                   write_data_1   <= write_data_rot;
                   fillNext       <= '0';
                   write_ena_1    <= write_ena;
-                  fillAddr       <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 5) & "00000";   -- SGI
-                  fill_line_saved <= tag_addr_1(13 downto 5);   -- SGI: the receiver's index
-                  tag_addr_low   <= tag_addr_1(4 downto 0);   -- SGI
-                  tag_read_addr  <= tag_addr_1(13 downto 0);   -- SGI
+                  fillAddr       <= unsigned(tag_compare(19 downto 0)) & RW_addr(11 downto 4) & "0000";
+                  tag_addr_low   <= tag_addr_1(3 downto 0);
+                  tag_read_addr  <= tag_addr_1(12 downto 0);
                   isCommand      <= '0'; 
                   isWB           <= '0'; 
                   ram_reqAddr    <= RW_addr(31 downto 0); 
                   tag_data_cmd   <= write_ena & '1' & std_logic_vector(RW_addr(31 downto 12)); -- default for fill
-                  tag_addr_cmd   <= std_logic_vector(tag_addr_1(13 downto 5)); 
-                  writeback_addr <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 5) & "00000";   -- SGI
+                  tag_addr_cmd   <= std_logic_vector(tag_addr_1(12 downto 4)); 
+                  writeback_addr <= unsigned(tag_compare(19 downto 0)) & RW_addr(11 downto 4) & "0000";
                   
                   if ((read_ena = '1' or write_ena = '1') and read_hit = '0') then
                      if (tag_compare(21) = '1') then
                         state          <= WRITEBACK1ADDR; 
-                        tag_read_addr(4 downto 0) <= "00000";   -- SGI
+                        tag_read_addr(3 downto 0) <= "0000";
                         fillNext       <= '1';
                      else
                         state          <= FILL;
@@ -419,7 +391,7 @@ begin
                   elsif (write_ena = '1' and read_hit = '1' and force_wb = '1') then
                      state          <= WRITEBACK1ADDR; 
                      isWB           <= '1';
-                     tag_read_addr(4 downto 0) <= "00000";   -- SGI
+                     tag_read_addr(3 downto 0) <= "0000";
                      
                   elsif (read_ena = '1' and slow_on = '1') then
                      state       <= WAITSLOW;
@@ -431,7 +403,7 @@ begin
                   elsif (CacheCommandEna = '1') then
                      state          <= COMMANDPROCESS;
                      isCommand      <= '1';
-                     tag_read_addr(4 downto 0) <= "00000";   -- SGI
+                     tag_read_addr(3 downto 0) <= "0000";
                      writeTagValue  <= tag_compare(20) & tag_compare(21) & unsigned(tag_compare(19 downto 0)); -- valid & dirty & 20 bit address
                   
                      case (CacheCommand) is
@@ -451,7 +423,7 @@ begin
                            tag_data_cmd    <= TagLo_Dirty & TagLo_Valid & std_logic_vector(TagLo_Addr);
                            
                         when 5x"0D" => -- dcache create dirty exclusive
-                           if (tag_compare(21) = '1' and (tag_compare(20) = '0' or unsigned(tag_compare(19 downto 2)) /= RW_addr(31 downto 14))) then   -- SGI
+                           if (tag_compare(21) = '1' and (tag_compare(20) = '0' or unsigned(tag_compare(19 downto 0)) /= RW_addr(31 downto 12))) then
                               state          <= WRITEBACK1ADDR; 
                            end if;
                            tag_wren_cmd    <= '1';
@@ -502,7 +474,7 @@ begin
                      state          <= IDLE;
                      if (isWB = '1') then
                         state          <= WRITEBACK1ADDR; 
-                        writeback_addr <= fillAddr(31 downto 5) & "00000";   -- SGI
+                        writeback_addr <= fillAddr(31 downto 4) & "0000";
                      end if;
                   end if;
                   
@@ -523,41 +495,19 @@ begin
                   state            <= WRITEBACK1WRITE;
                   tag_read_addr(3) <= '1';
                
-               -- SGI: four beats. The cache RAM read is registered, so the
-               -- address a state presents selects the word the NEXT state
-               -- writes back, and the beat's own address goes out with its
-               -- data. KI's 32-byte port lost the last two words of every
-               -- dirty line until the read address ran one state ahead
-               -- (their sim/tb_ki_datacache_writeback.sv); this is that
-               -- sequence.
                when WRITEBACK1WRITE =>
                   state          <= WRITEBACK2WRITE;
                   writeback_ena  <= '1';
                   writeback_data <= cache_q_b(31 downto 0) & cache_q_b(63 downto 32);
-                  tag_read_addr(4 downto 3) <= "10";
-
+               
                when WRITEBACK2WRITE =>
-                  state             <= WRITEBACK3WRITE;
-                  writeback_ena     <= '1';
-                  writeback_data    <= cache_q_b(31 downto 0) & cache_q_b(63 downto 32);
-                  writeback_addr(3) <= '1';
-                  tag_read_addr(4 downto 3) <= "11";
-
-               when WRITEBACK3WRITE =>
-                  state             <= WRITEBACK4WRITE;
-                  writeback_ena     <= '1';
-                  writeback_data    <= cache_q_b(31 downto 0) & cache_q_b(63 downto 32);
-                  writeback_addr(4 downto 3) <= "10";
-                  tag_read_addr(4 downto 3) <= "11";
-
-               when WRITEBACK4WRITE =>
                   state             <= WRITEBACKDONE;
                   writeback_ena     <= '1';
                   writeback_data    <= cache_q_b(31 downto 0) & cache_q_b(63 downto 32);
-                  writeback_addr(4 downto 3) <= "11";
-
+                  writeback_addr(3) <= '1';
+               
                when WRITEBACKDONE =>
-                  tag_read_addr(4 downto 0) <= tag_addr_low;   -- SGI
+                  tag_read_addr(3 downto 0) <= tag_addr_low;
                   if (fifo_block = '0') then
                      fillNext <= '0';
                      if (fillNext = '1') then
@@ -631,7 +581,7 @@ begin
                if (tag_wren_a = '1') then
                   export_TagWrite := tag_data_a;
                end if;
-               if (fill_active_2x = '1') then   -- SGI: the receiver's arm
+               if (ram_grant_2x = '1') then
                   wait until ddr3_DOUT_READY = '1';
                   for i in 0 to 1 loop
                      write(line_out, string'("Fill: I ")); 

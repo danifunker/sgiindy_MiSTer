@@ -69,7 +69,7 @@ reasoning and the safety argument for the cache-geometry report.
 | `cpu_cop0.vhd` | `PRId` reports `0x0440` | An R4400PC is what an Indy has; `hinv` and IRIX both key off it |
 | `cpu_FPU.vhd` | `FIR` reports revision 5, not 0x0A | The R4000-family FPU identity |
 | `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of 32 | Not optional once `PRId` says R4400: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search is sequential, so the cost is one address bit and 16 more cycles worst case |
-| `cpu_cop0.vhd` | `Config` reports 16 KB with 32-byte lines for both caches (IC = DC = 2, IB = DB = 1) | Since docs/39 that is the TRUTH for both caches, and it has to be: IRIX's `Create_Dirty_Exclusive` sweeps step by the reported data line, and a step finer than the real line marks bytes dirty that were never written. Before docs/39 it reported 16-byte lines over a 32-byte instruction cache and an 8 KB data cache, which `docs/10` argued was safe in that direction (and it was) |
+| `cpu_cop0.vhd` | `Config` reports 16 KB/16-byte for both caches | R4400 geometry. TRUE for the data cache since docs/39 (16 KB of 16-byte lines); the instruction cache's 32-byte lines are under-reported, which is the safe direction for index-based flushes — see `docs/10`. It does not matter to IRIX anyway: IRIX 5.3 never reads `Config.IB/DB`, it hard-codes the line size from `PRId` (16 for an R4400, 32 for an R4600), which is why the data line MUST be 16 bytes under this presentation - docs/39 |
 | `cpu.vhd` | COP2 is always unusable, `Cause.CE = 2` | An R4400 has no coprocessor 2; the R4300's data latch made `mfc2` succeed |
 | `cpu.vhd` | MIPS IV COP1 function codes 0x11/0x12/0x13/0x15/0x16 raise Reserved Instruction | They reached the FPU and came back as Unimplemented Operation, which makes an R4400 look like an R5000 to software probing for MIPS IV |
 
@@ -124,21 +124,37 @@ from an 8254 counter to an Interrupt exception, both directly on IP4 and
 through INT2's mappable summary on IP2, and checks that masking at either end
 stops it.
 
-### The data cache — 16 KB with 32-byte lines (docs/39)
+### The data cache — still the R4300's 8 KB, and why (docs/39)
 
-The R4300's 8 KB / 16-byte data cache was the smallest thing in the machine,
-and on the board every word of a fill cost a whole DDR3 round trip (about 18
-cycles: a 16-byte line was 36, a 32-byte instruction line about 72). The
-geometry here is the one `MiSTer-devel/Arcade-KillerInstinct_MiSTer` gave this
-same file for its R4600 (`rtl/cpu/cpu_datacache.vhd` at `bfdb073`,
-2026-09-01), transcribed hunk for hunk; the fill itself became one burst
-request in `r4300_bus.sv`, which is outside the vendored tree.
+The data cache is upstream's: 512 lines of 16 bytes, 8 KB, direct-mapped,
+virtually indexed on address bits 12:4 and physically tagged. Two attempts
+to grow it were made and measured on 2026-09-02, and both are recorded here
+so they are not made a third time:
 
-| File | Change | Why |
-|---|---|---|
-| `cpu_datacache.vhd` | 512 lines of 32 bytes, indexed on address bits 13:5 with the tag compared on 31:14; the writeback is four beats; the fill receiver is KI's clk1x beat counter (`fill_line_saved`, `fill_beat_2x`) instead of upstream's clk2x address chase | Twice the capacity and twice the line of the R4300's cache, matching the instruction cache. KI's writeback carries the read address one state ahead of the beat, and their `tb_ki_datacache_writeback` is why: the cache RAM read is registered, and the two-beat original never had to notice. KI's write-through mode, `LITTLE_ENDIAN` generic and debug port are not carried over |
-| `cpu.vhd` | a data fill is `mem_size = "100"` at a 32-byte-aligned address, the same as an instruction fill; the write FIFO is 16 deep, was 8 | A dirty line is four beats with no ready handshake, started as soon as `writefifo_block` drops with up to three entries already queued. Eight entries held seven before `Full`; four beats plus a fetch landing in the gap can reach it, two beats never could |
-| `cpu_cop0.vhd` | `Config.DB = 1`, and `IB = 1` too | The truth, see the presentation table above |
+| Attempt | What happened |
+|---|---|
+| Killer Instinct's 16 KB of 32-byte lines (their R4600's, transcribed hunk for hunk) | Passed the whole cpu-tests suite and every ratchet, fitted clean, and killed `init` on the board and in the simulator (188,024,331 cycles, deterministic) |
+| 16 KB of 16-byte lines (the same file with one more index bit) | Passed the same gates and killed `init` in the simulator the same way (200,100,483 cycles) |
+
+In both, a RAM dump at the panic showed one page of `/sbin/init`'s text
+(all its other loaded pages byte-perfect) holding zeros where the file's
+code should be: dirty zero lines from the kernel's page clearing, written
+back over the DMA'd page after an invalidate that had looked in the wrong
+lines. That is a virtual-index alias on address bit 13 - the bit a 16 KB
+direct-mapped cache indexes from the virtual address and an 8 KB one does
+not. IRIX 5.3 colours pages for a 16 KB cache (`cachecolormask` = 3,
+`color_validation`), but evidently not on the path that zeroes and then
+maps this page; a real R4400 gets the same alias caught by its secondary
+cache's VCE machinery, which this core does not have. A bigger data cache
+therefore has to be physically indexed (the data mini-TLB translates in the
+same cycle the cache reads its tags, so it is feasible) or two-way with
+8 KB per way; neither is a geometry tweak. The line stays 16 bytes as well:
+IRIX hard-codes the R4400's line size in `__dcache_inval` /
+`__dcache_wb_inval` rather than reading `Config.DB`.
+
+What DID change for the data cache is outside the vendored tree: a fill is
+one two-word burst on the SGI bus (`rtl/cpu/r4300_bus.sv`, `ram_arb.sv`,
+`ddr3_mux.sv`) instead of two round trips.
 
 `DATACACHETLBON` is now 1 in `r4300_wrap.vhd` (upstream default 0), which is a
 port value rather than a source change but belongs with them: with KSEG0 cached

@@ -358,8 +358,13 @@ int main(int argc, char **argv)
                            r.done, rb.done);
                 }
                 if (dc) {
+                    // A streamed line is ONE request where the word-by-word
+                    // run needed two (or four), so the signature is fewer
+                    // requests, not more acks: the harness stops on the
+                    // final store before its ack arrives, so acks trail
+                    // requests by one in every run.
                     burst_runs++;
-                    if (rb.acks > rb.reqs) burst_seen++;
+                    if (rb.reqs < r.reqs) burst_seen++;
                 }
                 bool merged = false;
                 for (Seen &s : seen)
@@ -369,8 +374,10 @@ int main(int argc, char **argv)
                 if (!merged)
                     seen.push_back({ r.value, r.hi, r.cause, r.epc, r.badv, r.done, 1, lat, names[mode] });
                 if (verbose)
-                    printf("     %s lat=%-3d value=0x%08x cause=0x%08x epc=0x%08x badv=0x%08x %s\n",
-                           names[mode], lat, r.value, r.cause, r.epc, r.badv, ok ? "" : "MISMATCH");
+                    printf("     %s lat=%-3d value=0x%08x cause=0x%08x epc=0x%08x badv=0x%08x "
+                           "bus %u req/%u ack, burst %u req/%u ack %s\n",
+                           names[mode], lat, r.value, r.cause, r.epc, r.badv,
+                           r.reqs, r.acks, rb.reqs, rb.acks, ok ? "" : "MISMATCH");
             }
         }
         for (const Seen &s : seen) {
