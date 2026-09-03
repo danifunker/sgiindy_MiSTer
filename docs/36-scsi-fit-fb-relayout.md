@@ -394,8 +394,9 @@ it and do not launch while the other project's fit is listed.
 **Build 19 on the board** (`716759f` RTL at seed 2, rbf md5
 `aa74e33c09a90bc64779595b693fe869`; 34,942 ALMs, 42,242 registers, 52%
 block memory; every core clock met, the MiSTer scaler's HDMI PLL domain
-missed by 0.162 ns - build 18's margin problem again, a seed-3 refit
-launched for it): deployed 20:19 over a cleanly halted IRIX. At the PROM's
+missed by 0.162 ns - build 18's margin problem again; a seed-3 refit came
+out worse at -0.248 ns, so seed 2 stays): deployed 20:19 over a cleanly
+halted IRIX. At the PROM's
 boot screen `lcache:` reads `rgb_miss=0 aux_miss=0` in every sample - the
 whole upper half of beacon word 15 is zero where 18b counted 1318 a frame -
 with `aux_skips` at 1024 a frame, and the bottom screen row carries the

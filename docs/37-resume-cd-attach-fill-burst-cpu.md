@@ -44,9 +44,11 @@ next SCSI problem (IRIX never attaches the CD-ROM). Written 2026-09-02.
   edges on the same rows, bottom row lit, both miss counters 0 at the
   chooser and on the desktop, the cursor drawn on screen row 0. Its only
   blemish is the MiSTer scaler's HDMI PLL domain at -0.162 ns (the core's
-  clocks all meet); a `SEED=3` refit (`b19c.console`) was running at the
-  end of the session - if it met timing it is the build to keep, with the
-  same verification; if not, seed 2 is what is on the board.
+  clocks all meet). A `SEED=3` refit (`b19c.console`) came out WORSE on that
+  domain (-0.248 ns), so seed 2 is the build on the board; its rbf is kept as
+  `output_files/sgiindy-b19-seed2.rbf` (`output_files/sgiindy.rbf` is the
+  seed-3 one). The HDMI domain is the MiSTer scaler, not the core; docs/36
+  section 2 shows it swinging by a few tenths of a nanosecond per seed.
 * **Build 19 = `716759f`, fitted with `SEED=2`** (the seed 18b needed for
   the HDMI PLL domain). Check `git log`/docs/36 for its board result; if it
   is missing, deploy `output_files/sgiindy.rbf` (md5 in `b19.console` in the
