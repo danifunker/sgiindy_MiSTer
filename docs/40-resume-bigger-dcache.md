@@ -11,9 +11,9 @@ Option 1 below is a PLAN: nothing of it is in the tree.
 
 ## STATE AT HANDOFF (read this first)
 
-* **`main` is at `d149aa4`** (the burst fills `26b18fc`, the GHDL shift fix
-  `b372921`, the 8 KB decision `62be253`, docs/39). The user pushes from his
-  own environment.
+* **`main` is at `5d4d9aa` or later** (the burst fills `26b18fc`, the GHDL
+  shift fix `b372921`, the 8 KB decision `62be253`, docs/39 `d149aa4`, this
+  prompt). The user pushes from his own environment.
 * **Build 21 is on the board and VERIFIED**: commit `62be253`, fitter seed
   2, rbf md5 `5f02393b96f9e1361d5b6da6ed7b2a93`, a copy in
   `output_files/sgiindy-b21-seed2.rbf` of the worktree it was fitted from
