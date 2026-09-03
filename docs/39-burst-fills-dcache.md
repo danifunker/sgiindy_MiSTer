@@ -170,7 +170,7 @@ in it.
 | `tests/run-newport.sh` | PASS (1318x1065, the raster shows the store row for row) |
 | `tests/run-rex3.sh` | PASS (every checked pixel matches the command trace) |
 | `tests/run-scsi.sh` | PASS (POST with a disk on ID 1, hinv lists the disk and the CD-ROM, nothing forbidden) |
-| **the IRIX boot in the simulator** (`--disk 1=SGIIndy53-master.img`, stop on PANIC, ~22 min) | RESULTS_IRIXSIM |
+| **the IRIX boot in the simulator** (`--disk 1=SGIIndy53-master.img`, stop on PANIC, ~22 min) | PASS: no panic in 450,000,000 cycles (the two 16 KB caches died at 188M and 200M), init running and its "The system is coming up" begun on the console when the cycle limit stopped the run |
 
 ## 5. The board
 
@@ -194,9 +194,45 @@ path is what they measure and the fill path survives:
 Then IRIX: "PANIC: init died (why = 2, what = 0x9)", a crash dump to the
 swap partition of `SGIIndy53-wedged-fsck.img`, and section 3b.
 
-### 5b. Build 20b: the 8 KB data cache with burst fills
+### 5b. Build 21: the 8 KB data cache with burst fills
 
-RESULTS_BOARD
+Commit `62be253`, seed 2, fitted from the worktree in 21 minutes on top of
+build 20's database: 40,541 registers after synthesis, the same six
+uninferred arrays, every clock met - the HDMI PLL domain by 0.080 ns this
+time (seed-dependent as ever: +0.426 for build 20, -0.162 for build 19), the
+core clock by 2.772 ns. rbf md5 `5f02393b96f9e1361d5b6da6ed7b2a93`, kept as
+`output_files/sgiindy-b21-seed2.rbf`.
+
+The bench (`tests/run-cputest-hw.sh --no-build`, Count ticks, 1 tick = 2
+CPU cycles):
+
+| bench | build 19 | build 21 | |
+|---|---:|---:|---|
+| `ld_miss` (one `lw` per 32-byte stride over 256 KB: every load a miss) | 18 ticks = **36 cycles** | 13 ticks = **26 cycles** (106,796 ticks / 8192 loads) | the DDR3 round trip paid once per line, not once per word |
+| `i_cached` / `st_cached` | 500 / 501 t/kinstr (1.0 CPI) | 500 / 500 | unchanged |
+| `ld_cached` | 945 | 944 | unchanged |
+| `i_uncached` / `ld_uncached` / `st_uncached` | 9782 / 8689 / 3161 | 9778 / 8689 / 3160 | unchanged |
+| `count_rate` | 25.0 MHz | 25.0 MHz | unchanged |
+
+The suite on hardware: 2165 checks passed, 3 failed (245 tests), the three
+being `fpu/vec_cvt_from_l` as before. The instruction cache's 32-byte line,
+which nothing in the bench group measures directly, had the same
+four-round-trip fill and gets the same treatment: an instruction miss that
+cost ~72 cycles should now cost about what `ld_miss` does. What is left in
+the 26 cycles is the ~17-19-cycle trip itself plus the handshake stages
+either side of it (the write FIFO, `r4300_bus`, `ram_arb`, `ddr3_mux`'s
+latch-then-issue, the fill-end daylight clock, the cache's `ram_done` path)
+- a few cycles each, and the next thing to shave.
+
+The desktop: the boot ran `savecore` on build 20's dump and the root
+filesystem check, reached the login chooser, `text:root` + Enter logged in,
+the root desktop came up (Toolchest, Console at `~#`, Software Manager, the
+Ethernet no-carrier alert as always), the Toolchest's System menu posted
+with all its entries, `init 0` typed at the Console echoed `INIT: New run
+level: 0` and the machine halted to "Okay to power off the system now".
+The beacon's `cpu:` word decodes (kernel and user PCs alike) and
+`lcache:` shows zero misses. **The board was left at that halt screen on
+build 21.**
 
 ## 6. Traps paid for
 
@@ -219,7 +255,17 @@ RESULTS_BOARD
 * `pkill -f <pattern>` from inside `wsl.exe -- bash -lc '...'` matches the
   `-lc` command line itself whenever the pattern appears in it; anchor the
   pattern (`^bash /tmp/gates.sh`) or the kill takes your own shell and
-  nothing after it runs.
+  nothing after it runs. Shell variables inside that `-lc` string are eaten
+  too - put anything with a `$` in a script file.
+* Quartus writes `SEED n` back into `sgiindy.qsf` when `--seed=n` is used;
+  `git checkout -- sgiindy.qsf` before the next commit, never while a fit is
+  running.
+* Verilator 5.020 can abort at the very end of a build with "Internal Error:
+  attempted to destroy locked Thread Pool" after the binary has already been
+  linked; the second `make` finds nothing to do and the binary is current.
+* The IRIX boot's console file is flushed as it goes, but the harness's own
+  summary (`--- stop-on ...`, the last 64 user PCs) only at exit; `--exc`
+  stops at 400 entries, well before a late panic - raise `--exc-count`.
 
 * `cpu_datacache.vhd`'s line-index register grew to 14 bits; one assignment
   still fed it 13 and GHDL's **synthesis** reported it (`out of bound

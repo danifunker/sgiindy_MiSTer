@@ -68,6 +68,7 @@ verilator/obj_dir_cpuonly/
 verilator/obj_dir_mcdma/
 verilator/obj_dir_hal2/
 verilator/obj_dir_ddr3/
+verilator/obj_dir_ramarb/
 verilator/obj_dir_lcache/
 # And the rasteriser's standalone back-pressure test.
 verilator/obj_dir_rex3/
