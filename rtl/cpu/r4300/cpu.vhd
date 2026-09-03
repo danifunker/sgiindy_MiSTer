@@ -2511,7 +2511,12 @@ begin
    EXECacheAddr(13 downto 12) <= TLB_dataAddrOutLookup(13 downto 12) when (TLB_dataUnStall = '1') else
                                  TLB_dataAddrOutFound(13 downto 12)  when (EXETLBMapped = '1')    else
                                  calcMemAddr(13 downto 12);
-   EXECacheAddr(11 downto 3)  <= calcMemAddr(11 downto 3);
+   -- SGI: on the mini-TLB unstall clock calcMemAddr has already advanced past
+   -- this access (decode is not frozen for it), so the low index bits 11:3 must
+   -- also come from the resolved physical address, not the stale calcMemAddr,
+   -- or the tag re-read lands on the wrong line (docs/40).
+   EXECacheAddr(11 downto 3)  <= TLB_dataAddrOutLookup(11 downto 3) when (TLB_dataUnStall = '1') else
+                                 calcMemAddr(11 downto 3);
 
    EXECacheAddr(2 downto 0)  <= "000"                  when (decodeLoadType = LOADTYPE_LEFT64 or decodeLoadType = LOADTYPE_RIGHT64) else
                                 calcMemAddr(2) & "00"  when (decodeLoadType = LOADTYPE_LEFT or decodeLoadType = LOADTYPE_RIGHT) else 
