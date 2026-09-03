@@ -39,6 +39,14 @@ next SCSI problem (IRIX never attaches the CD-ROM). Written 2026-09-02.
   a quartus process's command line before touching it, and do not launch
   while the other project's quartus is listed. Check `b19.console` for
   `OK: output_files` before believing a build exists.
+* **Build 19 IS VERIFIED on the board** (seed 2, rbf md5
+  `aa74e33c09a90bc64779595b693fe869`, docs/36 section 5): store and screen
+  edges on the same rows, bottom row lit, both miss counters 0 at the
+  chooser and on the desktop, the cursor drawn on screen row 0. Its only
+  blemish is the MiSTer scaler's HDMI PLL domain at -0.162 ns (the core's
+  clocks all meet); a `SEED=3` refit (`b19c.console`) was running at the
+  end of the session - if it met timing it is the build to keep, with the
+  same verification; if not, seed 2 is what is on the board.
 * **Build 19 = `716759f`, fitted with `SEED=2`** (the seed 18b needed for
   the HDMI PLL domain). Check `git log`/docs/36 for its board result; if it
   is missing, deploy `output_files/sgiindy.rbf` (md5 in `b19.console` in the

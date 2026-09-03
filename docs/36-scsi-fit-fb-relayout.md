@@ -391,6 +391,25 @@ thing. `db` went to `db.crashed-b19` and the fit was relaunched at 19:54;
 both sessions now match a quartus process's command line before touching
 it and do not launch while the other project's fit is listed.
 
+**Build 19 on the board** (`716759f` RTL at seed 2, rbf md5
+`aa74e33c09a90bc64779595b693fe869`; 34,942 ALMs, 42,242 registers, 52%
+block memory; every core clock met, the MiSTer scaler's HDMI PLL domain
+missed by 0.162 ns - build 18's margin problem again, a seed-3 refit
+launched for it): deployed 20:19 over a cleanly halted IRIX. At the PROM's
+boot screen `lcache:` reads `rgb_miss=0 aux_miss=0` in every sample - the
+whole upper half of beacon word 15 is zero where 18b counted 1318 a frame -
+with `aux_skips` at 1024 a frame, and the bottom screen row carries the
+gradient's last colour instead of black.
+At the login chooser, the check that found the bug: the chooser's frame
+edges are on store rows 157 and 867 and on screen rows 157 and 867, at
+three columns (18b: 157 against 156), the bottom row is the desktop's blue,
+and `rgb_miss`/`aux_miss` are 0 in every sample with `aux_skips` at 1024
+a frame. The display shows the frame buffer row for row. After a root
+login, with the pointer walked to the top edge, the arrow's tip is drawn on
+screen row 0 (three pixels, widening below) - the wrap's row-0 cursor prep
+works - and on the settled desktop (Console, Software Manager) the miss
+counters stay at 0 with `aux_skips` at about 1000 lines a frame.
+
 Also learned: two Quartus fits of another project (MacQuadra800, a different
 session) were running on this box when this session started, which is why
 no sgiindy fit was launched until they finished - the docs/37 trap applies
