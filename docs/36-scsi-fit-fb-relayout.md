@@ -355,6 +355,42 @@ cannot be compared but transitions can). On 18b's capture: 1023 rows
 displayed of 1024, 134 of 152 transitions one row off; on the fix: 1024
 rows, 153 of 153 in place.
 
+**`run-rex3` was failing before this session touched anything, and for a
+harness reason.** Re-run after the VC2 fix it reported 3718 REX3 commands
+against its 5000 threshold ("the boot did not reach the screen"), and the
+same 3718 on the commit before the fix, in a separate worktree - the count
+is boot pacing, the trace's tail is the PROM still drawing its last text
+line at the 90M-cycle limit, and the screen at that point is the 16:09
+picture minus eight rows of that line. It moved when HAL2 went absent
+(`30bab9e`), after which run-rex3 was not re-run. Worse, past the
+threshold the replay itself disagreed on 651,986 pixels: every odd pixel
+read 0 in the store dump while the pins showed it lit. `np_rex3` addresses
+a pixel's 32-bit slot and picks the half of the 64-bit word with the byte
+enables, which the board's DDR3 path honours (`ddr3_mux` takes a word
+address, the line cache ignores bit 2) - but the simulator's `Memory::
+write64`/`read64` applied the lanes at the unaligned address, so an odd
+pixel's write landed on the even slot and the display's odd read returned
+the even slot: a 104M-cycle run's pins show every even pixel of the INDY
+logo twice while the store has index, 0, index, 0. Fixed in the model
+(`addr &= ~7`, the contract `r4300_bus.sv` documents and the test device
+already used); `tb_rex3` never saw it because its own memory model is
+written against the RTL's convention. The 52f24ef "run-rex3 PASS" claim
+in section 2 cannot have been made with this dumper on this layout.
+With the model aligned the replay reads "every checked pixel matches the
+command trace", 1,310,720 pixels, and run-rex3's bar is 3000 commands.
+
+**Build 19 (the VC2 fix, seed 2) died in the fitter** at 19:36 with no
+error text, placement and routing both reported successful. It looked like
+the docs/37 two-fits trap (a MacQuadra800 fit had started 35 seconds
+earlier) and was not: the other session, asked over the session-to-session
+channel, reported it had `Stop-Process`ed the sgiindy `quartus_fit` itself,
+taking it for a stray from a worktree it had removed. So a fit that ends
+with no error text after a successful route is a KILLED fit, and the two
+earlier "silent deaths" under concurrent fits may well have been the same
+thing. `db` went to `db.crashed-b19` and the fit was relaunched at 19:54;
+both sessions now match a quartus process's command line before touching
+it and do not launch while the other project's fit is listed.
+
 Also learned: two Quartus fits of another project (MacQuadra800, a different
 session) were running on this box when this session started, which is why
 no sgiindy fit was launched until they finished - the docs/37 trap applies

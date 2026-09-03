@@ -19,6 +19,26 @@ next SCSI problem (IRIX never attaches the CD-ROM). Written 2026-09-02.
   (1318 px) every frame. `716759f` is that fix (`rtl/newport/np_vc2.sv`
   + two new `tb_vc2.cpp` checks that fail on the old RTL). The user pushes
   from his own environment.
+* **Also from that session, on `main` after `716759f`:** `tests/vidshift.py`
+  (run-newport now checks the raster shows the store ROW FOR ROW - a size
+  check passed on 18b), and a HARNESS fix: `verilator/sim_devices.cpp`'s
+  `Memory::write64/read64` applied byte lanes at the unaligned address, so
+  `np_rex3`'s 32-bit slot addresses lost every odd pixel in `--fbdump` and
+  doubled every even one on the pins; `run-rex3` had been failing since
+  HAL2 went absent (`30bab9e`: 3718 commands against a 5000 bar, now 3000)
+  and nobody had re-run it. Re-run EVERY whole-machine ratchet after every
+  change - run-prom, run-newport, run-rex3, run-scsi - not the ones that
+  seem related (docs/36 section 5, memory note `sim-memory-lane-alignment`).
+* **The first build-19 fit "died silently" in the fitter** (placement and
+  routing reported successful, then nothing) - and the MacQuadra800 session
+  on this box, asked over the session-to-session channel (`ListAgents` /
+  `SendMessage`), said it had `Stop-Process`ed it, taking it for a stray. A
+  fit that ends with no error text after a successful route is a KILLED fit;
+  the earlier "two fits at once die" deaths may have been the same. `db` is
+  in `db.crashed-b19`; the relaunch is at 19:54. Both sessions agreed: match
+  a quartus process's command line before touching it, and do not launch
+  while the other project's quartus is listed. Check `b19.console` for
+  `OK: output_files` before believing a build exists.
 * **Build 19 = `716759f`, fitted with `SEED=2`** (the seed 18b needed for
   the HDMI PLL domain). Check `git log`/docs/36 for its board result; if it
   is missing, deploy `output_files/sgiindy.rbf` (md5 in `b19.console` in the

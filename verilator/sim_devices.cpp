@@ -19,8 +19,17 @@ namespace sgisim {
 
 Devices g_dev;
 
+// A 64-BIT PORT IGNORES THE LOW THREE ADDRESS BITS, and so does this. The
+// byte enables say which lanes of the aligned word are meant - rtl/cpu/
+// r4300_bus.sv: lane L is the byte at (addr & ~7) + L - and DDR3 on the
+// board behaves the same (ddr3_mux takes addr[..:3]). np_rex3 addresses a
+// pixel's 32-bit slot, so an odd pixel arrives as word+4 with the high
+// lanes enabled; applying the lanes from the unaligned address wrote the
+// odd pixel over the even slot and read the even slot back as the odd
+// pixel, which no picture could show and run-rex3's replay could (2026-09-02).
 uint64_t Memory::read64(uint32_t addr) const
 {
+    addr &= ~7u;
     uint64_t v = 0;
     for (int i = 0; i < 8; i++) {
         size_t a = static_cast<size_t>(addr) + i;
@@ -32,6 +41,7 @@ uint64_t Memory::read64(uint32_t addr) const
 
 void Memory::write64(uint32_t addr, uint64_t data, uint8_t be)
 {
+    addr &= ~7u;
     for (int i = 0; i < 8; i++) {
         if (!((be >> (7 - i)) & 1)) continue;      // be[7-i] guards byte +i
         size_t a = static_cast<size_t>(addr) + i;
