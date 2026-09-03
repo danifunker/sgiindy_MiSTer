@@ -97,6 +97,21 @@ ghdl "${GHDL_FLAGS[@]}" --workdir="$WORKDIR/work" -P"$WORKDIR/mem" \
 ghdl synth --std=08 -frelaxed --workdir="$WORKDIR/work" -P"$WORKDIR/mem" \
     --out=verilog r4300_wrap > "$OUT/r4300_wrap.v.tmp"
 
+# GHDL 4.1.0 (the Ubuntu 24.04 package) lowers numeric_std's shift_right on a
+# SIGNED operand to Verilog's `$signed(x) >> n`, which is a LOGICAL shift -
+# only `>>>` fills with the sign. The one place cpu.vhd does this is the
+# shifter's calcResult_shiftR (a 65-bit signed carrying the sign in bit 64),
+# so under Verilator DSRA/DSRA32/DSRAV returned a single sign bit at
+# position 64-n instead of a fill: `dsra 0x8000000000000000, 4` read
+# 0x1800000000000000, and alu/dsll_dsrl_dsra + alu/dshift32_variants failed
+# in the suite while Quartus, which compiles the VHDL, was right all along.
+# Found 2026-09-02 (docs/39). Rewriting the operator is exactly the lowering
+# a later GHDL emits; the count is checked so a GHDL that gets it right, or
+# a cpu.vhd that grows a second one, does not go unnoticed.
+n=$(grep -c '\$signed([a-z0-9_]*) >> ' "$OUT/r4300_wrap.v.tmp" || true)
+perl -pi -e 's/\$signed\((\w+)\) >> /\$signed($1) >>> /' "$OUT/r4300_wrap.v.tmp"
+echo "signed shift_right lowered as logical >>: $n rewritten to >>>"
+
 mv "$OUT/r4300_wrap.v.tmp" "$OUT/r4300_wrap.v"
 rm -rf "$WORKDIR"
 
