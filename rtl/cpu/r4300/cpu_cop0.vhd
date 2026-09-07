@@ -833,7 +833,21 @@ begin
                COP0_16_CONFIG_bigEndian     <= '1';
             end if;
             COP0_16_CONFIG_sysadWBPattern   <= (others => '0'); 
-            COP0_16_CONFIG_systemClockRatio <= (others => '1'); 
+            -- SGI: Config.EC, the system clock ratio, is READ BY THE IP24 PROM
+            -- and the encoding is per part. Its clock-setup routine at
+            -- 0xBFC312F8 measures the CPU clock, reads PRId, and divides the
+            -- result by a per-family table indexed by EC: for an R4000/R4400
+            -- the table is {2,3,4,6,8,2,3,4}, so the R4300's reset value 7
+            -- meant "divide by 4" and worked; for an R4600/R4700/R5000 it is
+            -- {2,3,4,5,6,7,8,0} - 7 is reserved, reads 0, and the routine's
+            -- divide-by-zero guard is `break 7`, which is how the first R4600
+            -- boot died at 0xBFC313DC. An Indy R4600 runs its SysAD bus at
+            -- half the pipeline clock (100/50, 133/66), which is EC = 0.
+            if (PRESENT_AS_R4600) then
+               COP0_16_CONFIG_systemClockRatio <= "000";
+            else
+               COP0_16_CONFIG_systemClockRatio <= (others => '1');
+            end if;
             COP0_17_LOADLINKEDADDRESS       <= (others => '0'); 
             COP0_18_WATCHLO                 <= (others => '0');   
             COP0_19_WATCHHI                 <= (others => '0');   
