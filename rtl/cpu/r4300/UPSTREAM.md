@@ -124,12 +124,25 @@ from an 8254 counter to an Interrupt exception, both directly on IP4 and
 through INT2's mappable summary on IP2, and checks that masking at either end
 stops it.
 
-### The data cache — still the R4300's 8 KB, and why (docs/39)
+### The data cache — now 16 KB, physically indexed (docs/40-42)
 
-The data cache is upstream's: 512 lines of 16 bytes, 8 KB, direct-mapped,
-virtually indexed on address bits 12:4 and physically tagged. Two attempts
-to grow it were made and measured on 2026-09-02, and both are recorded here
-so they are not made a third time:
+**Current state (docs/40-42, on `main` since 2026-09-07):** the data cache is
+16 KB, direct-mapped, 16-byte lines, and **physically indexed** — bits 13:4 of
+the cache index come from the data mini-TLB's resolved physical address, not the
+virtual address, so the bit-13 alias below cannot occur. `cpu_datacache.vhd`
+grows one index bit everywhere (tag RAM `addr_width` 10, data RAM 11) and takes a
+new `tlb_unstall` port; `cpu.vhd` overrides `EXECacheAddr(13 downto 12)` from
+`TLB_dataAddrOutLookup`/`TLB_dataAddrOutFound`, and `EXECacheAddr(11 downto 3)`
+from `TLB_dataAddrOutLookup` on the `TLB_dataUnStall` clock (the page offset is
+identical virtual and physical, so this is always correct); `r4300_wrap.vhd`
+raises `SETTLE_CLOCKS` to 2048 for the 1024-entry clear. cpu-tests 2160/3, IRIX
+init survives, build 22 fitted (core PLL setup slack +2.459 ns). The historical
+account of why a *virtually* indexed 16 KB cache could not work follows.
+
+The data cache was originally upstream's: 512 lines of 16 bytes, 8 KB,
+direct-mapped, virtually indexed on address bits 12:4 and physically tagged. Two
+attempts to grow it *virtually* were made and measured on 2026-09-02, and both
+are recorded here so they are not made a third time:
 
 | Attempt | What happened |
 |---|---|
