@@ -33,16 +33,14 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
     281.36M to the 300M cap. The board judges that phase; a rerun traced at
     281.3M (`~/kicpu/irix4/stdout.log`, `--pc-from 281300000 --trace-from
     281300000`) says what the kernel was doing if anyone wants to know.
-* **The build-23 fit was LAUNCHED at 19:28 on 2026-09-07** (SEED=2) from the
-  worktree via the new `scripts/fit_when_free.sh b23`, which waited for the
-  MacQuadra800 session's Quartus to finish. Check `b23.status`,
-  `b23.console`, `b23.log` and `output_files/sgiindy.rbf`'s timestamp. The
-  register guard (~39k right, refuses >60k) and the CORE clock slack are the
-  two numbers to read; build 22's core PLL setup slack was +2.459 ns and the
-  point of the swap is that KI's FetchIndex/timing work should raise it.
-  After the fit: `git checkout -- sgiindy.qsf` (Quartus rewrites SEED +
-  LAST_QUARTUS_VERSION), copy the rbf to `output_files/sgiindy-b23-seed2.rbf`,
-  commit it.
+* **Build 23 is FITTED** (SEED=2, 19:28-19:51 on 2026-09-07, via the new
+  `scripts/fit_when_free.sh b23`): `output_files/sgiindy-b23-seed2.rbf`,
+  34,743 ALMs (83 %), 42,770 registers, block memory unchanged, every clock
+  positive, and the CORE clock's setup slack **+2.904 ns vs build 22's
+  +2.459 ns** - the swap bought 0.45 ns. Synthesis: 40,989 registers before
+  the fitter (build 22: 40,548), 8 "uninferred RAM" notices of which the two
+  new ones (the I-cache data slices) are bypass logic - the arrays themselves
+  are altsyncram in the map report. `b23.log`/`b23.console` have the detail.
 * **The Indy board is `192.168.99.94`** (`scripts/local.env`), and it is NOT
   shared: the other Claude session's ssh traffic goes to `192.168.99.143`, a
   different MiSTer (MacQuadra800). The Indy board is where docs/42 left it -

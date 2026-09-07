@@ -233,4 +233,10 @@ through a two-register pipeline — the hazard the N64 base's I-cache had (docs/
 `make -C verilator cpuonly`: 728 runs, 0 against expectation (78 of 182
 data-cache runs streamed as bursts — the same as build 22). The cpu-tests suite:
 **2161 checks passed / 3 failed**, and the only failing test is
-`fpu/vec_cvt_from_l`.
+`fpu/vec_cvt_from_l`. The IRIX 5.3 simulator boot: init survives, the exit
+device table is identical to build 22's, reached ~11M cycles sooner.
+
+**Build 23** (SEED=2, 2026-09-07, `output_files/sgiindy-b23-seed2.rbf`):
+34,743 ALMs (83 %), 42,770 registers, 2.99 Mbit of block memory — all within
+1 % of build 22 — and the CORE clock's setup slack went from +2.459 ns to
+**+2.904 ns**, which is what the swap was for.
