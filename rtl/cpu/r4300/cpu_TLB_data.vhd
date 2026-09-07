@@ -3,6 +3,27 @@ use IEEE.std_logic_1164.all;
 use IEEE.numeric_std.all;    
 
 entity cpu_TLB_data is
+   generic
+   (
+      -- Compare only the 32-bit part of the virtual page number.
+      --
+      -- mini_hit is the widest thing between the address adder and
+      -- executeMemAddress: four entries, each testing TLB_AddrIn(39 downto 12)
+      -- against a stored VPN and TLB_AddrIn(63 downto 62) against a stored
+      -- region - 30 bits per entry, resolved as a priority chain, which fits
+      -- as five levels of logic. Across 36 fits, executeMemAddress and the
+      -- COP0 capture it feeds are the two largest critical clusters.
+      --
+      -- With 32-bit addressing every address is a sign-extension of bit 31, so
+      -- bits 39 downto 32 and 63 downto 62 carry no information: they are the
+      -- same value in the incoming address and in the stored entry, which was
+      -- itself written from a 32-bit address. Comparing them cannot change the
+      -- outcome. Dropping them leaves a 20-bit compare per entry.
+      --
+      -- The KI wrapper enables this because both supported games execute with
+      -- 32-bit virtual addresses and keep Status.KX/SX/UX clear.
+      ADDR32_ONLY          : boolean := false
+   );
    port 
    (
       clk93                : in  std_logic;
@@ -83,8 +104,13 @@ begin
       
       for i in 0 to MINICOUNT - 1 loop
          if (miniEntries(i).valid = '1') then
-            if (TLB_AddrIn(39 downto 12) = miniEntries(i).virtual(39 downto 12)) then
-               if (TLB_AddrIn(63 downto 62) = miniEntries(i).region) then
+            -- See ADDR32_ONLY. The narrow arm drops the sign-extension bits
+            -- from both the VPN compare and the region compare.
+            if ((ADDR32_ONLY and
+                 TLB_AddrIn(31 downto 12) = miniEntries(i).virtual(31 downto 12)) or
+                ((not ADDR32_ONLY) and
+                 TLB_AddrIn(39 downto 12) = miniEntries(i).virtual(39 downto 12))) then
+               if (ADDR32_ONLY or TLB_AddrIn(63 downto 62) = miniEntries(i).region) then
                   if (TLB_IsWrite = '0' or miniEntries(i).dirty = '1') then
                      mini_hit          <= '1';
                      TLB_useCacheFound <= miniEntries(i).cached;

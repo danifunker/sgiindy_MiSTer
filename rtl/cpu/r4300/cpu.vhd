@@ -7,6 +7,51 @@ use work.pFunctions.all;
 use work.pexport.all;
 
 entity cpu is
+   generic
+   (
+      LITTLE_ENDIAN         : boolean := false;
+      FRAMEBUFFER_UNCACHED  : boolean := false;
+      -- Narrow the COP0 exception-address capture to the 32-bit KI contract.
+      ADDR32_ONLY           : boolean := false;
+      -- Drop trap instructions from the exception logic while retaining the
+      -- comparator used by SLT/SLTU.
+      NO_TRAP_INSTR         : boolean := false;
+      -- KI instruction fetches use the unmapped KSEG0/KSEG1 path. The data TLB
+      -- remains enabled for mapped data accesses.
+      INSTR_KSEG_ONLY       : boolean := false;
+      -- Build the pre-event execution trace.
+      --
+      -- The trace is a diagnostic, and it is not free. debug_trace_bus is 896
+      -- bits leaving cpu:core for the top level, where a 736-bit shadow latches
+      -- it; the SDC false-paths all of it, so it never shows up in a timing
+      -- report, but it is still ~900 real wires anchoring stage-2 and stage-4
+      -- registers toward the debug screen. The CPU domain's critical paths are
+      -- 61-78% interconnect, so what the fitter can and cannot pack tightly is
+      -- exactly what bounds Fmax here.
+      --
+      -- Only the EXPORT is gated. The capture registers are written in the same
+      -- process as debug_ret_count's and debug_h1_op's counters, which feed
+      -- screen fields worth keeping, so they cannot be generate-guarded without
+      -- splitting that process. Left with no reader they are dead logic and
+      -- synthesis removes them, which reaches the same place with far less
+      -- disturbance to code that works.
+      --
+      -- Turning this off blanks the trace rows on the debug screen. Every other
+      -- field on that screen keeps working.
+      DEBUG_TRACE           : boolean := true;
+      -- How long the CPU must go without executing any boot ROM before the
+      -- restart detectors arm, in decodes. It has to be long enough that no
+      -- excursion into RAM during boot can satisfy it, and short enough to arm
+      -- before the first restart: the game reaches FMV about 4 to 5 s after
+      -- reset and can restart within a second of playback starting.
+      --
+      -- 2^24 is about 0.4 s at the measured 42 MIPS - two orders of magnitude
+      -- longer than a boot trampoline, and comfortably inside that window. G
+      -- on the trace page reports whether it actually armed, so a wrong choice
+      -- is visible rather than silent. Simulation overrides it so a dozen
+      -- instructions can still exercise the triggers.
+      BOOT_QUIET_BITS       : integer := 24
+   );
    port 
    (
       clk1x                 : in  std_logic;
@@ -22,14 +67,20 @@ entity cpu is
       DATACACHEON           : in  std_logic;
       DATACACHESLOW         : in  std_logic_vector(3 downto 0); 
       DATACACHEFORCEWEB     : in  std_logic;
+      DATACACHEWRITETHROUGH : in  std_logic := '0';
       DATACACHETLBON        : in  std_logic;
       RANDOMMISS            : in  unsigned(3 downto 0);
       DISABLE_BOOTCOUNT     : in  std_logic;
       DISABLE_DTLBMINI      : in  std_logic;
+      ALECK64               : in  std_logic;
 
+<<<<<<< KI
+      irqRequest            : in  std_logic_vector(1 downto 0);
+=======
       -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
       -- separate N64 lines - see cpu_cop0.vhd where it is assigned.
       irqLines              : in  std_logic_vector(4 downto 0);
+>>>>>>> OURS
       cpuPaused             : in  std_logic;
       
       error_instr           : out std_logic := '0';
@@ -38,6 +89,48 @@ entity cpu is
       error_exception       : out std_logic := '0';
       error_fifo            : out std_logic := '0';
       error_TLB             : out std_logic := '0';
+<<<<<<< KI
+      debug_fetch_pc        : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_retired         : out std_logic_vector(31 downto 0) := (others => '0');
+      -- Bitstream reader source pointer used by the frozen fault trace.
+      debug_gpr_s1          : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_irq_count       : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_t2_reload_count : out std_logic_vector(31 downto 0) := (others => '0');
+      -- Departure opcode, exception state, and restart counters retained by
+      -- the current fault-capture contract.
+      debug_h1_op           : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_exc_cause       : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_ret_count       : out std_logic_vector(31 downto 0) := (others => '0');
+      -- The stage-4 data address at the moment the stall watchdog trips.
+      -- debug_stall_pc says where the pipeline was; this says what it was
+      -- reaching for, which is what identifies an unanswered access.
+      -- Everything the stage-4 stall RELEASE depends on, captured at the same
+      -- instant. ST says stall4 is set with nothing outstanding; this says
+      -- which release condition is not being met.
+      debug_retire_pc       : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_retire_opcode   : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_trace_bus         : out std_logic_vector(895 downto 0) := (others => '0');
+      -- Live COP0 Cause and EPC, not the frozen copies in the trace bus.
+      -- sim/tb_ki_cpu_delayslot_irq.sv needs to read EPC the cycle after an
+      -- interrupt is taken, which is long before any trace trigger fires.
+      debug_cop0_cause_live   : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_cop0_epc_live     : out std_logic_vector(31 downto 0) := (others => '0');
+      -- State at the LAST ERET BEFORE THE FREEZE. cpu_cop0 captures each eret;
+      -- this holds the copy from the moment the trace freezes, so the values
+      -- describe the eret that preceded the fault rather than whichever one
+      -- happened most recently before the screen was photographed.
+      debug_eret_epc          : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_eret_target       : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_eret_flags        : out std_logic_vector(31 downto 0) := (others => '0');
+      -- Suppression census; see cpu_cop0.vhd. Live, not frozen: a freeze or a
+      -- reset may fire no trace trigger at all, and these must still be
+      -- readable off the screen at any moment.
+      debug_ds_count          : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_ds_first          : out std_logic_vector(31 downto 0) := (others => '0');
+      debug_trace_frozen      : out std_logic := '0';
+      debug_trace_trigger     : in  std_logic := '0';
+
+=======
 
       -- SGI: the PC of the instruction entering decode, and a strobe that says
       -- one entered this clock. This is OUTSIDE the savestate export's
@@ -66,6 +159,7 @@ entity cpu is
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
       dbg_retire            : out std_logic := '0';
       
+>>>>>>> OURS
       mem_request           : out std_logic := '0';
       mem_rnw               : out std_logic := '0'; 
       mem_address           : buffer unsigned(31 downto 0) := (others => '0'); 
@@ -102,10 +196,132 @@ end entity;
 
 architecture arch of cpu is
 
+<<<<<<< KI
+   constant FB0_LOW  : unsigned(31 downto 0) := x"00030000";
+   constant FB0_HIGH : unsigned(31 downto 0) := x"00055800";
+   constant FB1_LOW  : unsigned(31 downto 0) := x"00058000";
+   constant FB1_HIGH : unsigned(31 downto 0) := x"0007D800";
+
+   function bus_to_cpu16(inval : std_logic_vector(15 downto 0)) return unsigned is
+   begin
+      if LITTLE_ENDIAN then return unsigned(inval); end if;
+      return byteswap16(unsigned(inval));
+   end function;
+
+   function bus_to_cpu32(inval : std_logic_vector(31 downto 0)) return unsigned is
+   begin
+      if LITTLE_ENDIAN then return unsigned(inval); end if;
+      return byteswap32(unsigned(inval));
+   end function;
+
+   function bus_to_cpu64(inval : std_logic_vector(63 downto 0)) return unsigned is
+      variable result : unsigned(63 downto 0);
+   begin
+      if LITTLE_ENDIAN then return unsigned(inval); end if;
+      result(63 downto 32) := unsigned(byteswap32(inval(31 downto 0)));
+      result(31 downto 0)  := unsigned(byteswap32(inval(63 downto 32)));
+      return result;
+   end function;
+
+   function cpu_to_bus16(inval : unsigned(15 downto 0)) return unsigned is
+   begin
+      if LITTLE_ENDIAN then return inval; end if;
+      return byteswap16(inval);
+   end function;
+
+   function cpu_to_bus32(inval : unsigned(31 downto 0)) return unsigned is
+   begin
+      if LITTLE_ENDIAN then return inval; end if;
+      return byteswap32(inval);
+   end function;
+
+   function cpu_to_bus64(inval : unsigned(63 downto 0)) return unsigned is
+      variable result : unsigned(63 downto 0);
+   begin
+      if LITTLE_ENDIAN then return inval; end if;
+      result(63 downto 32) := byteswap32(inval(63 downto 32));
+      result(31 downto 0)  := byteswap32(inval(31 downto 0));
+      return result;
+   end function;
+
+   function merge_left32(data : unsigned(31 downto 0); olddata : unsigned(31 downto 0);
+                         offset : unsigned(1 downto 0)) return unsigned is
+      variable result : unsigned(31 downto 0) := olddata;
+      variable index  : integer := to_integer(offset);
+   begin
+      if LITTLE_ENDIAN then index := 3 - index; end if;
+      case index is
+         when 3 => result(31 downto 24) := data(7 downto 0);
+         when 2 => result(31 downto 16) := data(15 downto 0);
+         when 1 => result(31 downto 8)  := data(23 downto 0);
+         when 0 => result := data;
+         when others => null;
+      end case;
+      return result;
+   end function;
+
+   function merge_right32(data : unsigned(31 downto 0); olddata : unsigned(31 downto 0);
+                          offset : unsigned(1 downto 0)) return unsigned is
+      variable result : unsigned(31 downto 0) := olddata;
+      variable index  : integer := to_integer(offset);
+   begin
+      if LITTLE_ENDIAN then index := 3 - index; end if;
+      case index is
+         when 3 => result := data;
+         when 2 => result(23 downto 0) := data(31 downto 8);
+         when 1 => result(15 downto 0) := data(31 downto 16);
+         when 0 => result(7 downto 0)  := data(31 downto 24);
+         when others => null;
+      end case;
+      return result;
+   end function;
+
+   function merge_left64(data : unsigned(63 downto 0); olddata : unsigned(63 downto 0);
+                         offset : unsigned(2 downto 0)) return unsigned is
+      variable result : unsigned(63 downto 0) := olddata;
+      variable index  : integer := to_integer(offset);
+   begin
+      if LITTLE_ENDIAN then index := 7 - index; end if;
+      case index is
+         when 7 => result(63 downto 56) := data(7 downto 0);
+         when 6 => result(63 downto 48) := data(15 downto 0);
+         when 5 => result(63 downto 40) := data(23 downto 0);
+         when 4 => result(63 downto 32) := data(31 downto 0);
+         when 3 => result(63 downto 24) := data(39 downto 0);
+         when 2 => result(63 downto 16) := data(47 downto 0);
+         when 1 => result(63 downto 8)  := data(55 downto 0);
+         when 0 => result := data;
+         when others => null;
+      end case;
+      return result;
+   end function;
+
+   function merge_right64(data : unsigned(63 downto 0); olddata : unsigned(63 downto 0);
+                          offset : unsigned(2 downto 0)) return unsigned is
+      variable result : unsigned(63 downto 0) := olddata;
+      variable index  : integer := to_integer(offset);
+   begin
+      if LITTLE_ENDIAN then index := 7 - index; end if;
+      case index is
+         when 7 => result := data;
+         when 6 => result(55 downto 0) := data(63 downto 8);
+         when 5 => result(47 downto 0) := data(63 downto 16);
+         when 4 => result(39 downto 0) := data(63 downto 24);
+         when 3 => result(31 downto 0) := data(63 downto 32);
+         when 2 => result(23 downto 0) := data(63 downto 40);
+         when 1 => result(15 downto 0) := data(63 downto 48);
+         when 0 => result(7 downto 0)  := data(63 downto 56);
+         when others => null;
+      end case;
+      return result;
+   end function;
+     
+=======
    -- SGI: kept in step with cpu_cop0.vhd's constant of the same name. See its
    -- comment there for what claiming to be an R4400 commits the core to.
    constant PRESENT_AS_R4400 : boolean := true;
 
+>>>>>>> OURS
    -- register file
    signal regs_address_a               : std_logic_vector(4 downto 0);
    signal regs_data_a                  : std_logic_vector(63 downto 0);
@@ -131,6 +347,137 @@ architecture arch of cpu is
    
    -- other register
    signal PC                           : unsigned(63 downto 0) := (others => '0');
+   signal debug_fetch_pc_register      : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_retired_count          : unsigned(31 downto 0) := (others => '0');
+   signal debug_gpr_s1_register        : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_gpr_s2_register        : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_retire_pc_register     : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_retire_opcode_register : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_irq_count_register     : unsigned(31 downto 0) := (others => '0');
+   signal debug_t2_reload_register     : unsigned(31 downto 0) := (others => '0');
+   signal debug_ret_count_register     : unsigned(31 downto 0) := (others => '0');
+   signal debug_entry_count_register   : unsigned(15 downto 0) := (others => '0');
+   signal ram_reentry                  : std_logic;
+   signal boot_quiet_count             : unsigned(BOOT_QUIET_BITS - 1 downto 0) := (others => '0');
+   signal game_running                 : std_logic := '0';
+   signal trace_trigger_id             : std_logic_vector(2 downto 0) := (others => '0');
+
+   -- Two-stage synchronizer for the board-side freeze request.
+   signal trace_trigger_meta           : std_logic := '0';
+   signal trace_trigger_sync           : std_logic := '0';
+   signal dep_pc_now                   : std_logic_vector(31 downto 0) := (others => '0');
+   -- How many decodes have happened since reset, saturating at 2. One is not
+   -- enough: the pc reported by the FIRST post-reset decode comes from a
+   -- register the reset does not own, so the comparison must not run until two
+   -- genuine decodes are in hand. Stage 1 and stage 2 now clear those registers
+   -- as well; this is the independent guard, because the failure it prevents
+   -- cost several hardware builds and must not depend on one assignment.
+   signal dep_valid                    : unsigned(1 downto 0) := (others => '0');
+   signal hist_op1                     : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_h1_op_r                : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_prev_op_live           : std_logic_vector(31 downto 0) := (others => '0');
+   signal debug_exc_cause_register     : std_logic_vector(31 downto 0) := (others => '0');
+   signal cop0_debug_cause             : unsigned(31 downto 0);
+   signal cop0_debug_epc               : unsigned(31 downto 0);
+   signal cop0_debug_badvaddr          : unsigned(31 downto 0);
+   signal cop0_debug_tlb_census        : unsigned(31 downto 0);
+   signal cop0_debug_tlb_exc_stb       : std_logic;
+   signal cop0_debug_eret_epc          : unsigned(31 downto 0);
+   signal cop0_debug_eret_target       : unsigned(31 downto 0);
+   signal cop0_debug_eret_flags        : unsigned(31 downto 0);
+   signal cop0_debug_ds_count          : unsigned(31 downto 0);
+   signal cop0_debug_ds_first          : unsigned(31 downto 0);
+   -- Owned solely by eret_freeze_proc.
+   signal eret_held                    : std_logic := '0';
+   signal eret_epc_held                : std_logic_vector(31 downto 0) := (others => '0');
+   signal eret_target_held             : std_logic_vector(31 downto 0) := (others => '0');
+   signal eret_flags_held              : std_logic_vector(31 downto 0) := (others => '0');
+   -- The fault strobe delayed two cycles. BadVAddr, Cause and EPC are all
+   -- written by cop0's exception process on the strobe cycle itself, so
+   -- freezing there would capture the PREVIOUS exception's values.
+   signal tlb_exc_stb_d1               : std_logic := '0';
+   signal tlb_exc_stb_d2               : std_logic := '0';
+   -- Owned solely by tlb_fault_proc. Sticky, because the trace freeze can only
+   -- act on a decode boundary and the fault does not land on one.
+   signal tlb_fault_req                : std_logic := '0';
+   signal fault_badvaddr               : std_logic_vector(31 downto 0) := (others => '0');
+   signal fault_s1                     : std_logic_vector(31 downto 0) := (others => '0');
+   signal fault_s2                     : std_logic_vector(31 downto 0) := (others => '0');
+   signal fault_census                 : std_logic_vector(31 downto 0) := (others => '0');
+   signal fault_cause                  : std_logic_vector(31 downto 0) := (others => '0');
+   signal fault_epc                    : std_logic_vector(31 downto 0) := (others => '0');
+
+   -- ---------------------------------------------------------------------
+   -- Pre-event execution trace (see the debug_trace_bus port comment).
+   --
+   -- decodeNewPulse is what makes this trustworthy. decodeNew is only WRITTEN
+   -- when stall = 0, so it stays asserted for the whole of a stall and a
+   -- capture gated on it re-samples one decode many times. The trace needs one
+   -- entry per instruction, so stage 2 raises this for exactly the cycle in
+   -- which pcOld1/opcode1 hold a newly decoded pair.
+   --
+   -- The trace is a shift register rather than a ring: no write-pointer decode,
+   -- and the export order is fixed, so a photograph cannot be misread by
+   -- getting the wrap point wrong. Index 0 is the newest decode.
+   -- ---------------------------------------------------------------------
+   constant TRACE_DEPTH : integer := 8;
+   type t_trace_word is array (0 to TRACE_DEPTH - 1) of std_logic_vector(31 downto 0);
+   type t_trace_src  is array (0 to TRACE_DEPTH - 1) of std_logic_vector(3 downto 0);
+   signal decodeNewPulse               : std_logic := '0';
+   -- A genuine delay slot SEQUENTIALLY FOLLOWS its branch. A branch target
+   -- does not. That one test separates them, and it needs no opcode decoding.
+   --
+   -- When a branch sits in another branch's delay slot the hardware marks the
+   -- first branch's TARGET as a delay slot too, and cop0 records
+   -- EPC = target - 4. Measured directly: the interrupt is recognised with
+   -- PCold1 = the target and executeBranchdelaySlot = 1. eret then resumes at
+   -- target - 4 and falls THROUGH the target instead of entering it via the
+   -- branch. That is the KI FMV restart - KI1 880322D4/880322D8,
+   -- KI2 8802F074/8802F078, both recording EPC = target - 4 on hardware.
+   --
+   -- ds_prev_pc advances on decodeNewPulse, one pulse per genuinely new
+   -- decode, so it is aligned with PCold1 - which is exactly what cop0 pairs
+   -- with isDelaySlot when it computes nextEPC.
+   signal ds_prev_pc                   : unsigned(31 downto 0) := (others => '0');
+   signal ds_prev_isbranch             : std_logic := '0';
+
+   -- Does this opcode have a delay slot?
+   function opcodeIsBranch(op : unsigned(31 downto 0)) return std_logic is
+      variable o : unsigned(5 downto 0);
+      variable f : unsigned(5 downto 0);
+   begin
+      o := op(31 downto 26);
+      f := op(5 downto 0);
+      if (o = 6x"01") then return '1'; end if;                  -- REGIMM
+      if (o = 6x"02" or o = 6x"03") then return '1'; end if;    -- j, jal
+      if (o >= 6x"04" and o <= 6x"07") then return '1'; end if; -- beq..bgtz
+      if (o >= 6x"14" and o <= 6x"17") then return '1'; end if; -- the l variants
+      if (o = 6x"00" and (f = 6x"08" or f = 6x"09")) then return '1'; end if; -- jr, jalr
+      if ((o = 6x"10" or o = 6x"11" or o = 6x"12") and op(25 downto 21) = 5x"08") then
+         return '1';                                            -- BC0/1/2
+      end if;
+      return '0';
+   end function;
+   signal chainedDelaySlot             : std_logic := '0';
+   signal fetch_src                    : std_logic_vector(3 downto 0);
+   signal src0                         : std_logic_vector(3 downto 0) := (others => '0');
+   signal src1                         : std_logic_vector(3 downto 0) := (others => '0');
+   signal trace_pc                     : t_trace_word := (others => (others => '0'));
+   signal trace_op                     : t_trace_word := (others => (others => '0'));
+   signal trace_src                    : t_trace_src := (others => (others => '0'));
+   signal trace_frozen                 : std_logic := '0';
+   signal trace_cause                  : std_logic_vector(31 downto 0) := (others => '0');
+   signal trace_epc                    : std_logic_vector(31 downto 0) := (others => '0');
+   signal trace_badvaddr               : std_logic_vector(31 downto 0) := (others => '0');
+   signal trace_s1                     : std_logic_vector(31 downto 0) := (others => '0');
+   signal trace_s2                     : std_logic_vector(31 downto 0) := (others => '0');
+   signal trace_tlb_census             : std_logic_vector(31 downto 0) := (others => '0');
+   signal store_addr_0                 : std_logic_vector(31 downto 0) := (others => '0');
+   signal store_data_0                 : std_logic_vector(31 downto 0) := (others => '0');
+   signal store_pc_0                   : std_logic_vector(31 downto 0) := (others => '0');
+   signal store_addr_1                 : std_logic_vector(31 downto 0) := (others => '0');
+   signal store_hold                   : unsigned(4 downto 0) := (others => '0');
+   signal store_frozen                 : std_logic := '0';
    signal hi                           : unsigned(63 downto 0) := (others => '0');
    signal lo                           : unsigned(63 downto 0) := (others => '0');
           
@@ -138,22 +485,92 @@ architecture arch of cpu is
    signal memoryMuxStage4              : std_logic := '0';
    signal mem1_request_latched         : std_logic := '0';
    signal mem1_cache_latched           : std_logic := '0';
+   signal mem1_address_latched         : unsigned(31 downto 0) := (others => '0');
+   signal datacache_request_latched    : std_logic := '0';
+   signal datacache_address_latched    : unsigned(31 downto 0) := (others => '0');
    
-   signal mem_done_1                   : std_logic := '0';
    signal mem_finished_instr           : std_logic := '0';
    signal mem_finished_read            : std_logic := '0';
    signal mem_finished_dataRead        : std_logic_vector(63 downto 0);
           
-   signal writefifo_Din                : std_logic_vector(107 downto 0);
+   signal writefifo_Din                : std_logic_vector(115 downto 0) := (others => '0');
    signal writefifo_wr                 : std_logic := '0';
-   signal writefifo_Dout               : std_logic_vector(107 downto 0);
+   signal writefifo_Dout               : std_logic_vector(115 downto 0);
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
+   signal writefifo_Full               : std_logic;
+   signal writefifo_wr_accept          : std_logic;
+   signal writefifo_rd_accept          : std_logic;
+   signal writefifo_schedule_ready     : std_logic;
    signal writefifo_block              : std_logic;
+   signal writefifo_mem4_ready         : std_logic;
    signal writefifo_cnt                : integer range 0 to 7;
+   type t_datacache_wb_fifo is array (0 to 3) of std_logic_vector(95 downto 0);
+   signal datacache_wb_fifo            : t_datacache_wb_fifo :=
+                                           (others => (others => '0'));
+   signal datacache_wb_fifo_wrptr      : unsigned(1 downto 0) := (others => '0');
+   signal datacache_wb_fifo_rdptr      : unsigned(1 downto 0) := (others => '0');
+   signal datacache_wb_fifo_count      : integer range 0 to 4 := 0;
+   signal datacache_wb_fifo_pop        : std_logic;
+   signal writefifo_issue_pending      : std_logic := '0';
+   signal writefifo_issue_wb           : std_logic := '0';
+   signal datacache_wb_busy            : std_logic;
+   signal datacache_debug_state        : std_logic_vector(3 downto 0);
           
-   signal writefifo_rd_1x              : std_logic := '0';
-   signal writefifo_rd_93              : std_logic := '0';
+   -- The transaction FIFO belongs entirely to clk93.  Transfer its wide
+   -- payload to clk1x through a bundled-data request/acknowledge mailbox so
+   -- address, data and control bits can never be sampled from different FIFO
+   -- entries while the clocks drift relative to one another.
+   signal write_cdc_data_93            : std_logic_vector(115 downto 0) := (others => '0');
+   signal write_cdc_req_93             : std_logic := '0';
+   signal write_cdc_busy_93            : std_logic := '0';
+   signal write_cdc_ack_1x             : std_logic := '0';
+   signal write_cdc_ack_meta_93        : std_logic := '0';
+   signal write_cdc_ack_sync_93        : std_logic := '0';
+   signal write_cdc_req_meta_1x        : std_logic := '0';
+   signal write_cdc_req_sync_1x        : std_logic := '0';
+   signal write_cdc_req_seen_1x        : std_logic := '0';
+
+   -- Read-response mailbox from the memory clock domain to the CPU clock
+   -- domain. The payload remains stable until the CPU acknowledges it.
+   signal response_cdc_data_1x         : std_logic_vector(104 downto 0) := (others => '0');
+   signal response_cdc_req_1x          : std_logic := '0';
+   signal response_cdc_busy_1x         : std_logic := '0';
+   signal response_cdc_ack_93          : std_logic := '0';
+   signal response_cdc_ack_meta_1x     : std_logic := '0';
+   signal response_cdc_ack_sync_1x     : std_logic := '0';
+   signal response_cdc_req_meta_93     : std_logic := '0';
+   signal response_cdc_req_sync_93     : std_logic := '0';
+   signal response_cdc_req_seen_93     : std_logic := '0';
+   signal response_cdc_pending_93      : std_logic := '0';
+   signal response_cdc_deliver_93      : std_logic := '0';
+   signal response_cdc_class_93        : std_logic := '0';
+
+   -- Independent clk93-domain ownership scoreboard. The main transaction
+   -- FIFO carries a sequence tag to clk1x and back; this queue records what
+   -- was accepted before that CDC path, so a lost, duplicated, reordered or
+   -- misclassified response cannot validate itself with its own metadata.
+   type t_read_meta_tag is array (0 to 15) of std_logic_vector(7 downto 0);
+   type t_read_meta_class is array (0 to 15) of std_logic;
+   type t_read_meta_address is array (0 to 15) of std_logic_vector(31 downto 0);
+   signal read_meta_tag               : t_read_meta_tag := (others => (others => '0'));
+   signal read_meta_class             : t_read_meta_class := (others => '0');
+   signal read_meta_address           : t_read_meta_address := (others => (others => '0'));
+   signal read_meta_wrptr             : unsigned(3 downto 0) := (others => '0');
+   signal read_meta_rdptr             : unsigned(3 downto 0) := (others => '0');
+   signal read_meta_count             : integer range 0 to 16 := 0;
+   signal read_sequence_93            : unsigned(7 downto 0) := (others => '0');
+   signal read_meta_push              : std_logic;
+   signal read_meta_pop               : std_logic;
+   signal read_meta_tag_mismatch      : std_logic;
+   signal read_meta_class_mismatch    : std_logic;
+   signal read_meta_address_mismatch  : std_logic;
+   signal debug_response_status_reg   : std_logic_vector(31 downto 0) := (others => '0');
+
+   -- Active clk1x transaction metadata is registered with the bus command,
+   -- then held until mem_done builds the response mailbox payload.
+   signal memory_read_tag_1x          : std_logic_vector(7 downto 0) := (others => '0');
+   signal memory_read_address_1x      : std_logic_vector(31 downto 0) := (others => '0');
           
    -- common   
    type t_memstate is
@@ -226,9 +643,31 @@ architecture arch of cpu is
    signal FetchAddr                    : unsigned(63 downto 0) := (others => '0'); 
    signal FetchAddr1                   : unsigned(63 downto 0) := (others => '0'); 
    signal FetchAddr2                   : unsigned(63 downto 0) := (others => '0'); 
+   -- FetchAddr1(13 downto 2) and FetchAddr2(13 downto 2), produced by ONE
+   -- flattened mux instead of the two the fetch address goes through.
+   --
+   -- The I-cache tag RAM is an asynchronous-read MLAB, so its index is
+   -- combinational from the fetch address in the same cycle the address is
+   -- chosen. The binding path in the CPU domain at 100 MHz is
+   --   resultWriteEnable -> value1 (3-way forward mux) -> FetchAddr1 (5-way
+   --   fetch mux) -> itagram1 -> rd_mux -> read_hit -> stall1
+   -- at 10.99 ns, 61% of it interconnect. Two of those hops exist only because
+   -- the forwarding mux and the fetch mux are separate signals that have to be
+   -- routed between: 1.56 ns from value1 to FetchAddr1, then 1.22 ns on to the
+   -- RAM.
+   --
+   -- Only bits 13 downto 2 reach the RAMs - 9 for the tag index, 12 for the
+   -- data address - so a private flattened copy of just those costs 12 bits of
+   -- mux and removes an entire level plus one long hop. The tag COMPARE still
+   -- uses FetchAddrTLBMuxed1, so a wrong index cannot be mistaken for a hit;
+   -- it would miss and fill, not return the wrong line.
+   signal FetchIndex1                  : unsigned(13 downto 2) := (others => '0');
+   signal FetchIndex2                  : unsigned(13 downto 2) := (others => '0');
    signal FetchAddrTLBMuxed1           : unsigned(31 downto 0) := (others => '0'); 
    signal FetchAddrTLBMuxed2           : unsigned(31 downto 0) := (others => '0'); 
    signal FetchAddrSelect              : std_logic;
+   signal fetchCache1                  : std_logic;
+   signal fetchCache2                  : std_logic;
    signal fetchCache                   : std_logic;
    signal useCached_data               : std_logic := '0';
    
@@ -495,6 +934,7 @@ architecture arch of cpu is
    signal executeMem64Bit              : std_logic := '0';
    signal executeMemWriteEnable        : std_logic := '0';
    signal executeMemUseCache           : std_logic := '0';
+   signal executeMemUseCacheEffective  : std_logic := '0';
    signal executeMemWriteData          : unsigned(63 downto 0) := (others => '0');
    signal executeMemWriteMask          : std_logic_vector(7 downto 0) := (others => '0');
    signal executeMemAddress            : unsigned(31 downto 0) := (others => '0');
@@ -575,7 +1015,24 @@ architecture arch of cpu is
    signal COP2_enable                  : std_logic;
    signal fpuRegMode                   : std_logic;
    signal privilegeMode                : unsigned(1 downto 0);
+   signal kusegUnmapped                : std_logic;
    signal bit64region                  : std_logic;
+<<<<<<< KI
+   -- Region decode width. bit64region is Status.KX/SX/UX via cpu_cop0; with
+   -- ADDR32_ONLY it is forced to '0' at elaboration so the 64-bit branch is
+   -- never built.
+   --
+   -- That branch is a cascade of roughly 26 chained 64-bit magnitude compares
+   -- on value1 - the forwarded register at the head of the critical path - and
+   -- it feeds BOTH dominant path clusters: the region decode below
+   -- (executeMemAddress, 59% of the 300 worst endpoints) and TLB_instrMapped
+   -- above (stall1, 17%). The 32-bit branch it is replaced by is three compares
+   -- on calcMemAddr(31 downto 29).
+   --
+   -- The KI wrapper enables ADDR32_ONLY because both supported games execute
+   -- with 32-bit virtual addresses and keep Status.KX/SX/UX clear.
+   signal region64                     : std_logic;
+=======
    -- SGI: the PC carried down the pipeline alongside pcOld2..4, but OUTSIDE
    -- the `-- synthesis translate_off` blocks those live in, so it reaches the
    -- netlist GHDL lowers for Verilator. dbg_pc taps DECODE, which re-presents
@@ -589,6 +1046,7 @@ architecture arch of cpu is
    signal dbg_exc_code_u               : unsigned(4 downto 0);    -- SGI
    signal dbg_exc_epc_u                : unsigned(31 downto 0);   -- SGI
    signal dbg_exc_bad_u                : unsigned(31 downto 0);   -- SGI
+>>>>>>> OURS
    signal irqTrigger                   : std_logic;
    signal TLBDone                      : std_logic;
    
@@ -606,6 +1064,8 @@ architecture arch of cpu is
    
    signal TLB_ss_load                  : std_logic;
    signal TLB_instrMapped              : std_logic;
+   signal TLB_instrMapped1             : std_logic;
+   signal TLB_instrMapped2             : std_logic;
    signal TLB_instrReq                 : std_logic;
    signal TLB_instrUseCache            : std_logic;
    signal TLB_instrStall               : std_logic;
@@ -649,11 +1109,26 @@ architecture arch of cpu is
    signal writebackData                : unsigned(63 downto 0) := (others => '0');
    signal writebackWriteEnable         : std_logic := '0';
    signal writeback_UseCache           : std_logic := '0';
+   signal writebackMemWrite             : std_logic := '0';
    signal writebackLoadType            : CPU_LOADTYPE;
    signal writebackReadAddress         : unsigned(31 downto 0) := (others => '0');
    signal writebackReadLastData        : unsigned(63 downto 0) := (others => '0');
    signal writeback_COP1_ReadEnable    : std_logic := '0'; 
    signal writeback_fifoStall          : std_logic := '0'; 
+   signal read_fifoStall               : std_logic := '0';
+   -- The replayed request has to carry the address, data and mask of the
+   -- instruction that was BLOCKED, not whatever stage 3 has moved on to.
+   -- Stage 3 keeps advancing while stage 4 is stalled, so executeMemAddress
+   -- and friends belong to a later instruction by the time the FIFO frees up.
+   -- The other FIFO sources already latch for exactly this reason - see
+   -- datacache_address_latched and mem1_address_latched above.
+   signal fifoStall_address            : unsigned(31 downto 0) := (others => '0');
+   signal fifoStall_dataWrite          : std_logic_vector(63 downto 0) := (others => '0');
+   signal fifoStall_writeMask          : std_logic_vector(7 downto 0) := (others => '0');
+   signal fifoStall_req64              : std_logic := '0';
+   signal fifoStall_useCache           : std_logic := '0';
+   signal read_fifoStall_address       : unsigned(31 downto 0) := (others => '0');
+   signal read_fifoStall_req64         : std_logic := '0';
          
    -- wire     
    signal mem4_request                 : std_logic := '0';
@@ -664,6 +1139,9 @@ architecture arch of cpu is
    signal mem4_writeMask               : std_logic_vector(7 downto 0) := (others => '0');    
    
    signal read4_dataReadData           : unsigned(63 downto 0);
+   signal read4_uncachedRot            : unsigned(1 downto 0);
+   signal read4_uncachedData           : unsigned(63 downto 0);
+   signal mem_finished_dataRot         : std_logic_vector(63 downto 0);
    signal read4_dataReadRot64          : unsigned(63 downto 0);
    signal read4_dataReadRot32          : unsigned(31 downto 0);
    signal read4_Addr                   : unsigned(31 downto 0);
@@ -740,69 +1218,700 @@ architecture arch of cpu is
    signal csr_export_2                 : unsigned(24 downto 0) := (others => '0');
 -- synthesis translate_on
    
-begin 
+begin
+
+   debug_fetch_pc <= debug_fetch_pc_register;
+   debug_retired  <= std_logic_vector(debug_retired_count);
+   debug_gpr_s1       <= debug_gpr_s1_register;
+   debug_retire_pc <= debug_retire_pc_register;
+   debug_retire_opcode <= debug_retire_opcode_register;
+   debug_irq_count <= std_logic_vector(debug_irq_count_register);
+   debug_t2_reload_count <= std_logic_vector(debug_t2_reload_register);
+   -- RC carries BOTH restart shapes: entries to the game's own entry point in
+   -- the high half, RAM -> boot ROM transitions in the low half. They are
+   -- mutually exclusive explanations of the same visible symptom and reading
+   -- them side by side is what separates them.
+   debug_ret_count <= std_logic_vector(debug_entry_count_register) &
+                      std_logic_vector(debug_ret_count_register(15 downto 0));
+   debug_h1_op <= debug_h1_op_r;
+   -- The opcode AT the departure pc, captured in the same statement as it.
+   debug_exc_cause <= debug_exc_cause_register;
+
+   process (clk93)
+   begin
+      if rising_edge(clk93) then
+         if (reset_93 = '1') then
+            dep_pc_now  <= (others => '0');
+            dep_valid   <= (others => '0');
+            debug_entry_count_register <= (others => '0');
+            trace_pc     <= (others => (others => '0'));
+            trace_op     <= (others => (others => '0'));
+            trace_src    <= (others => (others => '0'));
+            trace_frozen <= '0';
+            trace_cause  <= (others => '0');
+            trace_epc    <= (others => '0');
+            trace_trigger_id <= (others => '0');
+            trace_badvaddr   <= (others => '0');
+            trace_s1         <= (others => '0');
+            trace_s2         <= (others => '0');
+            trace_tlb_census <= (others => '0');
+            debug_ret_count_register <= (others => '0');
+            boot_quiet_count <= (others => '0');
+            game_running     <= '0';
+            trace_trigger_meta <= '0';
+            trace_trigger_sync <= '0';
+         else
+            trace_trigger_meta <= debug_trace_trigger;
+            trace_trigger_sync <= trace_trigger_meta;
+         end if;
+
+         if (reset_93 = '1') then
+            null;
+         elsif (ce_93 = '1' and decodeNewPulse = '1') then
+            dep_pc_now  <= std_logic_vector(PCold1(31 downto 0));
+            if (dep_valid < 2) then
+               dep_valid <= dep_valid + 1;
+            end if;
+
+            -- Every execution of the entry point, counted on the same pulse as
+            -- everything else so it cannot double-count under a stall, and
+            -- saturating so the displayed value is always true. Boot is 1.
+            if (PCold1(31 downto 0) = x"88000000" and
+                debug_entry_count_register < x"FFFF") then
+               debug_entry_count_register <= debug_entry_count_register + 1;
+            end if;
+
+            -- Shift the decode in. Index 0 is the newest, so the landing
+            -- instruction ends up at index 0 and the departure at index 1.
+            -- Stopping on trace_frozen keeps the CAUSAL window: the boot ROM
+            -- runs thousands of instructions after the restart and would
+            -- otherwise overwrite the evidence before anyone can read it.
+            if (trace_frozen = '0') then
+               trace_pc(0)  <= std_logic_vector(PCold1(31 downto 0));
+               trace_op(0)  <= std_logic_vector(opcode1);
+               trace_src(0) <= src1;
+               for i in 1 to TRACE_DEPTH - 1 loop
+                  trace_pc(i)  <= trace_pc(i - 1);
+                  trace_op(i)  <= trace_op(i - 1);
+                  trace_src(i) <= trace_src(i - 1);
+               end loop;
+            end if;
+
+            if (dep_valid = 2 and debug_entry_count_register >= 1 and
+                (PCold1(31 downto 20) = x"9FC" or
+                 PCold1(31 downto 20) = x"BFC") and
+                dep_pc_now(31 downto 20) /= x"9FC" and
+                dep_pc_now(31 downto 20) /= x"BFC") then
+               if (debug_ret_count_register < x"FFFFFFFF") then
+                  debug_ret_count_register <= debug_ret_count_register + 1;
+               end if;
+            end if;
+
+            if (PCold1(31 downto 20) = x"9FC" or
+                PCold1(31 downto 20) = x"BFC") then
+               boot_quiet_count <= (others => '0');
+            elsif (game_running = '0') then
+               if (boot_quiet_count = 2 ** BOOT_QUIET_BITS - 1) then
+                  game_running <= '1';
+               else
+                  boot_quiet_count <= boot_quiet_count + 1;
+               end if;
+            end if;
+
+            if (trace_frozen = '0') then
+               if (tlb_fault_req = '1' and game_running = '1') then
+                  trace_frozen     <= '1';
+                  trace_trigger_id <= "100";
+                  trace_cause      <= fault_cause;
+                  trace_epc        <= fault_epc;
+                  trace_badvaddr   <= fault_badvaddr;
+                  trace_s1         <= fault_s1;
+                  trace_s2         <= fault_s2;
+                  trace_tlb_census <= fault_census;
+               -- Same widened test as the counter above. This fires BEFORE
+               -- the handoff to 0x88000000, so rows 1-7 hold the game code
+               -- that jumped into the ROM - the departure this investigation
+               -- has been trying to name.
+               elsif (dep_valid = 2 and debug_entry_count_register >= 1 and
+                   (PCold1(31 downto 20) = x"9FC" or
+                    PCold1(31 downto 20) = x"BFC") and
+                   dep_pc_now(31 downto 20) /= x"9FC" and
+                   dep_pc_now(31 downto 20) /= x"BFC") then
+                  trace_frozen     <= '1';
+                  trace_trigger_id <= "001";
+                  trace_cause      <= std_logic_vector(cop0_debug_cause);
+                  trace_epc        <= std_logic_vector(cop0_debug_epc);
+                  trace_badvaddr   <= std_logic_vector(cop0_debug_badvaddr);
+                  trace_s1         <= debug_gpr_s1_register;
+                  trace_s2         <= debug_gpr_s2_register;
+                  trace_tlb_census <= std_logic_vector(cop0_debug_tlb_census);
+               elsif (ram_reentry = '1') then
+                  trace_frozen     <= '1';
+                  trace_trigger_id <= "010";
+                  trace_cause      <= std_logic_vector(cop0_debug_cause);
+                  trace_epc        <= std_logic_vector(cop0_debug_epc);
+                  trace_badvaddr   <= std_logic_vector(cop0_debug_badvaddr);
+                  trace_s1         <= debug_gpr_s1_register;
+                  trace_s2         <= debug_gpr_s2_register;
+                  trace_tlb_census <= std_logic_vector(cop0_debug_tlb_census);
+               -- Also counted rather than gated - see ram_reentry. The board
+               -- side now fires on the THIRD disk init: exactly two per startup
+               -- in both games, so the third is the restart's first.
+               elsif (trace_trigger_sync = '1') then
+                  trace_frozen     <= '1';
+                  trace_trigger_id <= "011";
+                  trace_cause      <= std_logic_vector(cop0_debug_cause);
+                  trace_epc        <= std_logic_vector(cop0_debug_epc);
+                  trace_badvaddr   <= std_logic_vector(cop0_debug_badvaddr);
+                  trace_s1         <= debug_gpr_s1_register;
+                  trace_s2         <= debug_gpr_s2_register;
+                  trace_tlb_census <= std_logic_vector(cop0_debug_tlb_census);
+               end if;
+            end if;
+         end if;
+      end if;
+   end process;
+
+   debug_ds_count      <= std_logic_vector(cop0_debug_ds_count);
+   debug_ds_first      <= std_logic_vector(cop0_debug_ds_first);
+   debug_eret_epc      <= eret_epc_held;
+   debug_eret_target   <= eret_target_held;
+   debug_eret_flags    <= eret_flags_held;
+
+   -- Track cop0's per-eret capture until the trace freezes, then hold.
+   --
+   -- The fault is three instructions after the eret being asked about, so
+   -- "the last eret before the freeze" IS that eret. Holding matters because
+   -- the boot ROM the restart lands in takes interrupts of its own, and
+   -- without this the page would show one of those by the time it is read.
+   --
+   -- Every signal here is written by this process and no other.
+   eret_freeze_proc : process (clk93)
+   begin
+      if rising_edge(clk93) then
+         if (reset_93 = '1') then
+            eret_held         <= '0';
+            eret_epc_held     <= (others => '0');
+            eret_target_held  <= (others => '0');
+            eret_flags_held   <= (others => '0');
+         elsif (ce_93 = '1' and eret_held = '0') then
+            eret_epc_held      <= std_logic_vector(cop0_debug_eret_epc);
+            eret_target_held   <= std_logic_vector(cop0_debug_eret_target);
+            eret_flags_held    <= std_logic_vector(cop0_debug_eret_flags);
+            if (trace_frozen = '1') then
+               eret_held <= '1';
+            end if;
+         end if;
+      end if;
+   end process;
+
+   ds_chain_proc : process (clk93)
+   begin
+      if rising_edge(clk93) then
+         if (reset_93 = '1') then
+            ds_prev_pc       <= (others => '0');
+            ds_prev_isbranch <= '0';
+         elsif (ce_93 = '1' and decodeNewPulse = '1') then
+            ds_prev_pc       <= PCold1(31 downto 0);
+            ds_prev_isbranch <= opcodeIsBranch(opcode1);
+         end if;
+      end if;
+   end process;
+
+   -- A chained delay slot requires BOTH: the previous decode was a branch, AND
+   -- this decode is not sequentially after it.
+   --
+   -- On a re-decode the previous decode is the slot itself, which is not a
+   -- branch, so the EPC back-up remains enabled. In the chained case the
+   -- previous decode is the second branch and suppression applies.
+   --
+   -- DS on the status page counts every firing. In normal gameplay it should
+   -- now stay at or near zero; only the FMV decompressor's
+   -- branch-in-branch-delay-slot idiom should move it.
+   chainedDelaySlot <= ds_prev_isbranch when (PCold1(31 downto 0) /= (ds_prev_pc + 4)) else '0';
+
+   -- The fault latch.
+   --
+   -- Runs every clk93 cycle, unlike the trace process above which is gated on
+   -- decodeNewPulse. cpu_cop0 writes BadVAddr, Cause and EPC in the same cycle
+   -- as the strobe, so the capture is two cycles behind it; nothing else writes
+   -- them in between, and the faulting load never reaches writeback, so $s1 and
+   -- $s2 still hold their pre-fault values.
+   --
+   -- Every signal here is written by this process and no other.
+   tlb_fault_proc : process (clk93)
+   begin
+      if rising_edge(clk93) then
+         if (reset_93 = '1') then
+            tlb_exc_stb_d1 <= '0';
+            tlb_exc_stb_d2 <= '0';
+            tlb_fault_req  <= '0';
+            fault_badvaddr <= (others => '0');
+            fault_s1       <= (others => '0');
+            fault_s2       <= (others => '0');
+            fault_census   <= (others => '0');
+            fault_cause    <= (others => '0');
+            fault_epc      <= (others => '0');
+         elsif (ce_93 = '1') then
+            tlb_exc_stb_d1 <= cop0_debug_tlb_exc_stb;
+            tlb_exc_stb_d2 <= tlb_exc_stb_d1;
+
+            -- First fault only. A restart takes the boot ROM through code that
+            -- may fault again, and the first one is the one being asked about.
+            if (tlb_exc_stb_d2 = '1' and tlb_fault_req = '0') then
+               tlb_fault_req  <= '1';
+               fault_badvaddr <= std_logic_vector(cop0_debug_badvaddr);
+               fault_s1       <= debug_gpr_s1_register;
+               fault_s2       <= debug_gpr_s2_register;
+               fault_census   <= std_logic_vector(cop0_debug_tlb_census);
+               fault_cause    <= std_logic_vector(cop0_debug_cause);
+               fault_epc      <= std_logic_vector(cop0_debug_epc);
+            end if;
+         end if;
+      end if;
+   end process;
+
+   process (clk93)
+   begin
+      if rising_edge(clk93) then
+         if (reset_93 = '1') then
+            store_addr_0 <= (others => '0');
+            store_data_0 <= (others => '0');
+            store_pc_0   <= (others => '0');
+            store_addr_1 <= (others => '0');
+            store_hold   <= (others => '0');
+            store_frozen <= '0';
+         elsif (ce_93 = '1') then
+            if (trace_frozen = '1' and store_frozen = '0') then
+               if (store_hold = 16) then
+                  store_frozen <= '1';
+               else
+                  store_hold <= store_hold + 1;
+               end if;
+            end if;
+
+            if (store_frozen = '0' and stall4Masked = 0 and executeNew = '1'
+                and executeMemWriteEnable = '1') then
+               store_addr_1 <= store_addr_0;
+               store_addr_0 <= std_logic_vector(executeMemAddress(31 downto 0));
+               store_data_0 <= std_logic_vector(executeMemWriteData(31 downto 0));
+               store_pc_0   <= debug_fetch_pc_register;
+            end if;
+         end if;
+      end if;
+   end process;
+
+   ram_reentry <= '1' when (dep_valid = 2 and
+                            PCold1(31 downto 0) = x"88000000" and
+                            debug_entry_count_register >= 1)
+                      else '0';
+
+   debug_cop0_cause_live <= std_logic_vector(cop0_debug_cause);
+   debug_cop0_epc_live   <= std_logic_vector(cop0_debug_epc);
+
+   gtrace_export : if DEBUG_TRACE generate
+      debug_trace_frozen <= trace_frozen;
+
+      -- Export oldest first, so the debug page renders top to bottom in program
+      -- order and entry 7 is always the landing decode.
+      trace_export : for i in 0 to TRACE_DEPTH - 1 generate
+         debug_trace_bus(i * 64 + 63 downto i * 64 + 32) <=
+            trace_pc(TRACE_DEPTH - 1 - i);
+         debug_trace_bus(i * 64 + 31 downto i * 64) <=
+            trace_op(TRACE_DEPTH - 1 - i);
+         debug_trace_bus(512 + i * 4 + 3 downto 512 + i * 4) <=
+            trace_src(TRACE_DEPTH - 1 - i);
+      end generate;
+
+      debug_trace_bus(575 downto 544) <= trace_cause;
+      debug_trace_bus(607 downto 576) <= trace_epc;
+      debug_trace_bus(639 downto 608) <= store_addr_0;
+      debug_trace_bus(671 downto 640) <= store_data_0;
+      debug_trace_bus(703 downto 672) <= store_pc_0;
+      debug_trace_bus(735 downto 704) <= store_addr_1;
+      -- The capture's own provenance, in its own word rather than stolen bits.
+      --   [2:0]  which trigger froze the trace
+      --   [3]    end-of-boot gate, so an unarmed detector is visible as such
+      debug_trace_bus(738 downto 736) <= trace_trigger_id;
+      debug_trace_bus(739)            <= game_running;
+      debug_trace_bus(799 downto 768) <= trace_badvaddr;
+      debug_trace_bus(831 downto 800) <= trace_s1;
+      debug_trace_bus(863 downto 832) <= trace_s2;
+      debug_trace_bus(895 downto 864) <= trace_tlb_census;
+      -- Fill starts at 740, not 739: widening trace_trigger_id to three bits
+      -- pushed game_running up one, and leaving the fill where it was gave bit
+      -- 739 two drivers. ModelSim resolved that silently; only the Quartus
+      -- analysis pass rejects it, which is why BRINGUP makes that pass mandatory
+      -- after any change that moves bits between fields.
+      debug_trace_bus(767 downto 740) <= (others => '0');
+   end generate;
+
+   gtrace_off : if not DEBUG_TRACE generate
+      debug_trace_frozen <= '0';
+      debug_trace_bus    <= (others => '0');
+   end generate;
+
+   process (clk93)
+   begin
+      if (rising_edge(clk93)) then
+         if (reset_93 = '1') then
+            debug_fetch_pc_register <= (others => '0');
+            debug_t2_reload_register <= (others => '0');
+            -- debug_ret_count_register is NOT cleared here. It is written by
+            -- the decodeNewPulse process now, and a register driven from two
+            -- processes is illegal for synthesis - Quartus rejects it outright
+            -- while ModelSim resolves it silently, which is why the suite
+            -- passed and the build did not.
+         elsif (ce_93 = '1' and stall = 0 and decodeNew = '1') then
+            debug_fetch_pc_register <= std_logic_vector(PCold1(31 downto 0));
+            debug_prev_op_live      <= std_logic_vector(opcode1);
+            -- One deeper, so two consecutive fetches can be compared.
+            hist_op1 <= debug_prev_op_live;
+            -- EVERY transition out of the decompressed program back into
+            -- the boot ROM, with the address it landed on, the address it left
+            -- from, and a running count. The existing capture above is
+            -- first-only, which was right while the question was "does the
+            -- handoff happen at all" and is useless now that the game boots,
+            -- runs, and restarts itself on a cycle.
+            --
+            -- Read the landing address: BFC00000 is the reset vector,
+            -- BFC00380 the general exception vector for Status.BEV = 1, and
+            -- anything else is an ordinary call into ROM code.
+            if (debug_fetch_pc_register(31 downto 24) = x"88" and
+                (PCold1(31 downto 20) = x"9FC" or
+                 PCold1(31 downto 20) = x"BFC")) then
+               debug_h1_op_r <= hist_op1;
+               debug_exc_cause_register <= std_logic_vector(cop0_debug_cause);
+            end if;
+
+            -- The store is in the branch DELAY SLOT, so "the loop ran 256
+            -- times" and "the CPU issued 256 stores" are not the same claim.
+            -- Counted at decode, gated by stall = 0 and decodeNew, so each
+            -- pass counts once whether or not it goes on to drive the bus.
+
+
+            if PCold1(31 downto 0) = x"9FC00728" then
+               debug_t2_reload_register <= debug_t2_reload_register + 1;
+            end if;
+
+         end if;
+      end if;
+   end process;
 
    -- common
+   -- Scanout reads these pages directly from the framebuffer RAM, outside the
+   -- CPU data-cache coherence domain. Keep only those exact pages uncached.
+   executeMemUseCacheEffective <= '0' when
+      FRAMEBUFFER_UNCACHED and
+      (((executeMemAddress >= FB0_LOW) and (executeMemAddress < FB0_HIGH)) or
+       ((executeMemAddress >= FB1_LOW) and (executeMemAddress < FB1_HIGH)))
+      else executeMemUseCache;
+
    stall        <= '0' & stall4 & stall3 & stall2 & stall1;
+   read_meta_push <= writefifo_wr_accept and writefifo_Din(105);
+   read_meta_pop <= '1' when
+      (response_cdc_pending_93 = '0' and
+       response_cdc_deliver_93 = '0' and
+       response_cdc_req_sync_93 /= response_cdc_req_seen_93) else '0';
+   read_meta_tag_mismatch <= '1' when
+      response_cdc_data_1x(72 downto 65) /=
+        read_meta_tag(to_integer(read_meta_rdptr)) else '0';
+   read_meta_class_mismatch <= '1' when
+      response_cdc_data_1x(64) /=
+        read_meta_class(to_integer(read_meta_rdptr)) else '0';
+   read_meta_address_mismatch <= '1' when
+      response_cdc_data_1x(104 downto 73) /=
+        read_meta_address(to_integer(read_meta_rdptr)) else '0';
    
    process (clk93)
    begin
       if (rising_edge(clk93)) then
       
-         writefifo_wr    <= '0';
-         writefifo_Rd    <= '0';
-         writefifo_rd_93 <= writefifo_rd_1x;
+         writefifo_Rd          <= '0';
+         write_cdc_ack_meta_93 <= write_cdc_ack_1x;
+         write_cdc_ack_sync_93 <= write_cdc_ack_meta_93;
+         response_cdc_req_meta_93 <= response_cdc_req_1x;
+         response_cdc_req_sync_93 <= response_cdc_req_meta_93;
+         mem_finished_instr       <= '0';
+         mem_finished_read        <= '0';
          
          if (reset_93 = '1') then
          
-            mem1_request_latched  <= '0';
-            writefifo_cnt         <= 0;
+            mem1_request_latched      <= '0';
+            datacache_request_latched <= '0';
+            writefifo_cnt             <= 0;
+            datacache_wb_fifo_wrptr   <= (others => '0');
+            datacache_wb_fifo_rdptr   <= (others => '0');
+            datacache_wb_fifo_count   <= 0;
+            writefifo_issue_pending <= '0';
+            writefifo_issue_wb      <= '0';
+            write_cdc_data_93         <= (others => '0');
+            write_cdc_req_93          <= '0';
+            write_cdc_busy_93         <= '0';
+            write_cdc_ack_meta_93     <= '0';
+            write_cdc_ack_sync_93     <= '0';
+            response_cdc_req_meta_93  <= '0';
+            response_cdc_req_sync_93  <= '0';
+            response_cdc_req_seen_93  <= '0';
+            response_cdc_pending_93   <= '0';
+            response_cdc_deliver_93   <= '0';
+             response_cdc_class_93     <= '0';
+             response_cdc_ack_93       <= '0';
+             mem_finished_dataRead     <= (others => '0');
+             mem_finished_dataRot      <= (others => '0');
+             read_meta_wrptr           <= (others => '0');
+             read_meta_rdptr           <= (others => '0');
+             read_meta_count           <= 0;
+             read_sequence_93          <= (others => '0');
+             debug_response_status_reg   <= (others => '0');
+
+          else
+
+             -- Record every accepted read independently of the request CDC.
+             -- A depth of 16 covers the seven-entry transaction FIFO plus
+             -- both CDC mailboxes and the active memory transaction.
+             if (read_meta_push = '1') then
+                if (read_meta_count < 16 or read_meta_pop = '1') then
+                   read_meta_tag(to_integer(read_meta_wrptr)) <=
+                      writefifo_Din(115 downto 108);
+                   read_meta_class(to_integer(read_meta_wrptr)) <=
+                      writefifo_Din(104);
+                   read_meta_address(to_integer(read_meta_wrptr)) <=
+                      writefifo_Din(95 downto 64);
+                   read_meta_wrptr <= read_meta_wrptr + 1;
+                elsif (debug_response_status_reg(31) = '0') then
+                   debug_response_status_reg <=
+                      '1' & '0' & '1' & "000" &
+                      '0' & '0' & x"00" & writefifo_Din(115 downto 108) &
+                      "10000" & "000";
+                end if;
+                read_sequence_93 <= read_sequence_93 + 1;
+             end if;
+
+             if (read_meta_pop = '1') then
+                if (read_meta_count > 0) then
+                   read_meta_rdptr <= read_meta_rdptr + 1;
+                   if (debug_response_status_reg(31) = '0' and
+                       (read_meta_tag_mismatch = '1' or
+                        read_meta_class_mismatch = '1' or
+                        read_meta_address_mismatch = '1')) then
+                      debug_response_status_reg <=
+                         '1' & '0' & '0' &
+                         read_meta_address_mismatch &
+                         read_meta_class_mismatch &
+                         read_meta_tag_mismatch &
+                         read_meta_class(to_integer(read_meta_rdptr)) &
+                         response_cdc_data_1x(64) &
+                         read_meta_tag(to_integer(read_meta_rdptr)) &
+                         response_cdc_data_1x(72 downto 65) &
+                         std_logic_vector(to_unsigned(read_meta_count, 5)) &
+                         "000";
+                   end if;
+                elsif (debug_response_status_reg(31) = '0') then
+                   debug_response_status_reg <=
+                      '1' & '1' & '0' & "000" &
+                      '0' & response_cdc_data_1x(64) &
+                      x"00" & response_cdc_data_1x(72 downto 65) &
+                      "00000" & "000";
+                end if;
+             end if;
+
+             if (read_meta_push = '1' and read_meta_pop = '0' and
+                 read_meta_count < 16) then
+                read_meta_count <= read_meta_count + 1;
+             elsif (read_meta_push = '0' and read_meta_pop = '1' and
+                    read_meta_count > 0) then
+                read_meta_count <= read_meta_count - 1;
+             end if;
          
-         else
-         
-            if (writefifo_rd_93 = '0' and writefifo_rd_1x = '1') then
+            if (write_cdc_busy_93 = '1') then
+               if (write_cdc_ack_sync_93 = write_cdc_req_93) then
+                  write_cdc_busy_93 <= '0';
+               end if;
+            elsif (writefifo_Empty = '0') then
+               write_cdc_data_93 <= writefifo_Dout;
+               write_cdc_req_93  <= not write_cdc_req_93;
+               write_cdc_busy_93 <= '1';
                writefifo_Rd <= '1';
             end if;
          
-            if (writefifo_wr = '1' and writefifo_Rd = '0') then
+            if (writefifo_wr_accept = '1' and writefifo_rd_accept = '0') then
                writefifo_cnt <= writefifo_cnt + 1;
             end if;
-            if (writefifo_Rd = '1' and writefifo_wr = '0') then
+            if (writefifo_rd_accept = '1' and writefifo_wr_accept = '0') then
                writefifo_cnt <= writefifo_cnt - 1;
             end if;
+
+            -- The data cache emits a dirty line as four consecutive beats
+            -- without a ready input. Capture the complete burst here before
+            -- allowing downstream FIFO pressure to affect the cache. This
+            -- queue is empty before a writeback starts and is exactly large
+            -- enough for one complete cache line.
+            if (datacache_wb_ena = '1' and
+                (datacache_wb_fifo_count < 4 or
+                 datacache_wb_fifo_pop = '1')) then
+               datacache_wb_fifo(to_integer(datacache_wb_fifo_wrptr)) <=
+                  std_logic_vector(datacache_wb_addr) & datacache_wb_data;
+               datacache_wb_fifo_wrptr <= datacache_wb_fifo_wrptr + 1;
+            end if;
+
+            if (datacache_wb_fifo_pop = '1') then
+               datacache_wb_fifo_rdptr <= datacache_wb_fifo_rdptr + 1;
+            end if;
+
+            if (datacache_wb_ena = '1' and datacache_wb_fifo_pop = '0') then
+               if (datacache_wb_fifo_count < 4) then
+                  datacache_wb_fifo_count <= datacache_wb_fifo_count + 1;
+               end if;
+            elsif (datacache_wb_ena = '0' and datacache_wb_fifo_pop = '1') then
+               datacache_wb_fifo_count <= datacache_wb_fifo_count - 1;
+            end if;
             
-            -- when stage 4 and stage 1 request at the same time, latch the stage 1 request and insert it into the fifo as soon as possible
-            if (datacache_wb_ena = '1' or mem4_request = '1' or datacache_request = '1') then
+            -- Cache refill requests are one-cycle pulses. Preserve them when
+            -- a higher-priority stage-4 transaction owns this FIFO cycle.
+            if (datacache_request = '1' and
+                (datacache_wb_busy = '1' or
+                 datacache_request_latched = '1' or
+                 mem1_request_latched = '1' or
+                 mem4_request = '1' or
+                 writefifo_schedule_ready = '0')) then
+               datacache_request_latched <= '1';
+               datacache_address_latched <=
+                  datacache_reqAddr(31 downto 5) & "00000";
+            end if;
+
+            if (datacache_wb_busy = '1' or
+                datacache_request_latched = '1' or
+                mem1_request_latched = '1' or
+                mem4_request = '1' or
+                datacache_request = '1' or
+                writefifo_schedule_ready = '0') then
                if (mem1_request = '1' or instrcache_request = '1') then
                   mem1_request_latched <= '1';
                   mem1_cache_latched   <= instrcache_request;
+                  if (instrcache_request = '1') then
+                     mem1_address_latched <=
+                        "000" & mem1_address(28 downto 5) & "00000";
+                  else
+                     mem1_address_latched <=
+                        "000" & mem1_address(28 downto 0);
+                  end if;
                end if;            
             end if;
 
-            -- only 1 action from stage 4 can be active at any time
-            if (datacache_wb_ena = '1') then
-               writefifo_wr                 <= '1';
-               writefifo_Din( 63 downto  0) <= datacache_wb_data;
-               writefifo_Din( 95 downto 64) <= std_logic_vector(datacache_wb_addr);
-               writefifo_Din(103 downto 96) <= x"FF";
-               writefifo_Din(104)           <= '1';
-               writefifo_Din(105)           <= '0';
-               writefifo_Din(106)           <= '1';
-               writefifo_Din(107)           <= '0';
-            elsif (mem4_request = '1' and mem4_rnw = '0') then
-               writefifo_wr                 <= '1';
+            -- A retained request is already backpressuring stage 4, so it must
+            -- run before the request that is being held by that backpressure.
+            if (writefifo_issue_pending = '1') then
+               if (writefifo_wr_accept = '1') then
+                  writefifo_issue_pending <= '0';
+                  writefifo_issue_wb      <= '0';
+               end if;
+            elsif (datacache_wb_fifo_count > 0) then
+               if (writefifo_schedule_ready = '1') then
+                  writefifo_issue_pending      <= '1';
+                  writefifo_issue_wb           <= '1';
+                  writefifo_Din( 63 downto  0) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr))(63 downto 0);
+                  writefifo_Din( 95 downto 64) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr))(95 downto 64);
+                  writefifo_Din(103 downto 96) <= x"FF";
+                  writefifo_Din(104)           <= '1';
+                   writefifo_Din(105)           <= '0';
+                   writefifo_Din(106)           <= '1';
+                   writefifo_Din(107)           <= '0';
+                   writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+               end if;
+            elsif (datacache_wb_ena = '1') then
+               -- Reserve this scheduler cycle while the first unacknowledged
+               -- writeback beat is captured into the staging queue.
+               null;
+             elsif (datacache_request_latched = '1') then
+                if (writefifo_schedule_ready = '1') then
+                   writefifo_issue_pending      <= '1';
+                   writefifo_issue_wb           <= '0';
+                   writefifo_Din( 95 downto 64) <= std_logic_vector(datacache_address_latched);
+                  writefifo_Din(104)           <= '1';
+                  writefifo_Din(105)           <= '1';
+                  writefifo_Din(106)           <= '1';
+                  writefifo_Din(107)           <= '1';
+                  writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+
+                  -- A cache cannot normally issue a second miss while its
+                  -- first is outstanding, but retaining a simultaneous pulse
+                  -- here makes that interface lossless as well.
+                  if (datacache_request = '1') then
+                     datacache_request_latched <= '1';
+                     datacache_address_latched <=
+                        datacache_reqAddr(31 downto 5) & "00000";
+                  else
+                     datacache_request_latched <= '0';
+                  end if;
+               end if;
+             elsif (mem1_request_latched = '1') then
+                if (writefifo_schedule_ready = '1') then
+                   writefifo_issue_pending      <= '1';
+                   writefifo_issue_wb           <= '0';
+                   writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address_latched);
+                  writefifo_Din(104)           <= '0';
+                  writefifo_Din(105)           <= '1';
+                  writefifo_Din(106)           <= mem1_cache_latched;
+                  writefifo_Din(107)           <= mem1_cache_latched;
+                  writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+
+                  if (mem1_request = '1' or instrcache_request = '1') then
+                     mem1_request_latched <= '1';
+                     mem1_cache_latched   <= instrcache_request;
+                     if (instrcache_request = '1') then
+                        mem1_address_latched <=
+                           "000" & mem1_address(28 downto 5) & "00000";
+                     else
+                        mem1_address_latched <=
+                           "000" & mem1_address(28 downto 0);
+                     end if;
+                  else
+                     mem1_request_latched <= '0';
+                  end if;
+               end if;
+             elsif (mem4_request = '1' and mem4_rnw = '0' and
+                    writefifo_mem4_ready = '1') then
+                writefifo_issue_pending      <= '1';
+                writefifo_issue_wb           <= '0';
                writefifo_Din( 63 downto  0) <= mem4_dataWrite;
                writefifo_Din( 95 downto 64) <= std_logic_vector(mem4_address);
                writefifo_Din(103 downto 96) <= mem4_writeMask;
                writefifo_Din(104)           <= '1';
-               writefifo_Din(105)           <= '0';
-               writefifo_Din(106)           <= mem4_req64;
-               writefifo_Din(107)           <= '0';
-            elsif (mem4_request = '1' or datacache_request = '1') then
-               writefifo_wr                 <= '1';
-               writefifo_Din( 95 downto 64) <= std_logic_vector(mem4_address);
+                writefifo_Din(105)           <= '0';
+                writefifo_Din(106)           <= mem4_req64;
+                writefifo_Din(107)           <= '0';
+                writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+             elsif (mem4_request = '1' and writefifo_mem4_ready = '1') then
+                writefifo_issue_pending      <= '1';
+                writefifo_issue_wb           <= '0';
+                writefifo_Din( 95 downto 64) <= std_logic_vector(mem4_address);
                writefifo_Din(104)           <= '1';
                writefifo_Din(105)           <= '1';
+               writefifo_Din(106)           <= mem4_req64;
+               writefifo_Din(107)           <= '0';
+               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+             elsif (datacache_request = '1' and
+                    writefifo_schedule_ready = '1') then
+                writefifo_issue_pending      <= '1';
+                writefifo_issue_wb           <= '0';
+                writefifo_Din( 95 downto 64) <=
+                  std_logic_vector(datacache_reqAddr(31 downto 5)) & "00000";
+               writefifo_Din(104)           <= '1';
+               writefifo_Din(105)           <= '1';
+<<<<<<< KI
+               writefifo_Din(106)           <= '1';
+               writefifo_Din(107)           <= '1';
+               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
+             elsif ((mem1_request = '1' or instrcache_request = '1') and
+                    writefifo_schedule_ready = '1') then
+                writefifo_issue_pending      <= '1';
+                writefifo_issue_wb           <= '0';
+                writefifo_Din( 95 downto 64) <=
+                  "000" & std_logic_vector(mem1_address(28 downto 0));
+=======
                writefifo_Din(106)           <= mem4_req64;
                writefifo_Din(107)           <= datacache_request;
                if (datacache_request = '1') then
@@ -811,11 +1920,18 @@ begin
             elsif (mem1_request = '1' or instrcache_request = '1') then
                writefifo_wr                 <= '1';
                writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical
+>>>>>>> OURS
                writefifo_Din(104)           <= '0';
                writefifo_Din(105)           <= '1';
-               writefifo_Din(106)           <= '0';
+               writefifo_Din(106)           <= instrcache_request;
                writefifo_Din(107)           <= instrcache_request;
+               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
                if (instrcache_request = '1') then
+<<<<<<< KI
+                  writefifo_Din( 95 downto 64) <=
+                     "000" & std_logic_vector(mem1_address(28 downto 5)) & "00000";
+               end if;
+=======
                   writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
                end if;  
             elsif (mem1_request_latched = '1') then
@@ -829,20 +1945,31 @@ begin
                if (mem1_cache_latched = '1') then
                   writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
                end if;  
+>>>>>>> OURS
             end if;
             
-            mem_finished_dataRead <= mem_dataRead;
-            mem_finished_instr    <= '0';
-            mem_finished_read     <= '0';
-            mem_done_1            <= mem_done;
-            if (mem_done = '1' and mem_done_1 = '0') then
-               if (memoryMuxStage4 = '1') then
-                  if (mem_rnw = '1') then
-                     mem_finished_read <= '1';
-                  end if;
+            -- The memory-domain source holds this mailbox payload until the
+            -- acknowledgement returns. Capture the raw word first, register
+            -- the load-aligned copy on the next cycle, and only then pulse the
+            -- appropriate completion. This keeps completion, transaction type
+            -- and data atomic across the clk1x-to-clk93 boundary.
+            if (response_cdc_deliver_93 = '1') then
+               if (response_cdc_class_93 = '1') then
+                  mem_finished_read <= '1';
                else
                   mem_finished_instr <= '1';
                end if;
+               response_cdc_ack_93     <= response_cdc_req_seen_93;
+               response_cdc_deliver_93 <= '0';
+            elsif (response_cdc_pending_93 = '1') then
+               mem_finished_dataRot    <= std_logic_vector(read4_uncachedData);
+               response_cdc_pending_93 <= '0';
+               response_cdc_deliver_93 <= '1';
+            elsif (response_cdc_req_sync_93 /= response_cdc_req_seen_93) then
+               mem_finished_dataRead    <= response_cdc_data_1x(63 downto 0);
+               response_cdc_class_93    <= response_cdc_data_1x(64);
+               response_cdc_req_seen_93 <= response_cdc_req_sync_93;
+               response_cdc_pending_93  <= '1';
             end if;
             
          end if;
@@ -853,7 +1980,7 @@ begin
    generic map
    (
       SIZE              => 8,
-      DATAWIDTH         => 108, -- 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache
+      DATAWIDTH         => 116, -- existing 108-bit transaction plus 8-bit read sequence tag
       NEARFULLDISTANCE  => 4
    )
    port map
@@ -862,54 +1989,145 @@ begin
       reset     => reset_93,  
       Din       => writefifo_Din,     
       Wr        => writefifo_wr,      
-      Full      => error_fifo,    
+      Full      => writefifo_Full,
       Dout      => writefifo_Dout,    
       Rd        => writefifo_Rd,      
       Empty     => writefifo_Empty
    );
+
+   -- Keep the established full indication and make the first ownership
+   -- failure sticky through the existing protocol-error output.
+   error_fifo <= writefifo_Full or debug_response_status_reg(31);
+
+   -- Pending is the producer-valid bit. The payload is loaded once and held
+   -- unchanged until the FIFO acknowledges it.
+   writefifo_wr <= writefifo_issue_pending;
+
+   writefifo_rd_accept <= writefifo_Rd and not writefifo_Empty;
+   writefifo_wr_accept <= writefifo_wr and
+                          (not writefifo_Full or writefifo_rd_accept);
+   writefifo_schedule_ready <= '1' when
+      (writefifo_issue_pending = '0' and
+       (writefifo_Full = '0' or writefifo_rd_accept = '1')) else '0';
+
+   datacache_wb_fifo_pop <= writefifo_wr_accept and
+                            writefifo_issue_pending and
+                            writefifo_issue_wb;
+   datacache_wb_busy <= '1' when
+      (datacache_wb_fifo_count > 0 or
+       (writefifo_issue_pending = '1' and writefifo_issue_wb = '1') or
+       datacache_wb_ena = '1') else '0';
+
+   -- synthesis translate_off
+   assert not (datacache_wb_ena = '1' and
+               datacache_wb_fifo_count = 4 and
+               datacache_wb_fifo_pop = '0')
+      report "datacache writeback staging overflow"
+      severity failure;
+
+   process(clk93)
+      variable held_valid : boolean := false;
+      variable held_data  : std_logic_vector(115 downto 0) := (others => '0');
+   begin
+      if rising_edge(clk93) then
+         if reset_93 = '1' then
+            held_valid := false;
+         elsif writefifo_issue_pending = '1' and
+               writefifo_wr_accept = '0' then
+            if held_valid then
+               assert writefifo_Din = held_data
+                  report "write FIFO request changed while backpressured"
+                  severity failure;
+            end if;
+            held_data := writefifo_Din;
+            held_valid := true;
+         else
+            held_valid := false;
+         end if;
+      end if;
+   end process;
+   -- synthesis translate_on
    
-   writefifo_block <= '1' when (writefifo_cnt >= 4 or (writefifo_cnt = 3 and writefifo_wr = '1')) else '0';
+    writefifo_block <= '1' when
+      (writefifo_issue_pending = '1' or
+       writefifo_cnt >= 4 or
+       (writefifo_cnt = 3 and writefifo_wr = '1') or
+       datacache_wb_busy = '1' or
+       datacache_request_latched = '1' or
+       mem1_request_latched = '1') else '0';
+
+   -- Stage 4 uses a real ready/valid handshake. Higher-priority writebacks
+   -- and retained refills must finish before its request may enter the FIFO.
+   writefifo_mem4_ready <= '1' when
+      (writefifo_block = '0' and datacache_wb_busy = '0' and
+       datacache_request_latched = '0' and
+       mem1_request_latched = '0' and
+       writefifo_schedule_ready = '1') else '0';
    
    process (clk1x)
    begin
       if (rising_edge(clk1x)) then
       
-         writefifo_rd_1x <= '0';
-         mem_request     <= '0';
+         write_cdc_req_meta_1x <= write_cdc_req_93;
+         write_cdc_req_sync_1x <= write_cdc_req_meta_1x;
+         response_cdc_ack_meta_1x <= response_cdc_ack_93;
+         response_cdc_ack_sync_1x <= response_cdc_ack_meta_1x;
+         mem_request           <= '0';
       
          if (reset_1x = '1') then
          
             memoryMuxStage4       <= '0'; 
             memstate              <= MEMSTATE_IDLE;
+            write_cdc_req_meta_1x <= '0';
+            write_cdc_req_sync_1x <= '0';
+            write_cdc_req_seen_1x <= '0';
+            write_cdc_ack_1x      <= '0';
+            response_cdc_data_1x     <= (others => '0');
+            response_cdc_req_1x      <= '0';
+             response_cdc_busy_1x     <= '0';
+             response_cdc_ack_meta_1x <= '0';
+             response_cdc_ack_sync_1x <= '0';
+             memory_read_tag_1x       <= (others => '0');
+             memory_read_address_1x   <= (others => '0');
          
          else
-            
+
+            if (response_cdc_busy_1x = '1' and
+                response_cdc_ack_sync_1x = response_cdc_req_1x) then
+               response_cdc_busy_1x <= '0';
+            end if;
+
             case (memstate) is
                when MEMSTATE_IDLE => 
-               
-                  if (ce_1x = '1') then
+
+                  if (ce_1x = '1' and response_cdc_busy_1x = '0') then
                   
-                     if (writefifo_Empty = '0') then
-                     
-                        writefifo_rd_1x   <= '1';
+                     if (write_cdc_req_sync_1x /= write_cdc_req_seen_1x) then
+
+                        write_cdc_req_seen_1x <= write_cdc_req_sync_1x;
+                        write_cdc_ack_1x      <= write_cdc_req_sync_1x;
                         memstate          <= MEMSTATE_BUSY;
                         mem_request       <= '1';
                         memoryMuxStage4   <= '1';
-                        mem_dataWrite     <= writefifo_Dout(63 downto 0);
-                        mem_address       <= unsigned(writefifo_Dout(95 downto 64));
-                        mem_writeMask     <= writefifo_Dout(103 downto 96);
-                        memoryMuxStage4   <= writefifo_Dout(104);
-                        mem_rnw           <= writefifo_Dout(105);
-                        mem_req64         <= writefifo_Dout(106);
+                        mem_dataWrite     <= write_cdc_data_93(63 downto 0);
+                        mem_address       <= unsigned(write_cdc_data_93(95 downto 64));
+                        mem_writeMask     <= write_cdc_data_93(103 downto 96);
+                        memoryMuxStage4   <= write_cdc_data_93(104);
+                        mem_rnw           <= write_cdc_data_93(105);
+                        mem_req64         <= write_cdc_data_93(106);
+                        memory_read_tag_1x <= write_cdc_data_93(115 downto 108);
+                        memory_read_address_1x <= write_cdc_data_93(95 downto 64);
                         
                         mem_size          <= "001";
                         
-                        if (writefifo_Dout(104) = '1' and writefifo_Dout(107) = '1') then
-                           mem_size          <= "010";
+                        if (write_cdc_data_93(104) = '1' and write_cdc_data_93(107) = '1') then
+                           -- The KI data cache fills a 32-byte line as four
+                           -- 64-bit DDR words (see cpu_datacache.vhd).
+                           mem_size          <= "100";
                            datacache_active  <= '1';
                         end if;
                         
-                        if (writefifo_Dout(104) = '0' and writefifo_Dout(107) = '1') then
+                        if (write_cdc_data_93(104) = '0' and write_cdc_data_93(107) = '1') then
                            mem_size          <= "100";
                            instrcache_active  <= '1';
                         end if;
@@ -919,7 +2137,23 @@ begin
                   end if;
                   
                when MEMSTATE_BUSY =>
+                  -- The FILL DATA the instruction cache is handed for that
+                  -- line - the last link before the opcode reaches decode.
+                  -- Captured in clk1x, the domain the bridge returns beats in
+                  -- (cpu_instrcache's fill path was rewritten to consume them
+                  -- here), so the first beat is unambiguous. Sampling a clk1x
+                  -- ready pulse from clk93 would land on beat 0 or beat 1
+                  -- depending on phase, and a probe that reports a different
+                  -- word run to run is worse than none.
+                  --
                   if (mem_done = '1') then
+                      if (mem_rnw = '1') then
+                         response_cdc_data_1x <=
+                            memory_read_address_1x & memory_read_tag_1x &
+                            memoryMuxStage4 & mem_dataRead;
+                        response_cdc_req_1x  <= not response_cdc_req_1x;
+                        response_cdc_busy_1x <= '1';
+                     end if;
                      memstate          <= MEMSTATE_IDLE;
                      if (memoryMuxStage4 = '1') then
                         datacache_active <= '0';
@@ -1079,11 +2313,16 @@ begin
    cache_commandEnableI <= executeICacheEnable when (stall = 0) else '0';
    
    icpu_instrcache : entity work.cpu_instrcache
+   generic map
+   (
+      LITTLE_ENDIAN => LITTLE_ENDIAN
+   )
    port map
    (
       clk1x             => clk1x,
       clk93             => clk93,
       clk2x             => clk2x,
+      reset_1x          => reset_1x,
       reset_93          => reset_93,
       ce_93             => ce_93,
       
@@ -1095,8 +2334,8 @@ begin
       ddr3_DOUT_READY   => ddr3_DOUT_READY,
       
       read_select       => FetchAddrSelect,
-      read_addr1        => FetchAddr1(31 downto 0),
-      read_addr2        => FetchAddr2(31 downto 0),
+      read_index1       => FetchIndex1,
+      read_index2       => FetchIndex2,
       read_addrCompare1 => FetchAddrTLBMuxed1,
       read_addrCompare2 => FetchAddrTLBMuxed2,
       read_hit          => instrcache_hit,
@@ -1117,24 +2356,50 @@ begin
       SS_reset          => SS_reset
    );
    
+<<<<<<< KI
+   fetchCache1 <= '0' when (INSTRCACHEON = '0') else
+                  TLB_instrUseCache when (TLB_instrMapped1 = '1') else
+                  '1' when (FetchAddr1(31 downto 29) = "100") else  -- todo: only in kernelmode and only in 32bit mode
+                  '0';
+
+   fetchCache2 <= '0' when (INSTRCACHEON = '0') else
+                  TLB_instrUseCache when (TLB_instrMapped2 = '1') else
+                  '1' when (FetchAddr2(31 downto 29) = "100") else  -- todo: only in kernelmode and only in 32bit mode
+                  '0';
+
+   fetchCache <= fetchCache2 when (FetchAddrSelect = '1') else fetchCache1;
+=======
    kseg0_cached   <= '0' when (config_K0 = 2) else '1';   -- SGI
 
    fetchCache     <= '0' when (INSTRCACHEON = '0') else
                      TLB_instrUseCache when (TLB_instrMapped = '1') else
                      kseg0_cached when (FetchAddr1(31 downto 29) = "100") else  -- SGI: was '1'. todo: only in kernelmode and only in 32bit mode
                      '0';
+>>>>>>> OURS
    
    FetchAddr <= FetchAddr2 when (FetchAddrSelect = '1') else FetchAddr1;
    
-   FetchAddrTLBMuxed1 <= TLB_instrAddrOutFound when (TLB_instrMapped = '1') else FetchAddr1(31 downto 0);
-   FetchAddrTLBMuxed2 <= TLB_instrAddrOutFound when (TLB_instrMapped = '1') else FetchAddr2(31 downto 0);
+   FetchAddrTLBMuxed1 <= TLB_instrAddrOutFound when (TLB_instrMapped1 = '1') else FetchAddr1(31 downto 0);
+   FetchAddrTLBMuxed2 <= TLB_instrAddrOutFound when (TLB_instrMapped2 = '1') else FetchAddr2(31 downto 0);
 
    -- running from 64 bit sections currently not fully supported to not screw up FPGA route timing
-   TLB_instrMapped <= '1' when (bit64region = '1' and FetchAddr(63 downto 60) < 8) else
-                      '1' when (bit64region = '0' and privilegeMode = "00" and (FetchAddr(31 downto 29) < 4 or FetchAddr(31 downto 29) = 6 or FetchAddr(31 downto 29) = 7)) else
-                      '1' when (bit64region = '0' and privilegeMode = "01" and (FetchAddr(31 downto 29) < 4 or FetchAddr(31 downto 29) = 6)) else
-                      '1' when (bit64region = '0' and privilegeMode = "10" and (FetchAddr(31 downto 29) < 4)) else
-                      '0';
+   -- kusegUnmapped is Status.ERL: while it is set, region < 4 is unmapped and the
+   -- TLB must not be consulted for it. See the note in cpu_cop0.vhd.
+   TLB_instrMapped1 <= '0' when INSTR_KSEG_ONLY else
+                       '1' when (region64 = '1' and FetchAddr1(63 downto 60) < 8 and kusegUnmapped = '0') else
+                       '1' when (region64 = '0' and privilegeMode = "00" and ((FetchAddr1(31 downto 29) < 4 and kusegUnmapped = '0') or FetchAddr1(31 downto 29) = 6 or FetchAddr1(31 downto 29) = 7)) else
+                       '1' when (region64 = '0' and privilegeMode = "01" and ((FetchAddr1(31 downto 29) < 4 and kusegUnmapped = '0') or FetchAddr1(31 downto 29) = 6)) else
+                       '1' when (region64 = '0' and privilegeMode = "10" and (FetchAddr1(31 downto 29) < 4 and kusegUnmapped = '0')) else
+                       '0';
+
+   TLB_instrMapped2 <= '0' when INSTR_KSEG_ONLY else
+                       '1' when (region64 = '1' and FetchAddr2(63 downto 60) < 8 and kusegUnmapped = '0') else
+                       '1' when (region64 = '0' and privilegeMode = "00" and ((FetchAddr2(31 downto 29) < 4 and kusegUnmapped = '0') or FetchAddr2(31 downto 29) = 6 or FetchAddr2(31 downto 29) = 7)) else
+                       '1' when (region64 = '0' and privilegeMode = "01" and ((FetchAddr2(31 downto 29) < 4 and kusegUnmapped = '0') or FetchAddr2(31 downto 29) = 6)) else
+                       '1' when (region64 = '0' and privilegeMode = "10" and (FetchAddr2(31 downto 29) < 4 and kusegUnmapped = '0')) else
+                       '0';
+
+   TLB_instrMapped <= TLB_instrMapped2 when (FetchAddrSelect = '1') else TLB_instrMapped1;
                       
    TLB_instrReq <= '1' when (TLB_instrMapped = '1' and (stall = 0 or TLB_ss_load = '1')) else '0';
    
@@ -1147,7 +2412,8 @@ begin
          TLB_ss_load     <= '0';
          
          if (reset_93 = '1') then
-                     
+
+            PCold0         <= (others => '0');
             mem1_request   <= not TLB_instrMapped;
             TLB_ss_load    <= TLB_instrMapped;
             -- SGI: mem1_address carries a PHYSICAL address now that the write
@@ -1177,7 +2443,11 @@ begin
                fetchReady <= '0';
             end if;
             
-            cacheHitLast <= instrcache_hit;
+            if (INSTRCACHEON = '1') then
+               cacheHitLast <= instrcache_hit;
+            else
+               cacheHitLast <= '0';
+            end if;
             if (useCached_data = '1' and cacheHitLast = '1' and stall(4 downto 1) > 0 and stall1 = '0') then
                useCached_data <= '0';
                opcode0        <= unsigned(instrcache_data);
@@ -1191,7 +2461,7 @@ begin
                   opcode0        <= unsigned(instrcache_data);
                elsif (mem_finished_instr = '1' and useCached_data = '0') then
                   stall1         <= '0';
-                  opcode0        <= unsigned(byteswap32(mem_finished_dataRead(31 downto 0)));
+                  opcode0        <= bus_to_cpu32(mem_finished_dataRead(31 downto 0));
                end if;
                
                if (TLB_instrUnStall = '1') then
@@ -1200,10 +2470,16 @@ begin
                      opcode0        <= (others => '0');
                      useCached_data <= '0';
                   else
+<<<<<<< KI
+                     mem1_address    <= TLB_instrAddrOutLookup;
+                     useCached_data  <= TLB_instrUseCache and INSTRCACHEON;
+                     if (TLB_instrUseCache = '1' and INSTRCACHEON = '1') then
+=======
                      mem1_address     <= TLB_instrAddrOutLookup;
                      mem1_addrCompare <= TLB_instrAddrOutLookup;   -- SGI
                      useCached_data   <= TLB_instrUseCache;
                      if (TLB_instrUseCache = '1') then
+>>>>>>> OURS
                         instrcache_fill <= '1';
                      else
                         mem1_request    <= '1';
@@ -1215,6 +2491,9 @@ begin
             
                PCold0             <= FetchAddr;
                PC                 <= FetchAddr;
+               -- Tag the address with the mux arm that produced it, in the
+               -- same statement that latches it, so the pair cannot drift.
+               src0               <= fetch_src;
                useCached_data     <= fetchCache;
                fetchReady         <= '1';
                
@@ -1306,26 +2585,37 @@ begin
          
             stall2           <= '0';
             decodeNew        <= '0';
+            decodeNewPulse   <= '0';
+            src1             <= (others => '0');
+            -- Cleared for the same reason as pcOld0 in stage 1: a stale pc or
+            -- opcode surviving a reset is indistinguishable from a real decode
+            -- to anything watching this stage.
+            pcOld1           <= (others => '0');
+            opcode1          <= (others => '0');
             decode_irq       <= '0';
             decodeBranchType <= BRANCH_OFF;
-            
+
          elsif (ce_93 = '1') then
-         
+
+            decodeNewPulse <= '0';
+
             if (stall = 0) then
-            
+
                decodeNew <= '0';
-            
+
                if (exception = '1') then
-               
+
                   decode_irq <= '0';
-               
+
                elsif (fetchReady = '1') then
-               
-                  decodeNew        <= '1'; 
-               
+
+                  decodeNew        <= '1';
+                  decodeNewPulse   <= '1';
+
                   pcOld1           <= pcOld0;
                   opcode1          <= opcodeCacheMuxed;
-                                    
+                  src1             <= src0;
+
                   decodeImmData    <= decImmData;   
                   decodeJumpTarget <= decJumpTarget;
                   decodeSource1    <= decSource1;
@@ -2051,6 +3341,19 @@ begin
                         -- writeback of it has nothing to write back - but only
                         -- if the op stops at decode.
                         case (to_integer(decSource2)) is
+<<<<<<< KI
+                           when 16#00# | 16#08# | 16#10# => decodeCacheTLBTranslate <= '0';
+                           when others => null;
+                        end case;
+                        
+                        case (to_integer(decSource2)) is
+                           -- KI's R4600 boot ROM uses Fill I-cache (0x14). The
+                           -- uncached bring-up path treats it as a legal hint;
+                           -- explicit cache-fill handshaking is added with the
+                           -- cached execution milestone.
+                           when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# | 16#0D# | 16#10# | 16#11# | 16#14# | 16#15# | 16#19# => null;
+                           when others => error_instr <= '1';
+=======
                            when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# |
                                 16#0D# | 16#10# | 16#11# | 16#15# | 16#19# =>
                               decodeCacheEnable       <= '1';
@@ -2071,6 +3374,7 @@ begin
                               end case;
                            when others =>
                               error_instr <= '1';
+>>>>>>> OURS
                         end case;
 
                      when 16#30# => -- LL
@@ -2318,11 +3622,110 @@ begin
                  PCnext;
 
    FetchAddr2 <= PCnextBranch;
-   
+
+   -- Same arms, same priority, as FetchAddr1 above, with value1's forwarding
+   -- mux folded in so the RAM index is one mux from its sources. The jump
+   -- immediate arm reduces to decodeJumpTarget(11 downto 0): FetchAddr1(1
+   -- downto 0) is "00" and (27 downto 2) is decodeJumpTarget, so (13 downto 2)
+   -- is exactly its low twelve bits. Keep this in step with FetchAddr1 - they
+   -- must agree bit for bit.
+   FetchIndex1 <= exceptionPC(13 downto 2)      when (exception = '1' or exceptionStage1 = '1') else
+                  PCnext(13 downto 2)           when (executeIgnoreNext = '1' or decodeNew = '0') else
+                  resultData(13 downto 2)       when (decodeBranchType = BRANCH_ALWAYS_REG and
+                                                      executeForwardValue1 = '1' and resultWriteEnable = '1') else
+                  writebackData(13 downto 2)    when (decodeBranchType = BRANCH_ALWAYS_REG and
+                                                      writebackForwardValue1 = '1') else
+                  decodeValue1(13 downto 2)     when (decodeBranchType = BRANCH_ALWAYS_REG) else
+                  decodeJumpTarget(11 downto 0) when (decodeBranchType = BRANCH_JUMPIMM) else
+                  eretPC(13 downto 2)           when (decodeBranchType = BRANCH_ERET) else
+                  PCnext(13 downto 2);
+
+   FetchIndex2 <= PCnextBranch(13 downto 2);
+
+-- synthesis translate_off
+   -- The two must never disagree; a mismatch would index a different cache line
+   -- than the tag compare is checking.
+   process (clk93)
+   begin
+      if (rising_edge(clk93)) then
+         assert FetchIndex1 = FetchAddr1(13 downto 2)
+            report "FetchIndex1 drifted from FetchAddr1(13 downto 2)" severity failure;
+         assert FetchIndex2 = FetchAddr2(13 downto 2)
+            report "FetchIndex2 drifted from FetchAddr2(13 downto 2)" severity failure;
+      end if;
+   end process;
+-- synthesis translate_on
+
+   -- WHICH ARM OF THE MUX ABOVE PRODUCED THIS FETCH ADDRESS.
+   --
+   -- This is the field the whole FMV investigation has been missing. Both games
+   -- leave a non-control-transfer instruction in RAM and land on 0xBFC00004,
+   -- and only three of these arms can produce that address at all:
+   --
+   --   5 REG    a jr/jalr whose register held BFC00004
+   --   7 ERET   an eret with EPC = BFC00004
+   --   0 SEQ    PC was already BFC00000 and simply advanced
+   --
+   -- while 1 EXC would mean COP0 produced a vector it has no code to produce,
+   -- and 4 BRA or 6 JMP cannot reach BFC00004 from a 0x88xxxxxx pc - a taken
+   -- branch is limited to a signed 16-bit word offset and a jump immediate
+   -- inherits the top nibble of the delay slot's pc. So whichever tag appears
+   -- beside the landing entry either names the mechanism or convicts the mux.
+   --
+   -- Deliberately written in the SAME priority order as FetchAddrSelect and
+   -- FetchAddr1 above, and placed next to them, so the two cannot drift apart
+   -- unnoticed.
+   fetch_src <= x"4" when (FetchAddrSelect = '1')                                else -- taken branch
+                x"1" when (exception = '1' or exceptionStage1 = '1')             else -- exception vector
+                x"2" when (executeIgnoreNext = '1')                              else -- annulled slot -> PCnext
+                x"3" when (decodeNew = '0')                                      else -- no decode -> PCnext
+                x"5" when (decodeBranchType = BRANCH_ALWAYS_REG)                 else -- jr / jalr
+                x"6" when (decodeBranchType = BRANCH_JUMPIMM)                    else -- j / jal
+                x"7" when (decodeBranchType = BRANCH_ERET)                       else -- eret
+                x"0";                                                                 -- sequential PCnext
+
    EXECOPBranchDelaySlot <= '0' when (executeIgnoreNext = '1') else
                             '1' when (decodeBranchType /= BRANCH_OFF) else 
                             '0';
 
+   -- DELAY SLOTS DO NOT CHAIN.
+   --
+   -- This flag means "the instruction after the one now in decode is a delay
+   -- slot", and it feeds cop0's isDelaySlot, which is the ONLY consumer - it
+   -- decides Cause.BD and whether EPC is backed up by four. It has no effect on
+   -- how branches actually execute.
+   --
+   -- When a branch sits in another branch's delay slot, the second branch also
+   -- raised this flag, so the FIRST branch's TARGET was marked as a delay slot
+   -- too. An interrupt arriving at that target then recorded
+   -- EPC = target - 4, an address that is not a delay slot of anything in the
+   -- real control flow. eret resumed there, executed whatever instruction
+   -- happens to precede the target, and fell THROUGH into the target instead of
+   -- entering it via the branch.
+   --
+   -- That is the KI FMV restart. The decompressor uses the "jump either way"
+   -- idiom - KI1 880322D4/880322D8, KI2 8802F074/8802F078, a bnez with a beqz
+   -- to the same target in its delay slot - and both games recorded
+   -- EPC = target - 4 on hardware. cpu_cop0.vhd carries the donor author's own
+   -- note that this case was never tested.
+   --
+   -- A branch in a delay slot is architecturally undefined on MIPS, so there is
+   -- no "correct" answer to copy; what matters is that the exception state
+   -- stays self-consistent, with EPC pointing at a real instruction.
+   --
+   -- NOT FIXED HERE YET. The obvious one-liner - suppressing this flag while
+   -- executeBranchdelaySlot is already set - is WRONG. That signal is
+   -- registered under `if (stall = 0)` and therefore HOLDS across a stall, so
+   -- the suppression also swallows the flag for an unrelated branch decoded
+   -- after a stall. Tried in simulation: legitimate delay slots stopped being
+   -- marked, EPC stopped being backed up, and the test program escaped its own
+   -- loop - 64 bad EPCs instead of 2.
+   --
+   -- What this needs is a DECODE-ALIGNED "the instruction now in decode is
+   -- itself a delay slot" signal, advanced only when the decode advances,
+   -- rather than reusing the execute-stage flag.
+   --
+   -- sim/tb_ki_cpu_delayslot_irq.sv reproduces the defect and stays red.
    EXEBranchdelaySlot <= '0' when (executeIgnoreNext = '1') else
                          '1' when (decodeBranchType = BRANCH_ALWAYS_REG) else
                          '1' when (decodeBranchType = BRANCH_JUMPIMM) else
@@ -2394,8 +3797,8 @@ begin
                       '1' when (decodeExcType = EXCTYPE_ADDRW   and calcMemAddr(1 downto 0) > 0) else
                       '1' when (decodeExcType = EXCTYPE_ADDRD   and calcMemAddr(2 downto 0) > 0) else
                       -- 2 below should use calcMemAddr to allow inter cycle wraparound, but we can't do that due to timing closure
-                      '1' when (bit64region = '0' and value1(63 downto 32) = x"FFFFFFFF" and value1(31) = '0') else 
-                      '1' when (bit64region = '0' and value1(63 downto 32) = x"00000000" and value1(31) = '1') else
+                      '1' when (region64 = '0' and value1(63 downto 32) = x"FFFFFFFF" and value1(31) = '0') else 
+                      '1' when (region64 = '0' and value1(63 downto 32) = x"00000000" and value1(31) = '1') else
                       '1' when (region_unused = '1') else
                       '0';
    
@@ -2409,18 +3812,21 @@ begin
                      '1' when (decodeExcType = EXCTYPE_DADDI   and (((calcResult_add(63) xor value1(63)) and (calcResult_add(63) xor decodeImmData(15))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_SUB     and (((calcResult_sub(31) xor value1(31)) and (value1(31) xor value2(31))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_DSUB    and (((calcResult_sub(63) xor value1(63)) and (value1(63) xor value2(63))) = '1')) else
-                     '1' when (decodeExcType = EXCTYPE_TRAPU0  and calcResult_lesserUnsigned = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPU1  and calcResult_lesserUnsigned = '1') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPS0  and calcResult_lesserSigned = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPS1  and calcResult_lesserSigned = '1') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPE0  and cmpEqual = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPE1  and cmpEqual = '1') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIU0 and calcResult_lesserIMMUnsigned   = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIU1 and calcResult_lesserIMMUnsigned   = '1') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIS0 and calcResult_lesserIMMSigned     = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIS1 and calcResult_lesserIMMSigned     = '1') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIE0 and calcResult_equal               = '0') else
-                     '1' when (decodeExcType = EXCTYPE_TRAPIE1 and calcResult_equal               = '1') else
+                     -- See NO_TRAP_INSTR. When set, none of the twelve trap
+                     -- terms below is built, and the 64-bit comparator stops
+                     -- feeding the exception path.
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPU0  and calcResult_lesserUnsigned = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPU1  and calcResult_lesserUnsigned = '1') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPS0  and calcResult_lesserSigned = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPS1  and calcResult_lesserSigned = '1') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPE0  and cmpEqual = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPE1  and cmpEqual = '1') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIU0 and calcResult_lesserIMMUnsigned = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIU1 and calcResult_lesserIMMUnsigned = '1') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIS0 and calcResult_lesserIMMSigned = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIS1 and calcResult_lesserIMMSigned = '1') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIE0 and calcResult_equal = '0') else
+                     '1' when ((not NO_TRAP_INSTR) and decodeExcType = EXCTYPE_TRAPIE1 and calcResult_equal = '1') else
                      '0';
     
    exceptionNewPC <= '1' when (decodeExcType = EXCTYPE_PC and value1(1 downto 0) > 0) else '0';
@@ -2435,7 +3841,11 @@ begin
    -- region check
    -- we optimize the 64bit region to use only the base address for timing purposes. 
    -- If base+immidiate switches the region-> bad luck
+<<<<<<< KI
+   process (value1, calcMemAddr, privilegeMode, region64, kusegUnmapped)
+=======
    process (value1, calcMemAddr, privilegeMode, bit64region, kseg0_cached)   -- SGI: kseg0_cached
+>>>>>>> OURS
    begin
    
       region_TLBmapped <= '0';
@@ -2443,7 +3853,7 @@ begin
       region_full32    <= '0';
       region_unused    <= '0';
    
-      if (bit64region = '1') then
+      if (region64 = '1') then
          if (privilegeMode = "00") then
             if    (value1 <= x"000000ffffffffff") then region_TLBmapped <= '1';                   
             elsif (value1 <= x"3fffffffffffffff") then region_unused <= '1';                      
@@ -2484,19 +3894,28 @@ begin
             if (value1 <= x"FFFFFFFFFF") then region_TLBmapped <= '1'; end if;
          end if;
       else
+         -- kusegUnmapped is Status.ERL. See the note in cpu_cop0.vhd: while it is
+         -- set, region < 4 is unmapped and must not go to the TLB.
          if (privilegeMode = "00") then
+<<<<<<< KI
+            if ((calcMemAddr(31 downto 29) < 4 and kusegUnmapped = '0') or calcMemAddr(31 downto 29) = 6 or calcMemAddr(31 downto 29) = 7) then region_TLBmapped <= '1'; end if;
+            if (calcMemAddr(31 downto 29) = 4) then region_cached <= '1'; end if;
+=======
             if (calcMemAddr(31 downto 29) < 4 or calcMemAddr(31 downto 29) = 6 or calcMemAddr(31 downto 29) = 7) then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) = 4) then region_cached <= kseg0_cached; end if;  -- SGI: was '1'
+>>>>>>> OURS
          elsif (privilegeMode = "01") then
-            if (calcMemAddr(31 downto 29) < 4 or calcMemAddr(31 downto 29) = 6) then region_TLBmapped <= '1'; end if;
+            if ((calcMemAddr(31 downto 29) < 4 and kusegUnmapped = '0') or calcMemAddr(31 downto 29) = 6) then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) = 4 or calcMemAddr(31 downto 29) = 5 or calcMemAddr(31 downto 29) = 7) then region_unused <= '1'; end if;
          elsif (privilegeMode = "10") then
-            if (calcMemAddr(31 downto 29) < 4) then region_TLBmapped <= '1'; end if;
+            if (calcMemAddr(31 downto 29) < 4 and kusegUnmapped = '0') then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) > 3 and calcMemAddr(31 downto 29) < 8) then region_unused <= '1'; end if;
          end if;
       end if;
    end process;
    
+   region64     <= '0' when ADDR32_ONLY else bit64region;
+
    EXETLBMapped <= region_TLBmapped;
    
    EXETLBDataAccess <= decodeMemReadEnable or decodeMemWriteEnable or decodeCacheTLBTranslate or decodeMemWriteLL when (EXETLBMapped = '1' and exception = '0' and stall = 0 and executeIgnoreNext = '0' and decodeNew = '1') else '0';
@@ -2525,28 +3944,32 @@ begin
    
    process (all)
       variable rotatedData          : unsigned(63 downto 0) := (others => '0');
+      variable storeHalf            : unsigned(15 downto 0) := (others => '0');
    begin
    
-      rotatedData             := byteswap32(value2(63 downto 32)) & byteswap32(value2(31 downto 0));
+      rotatedData             := cpu_to_bus64(value2);
+      storeHalf               := cpu_to_bus16(value2(15 downto 0));
       EXEMemWriteData         <= rotatedData;
       EXEMemWriteMask         <= "00000000";
       
       case (decodeMemWriteType) is
       
          when MEMWRITETYPE_BYTE =>
+            EXEMemWriteData <= x"00000000" & value2(7 downto 0) & value2(7 downto 0) &
+                               value2(7 downto 0) & value2(7 downto 0);
             case (to_integer(calcMemAddr(1 downto 0))) is 
-               when 0 => EXEMemWriteMask(3 downto 0) <= "0001"; EXEMemWriteData <= x"00000000" & x"000000" & rotatedData(31 downto 24); 
-               when 1 => EXEMemWriteMask(3 downto 0) <= "0010"; EXEMemWriteData <= x"00000000" & x"0000" &   rotatedData(31 downto 16);   
-               when 2 => EXEMemWriteMask(3 downto 0) <= "0100"; EXEMemWriteData <= x"00000000" & x"00" &     rotatedData(31 downto 8);   
-               when 3 => EXEMemWriteMask(3 downto 0) <= "1000"; EXEMemWriteData <= x"00000000" &             rotatedData(31 downto 0);   
+               when 0 => EXEMemWriteMask(3 downto 0) <= "0001";
+               when 1 => EXEMemWriteMask(3 downto 0) <= "0010";
+               when 2 => EXEMemWriteMask(3 downto 0) <= "0100";
+               when 3 => EXEMemWriteMask(3 downto 0) <= "1000";
                when others => null;
             end case;
 
          when MEMWRITETYPE_HALF =>
+            EXEMemWriteData <= x"00000000" & storeHalf & storeHalf;
             if (calcMemAddr(1) = '1') then
                EXEMemWriteMask(3 downto 0) <= "1100";
             else
-               EXEMemWriteData <= x"00000000" & x"0000" & rotatedData(31 downto 16);
                EXEMemWriteMask(3 downto 0) <= "0011";
             end if;
                
@@ -2554,63 +3977,111 @@ begin
             EXEMemWriteMask(3 downto 0) <= "1111";
                
          when MEMWRITETYPE_SWL =>
-            case (to_integer(calcMemAddr(1 downto 0))) is 
-               when 0 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" & rotatedData(31 downto 0);
-               when 1 => EXEMemWriteMask(3 downto 0) <= "1110"; EXEMemWriteData <= x"00000000" & rotatedData(23 downto 0) & x"00";
-               when 2 => EXEMemWriteMask(3 downto 0) <= "1100"; EXEMemWriteData <= x"00000000" & rotatedData(15 downto 0) & x"0000";
-               when 3 => EXEMemWriteMask(3 downto 0) <= "1000"; EXEMemWriteData <= x"00000000" & rotatedData( 7 downto 0) & x"000000";
-               when others => null;
-            end case;  
+            if LITTLE_ENDIAN then
+               case (to_integer(calcMemAddr(1 downto 0))) is
+                  when 0 => EXEMemWriteMask(3 downto 0) <= "0001"; EXEMemWriteData <= x"00000000" & x"000000" & rotatedData(31 downto 24);
+                  when 1 => EXEMemWriteMask(3 downto 0) <= "0011"; EXEMemWriteData <= x"00000000" & x"0000" & rotatedData(31 downto 16);
+                  when 2 => EXEMemWriteMask(3 downto 0) <= "0111"; EXEMemWriteData <= x"00000000" & x"00" & rotatedData(31 downto 8);
+                  when 3 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" & rotatedData(31 downto 0);
+                  when others => null;
+               end case;
+            else
+               case (to_integer(calcMemAddr(1 downto 0))) is
+                  when 0 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" & rotatedData(31 downto 0);
+                  when 1 => EXEMemWriteMask(3 downto 0) <= "1110"; EXEMemWriteData <= x"00000000" & rotatedData(23 downto 0) & x"00";
+                  when 2 => EXEMemWriteMask(3 downto 0) <= "1100"; EXEMemWriteData <= x"00000000" & rotatedData(15 downto 0) & x"0000";
+                  when 3 => EXEMemWriteMask(3 downto 0) <= "1000"; EXEMemWriteData <= x"00000000" & rotatedData(7 downto 0) & x"000000";
+                  when others => null;
+               end case;
+            end if;
             
          when MEMWRITETYPE_SWR =>
-            case (to_integer(calcMemAddr(1 downto 0))) is 
-               when 0 => EXEMemWriteMask(3 downto 0) <= "0001"; EXEMemWriteData <= x"00000000" & x"000000" & rotatedData(31 downto 24);
-               when 1 => EXEMemWriteMask(3 downto 0) <= "0011"; EXEMemWriteData <= x"00000000" & x"0000" &   rotatedData(31 downto 16);
-               when 2 => EXEMemWriteMask(3 downto 0) <= "0111"; EXEMemWriteData <= x"00000000" & x"00" &     rotatedData(31 downto  8);
-               when 3 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" &             rotatedData(31 downto  0);
-               when others => null;
-            end case;  
+            if LITTLE_ENDIAN then
+               case (to_integer(calcMemAddr(1 downto 0))) is
+                  when 0 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" & rotatedData(31 downto 0);
+                  when 1 => EXEMemWriteMask(3 downto 0) <= "1110"; EXEMemWriteData <= x"00000000" & rotatedData(23 downto 0) & x"00";
+                  when 2 => EXEMemWriteMask(3 downto 0) <= "1100"; EXEMemWriteData <= x"00000000" & rotatedData(15 downto 0) & x"0000";
+                  when 3 => EXEMemWriteMask(3 downto 0) <= "1000"; EXEMemWriteData <= x"00000000" & rotatedData(7 downto 0) & x"000000";
+                  when others => null;
+               end case;
+            else
+               case (to_integer(calcMemAddr(1 downto 0))) is
+                  when 0 => EXEMemWriteMask(3 downto 0) <= "0001"; EXEMemWriteData <= x"00000000" & x"000000" & rotatedData(31 downto 24);
+                  when 1 => EXEMemWriteMask(3 downto 0) <= "0011"; EXEMemWriteData <= x"00000000" & x"0000" & rotatedData(31 downto 16);
+                  when 2 => EXEMemWriteMask(3 downto 0) <= "0111"; EXEMemWriteData <= x"00000000" & x"00" & rotatedData(31 downto 8);
+                  when 3 => EXEMemWriteMask(3 downto 0) <= "1111"; EXEMemWriteData <= x"00000000" & rotatedData(31 downto 0);
+                  when others => null;
+               end case;
+            end if;
             
          when MEMWRITETYPE_DWORD =>  
             EXEMemWriteMask <= "11111111";  
                
          when MEMWRITETYPE_SDL =>
-            case (to_integer(calcMemAddr(2 downto 0))) is 
-               when 0 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData(63 downto 0);
-               when 1 => EXEMemWriteMask <= "11101111"; EXEMemWriteData <= rotatedData(55 downto 0) & rotatedData(63 downto 56);
-               when 2 => EXEMemWriteMask <= "11001111"; EXEMemWriteData <= rotatedData(47 downto 0) & rotatedData(63 downto 48);
-               when 3 => EXEMemWriteMask <= "10001111"; EXEMemWriteData <= rotatedData(39 downto 0) & rotatedData(63 downto 40);
-               when 4 => EXEMemWriteMask <= "00001111"; EXEMemWriteData <= rotatedData(31 downto 0) & rotatedData(63 downto 32);
-               when 5 => EXEMemWriteMask <= "00001110"; EXEMemWriteData <= rotatedData(23 downto 0) & rotatedData(63 downto 24);
-               when 6 => EXEMemWriteMask <= "00001100"; EXEMemWriteData <= rotatedData(15 downto 0) & rotatedData(63 downto 16);
-               when 7 => EXEMemWriteMask <= "00001000"; EXEMemWriteData <= rotatedData( 7 downto 0) & rotatedData(63 downto 8);
-               when others => null;
-            end case;
+            if LITTLE_ENDIAN then
+               case (to_integer(calcMemAddr(2 downto 0))) is
+                  when 0 => EXEMemWriteMask <= "00000001"; EXEMemWriteData <= x"00000000000000" & rotatedData(63 downto 56);
+                  when 1 => EXEMemWriteMask <= "00000011"; EXEMemWriteData <= x"000000000000" & rotatedData(63 downto 48);
+                  when 2 => EXEMemWriteMask <= "00000111"; EXEMemWriteData <= x"0000000000" & rotatedData(63 downto 40);
+                  when 3 => EXEMemWriteMask <= "00001111"; EXEMemWriteData <= x"00000000" & rotatedData(63 downto 32);
+                  when 4 => EXEMemWriteMask <= "00011111"; EXEMemWriteData <= x"000000" & rotatedData(63 downto 24);
+                  when 5 => EXEMemWriteMask <= "00111111"; EXEMemWriteData <= x"0000" & rotatedData(63 downto 16);
+                  when 6 => EXEMemWriteMask <= "01111111"; EXEMemWriteData <= x"00" & rotatedData(63 downto 8);
+                  when 7 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData;
+                  when others => null;
+               end case;
+            else
+               case (to_integer(calcMemAddr(2 downto 0))) is
+                  when 0 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData(63 downto 0);
+                  when 1 => EXEMemWriteMask <= "11101111"; EXEMemWriteData <= rotatedData(55 downto 0) & rotatedData(63 downto 56);
+                  when 2 => EXEMemWriteMask <= "11001111"; EXEMemWriteData <= rotatedData(47 downto 0) & rotatedData(63 downto 48);
+                  when 3 => EXEMemWriteMask <= "10001111"; EXEMemWriteData <= rotatedData(39 downto 0) & rotatedData(63 downto 40);
+                  when 4 => EXEMemWriteMask <= "00001111"; EXEMemWriteData <= rotatedData(31 downto 0) & rotatedData(63 downto 32);
+                  when 5 => EXEMemWriteMask <= "00001110"; EXEMemWriteData <= rotatedData(23 downto 0) & rotatedData(63 downto 24);
+                  when 6 => EXEMemWriteMask <= "00001100"; EXEMemWriteData <= rotatedData(15 downto 0) & rotatedData(63 downto 16);
+                  when 7 => EXEMemWriteMask <= "00001000"; EXEMemWriteData <= rotatedData(7 downto 0) & rotatedData(63 downto 8);
+                  when others => null;
+               end case;
+            end if;
             
          when MEMWRITETYPE_SDR =>
-            case (to_integer(calcMemAddr(2 downto 0))) is 
-               when 0 => EXEMemWriteMask <= "00010000"; EXEMemWriteData <= rotatedData(55 downto 0) & rotatedData(63 downto 56);
-               when 1 => EXEMemWriteMask <= "00110000"; EXEMemWriteData <= rotatedData(47 downto 0) & rotatedData(63 downto 48);
-               when 2 => EXEMemWriteMask <= "01110000"; EXEMemWriteData <= rotatedData(39 downto 0) & rotatedData(63 downto 40);
-               when 3 => EXEMemWriteMask <= "11110000"; EXEMemWriteData <= rotatedData(31 downto 0) & rotatedData(63 downto 32);
-               when 4 => EXEMemWriteMask <= "11110001"; EXEMemWriteData <= rotatedData(23 downto 0) & rotatedData(63 downto 24);
-               when 5 => EXEMemWriteMask <= "11110011"; EXEMemWriteData <= rotatedData(15 downto 0) & rotatedData(63 downto 16);
-               when 6 => EXEMemWriteMask <= "11110111"; EXEMemWriteData <= rotatedData( 7 downto 0) & rotatedData(63 downto 8);
-               when 7 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData(63 downto 0);
-               when others => null;
-            end case;
+            if LITTLE_ENDIAN then
+               case (to_integer(calcMemAddr(2 downto 0))) is
+                  when 0 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData;
+                  when 1 => EXEMemWriteMask <= "11111110"; EXEMemWriteData <= rotatedData(55 downto 0) & x"00";
+                  when 2 => EXEMemWriteMask <= "11111100"; EXEMemWriteData <= rotatedData(47 downto 0) & x"0000";
+                  when 3 => EXEMemWriteMask <= "11111000"; EXEMemWriteData <= rotatedData(39 downto 0) & x"000000";
+                  when 4 => EXEMemWriteMask <= "11110000"; EXEMemWriteData <= rotatedData(31 downto 0) & x"00000000";
+                  when 5 => EXEMemWriteMask <= "11100000"; EXEMemWriteData <= rotatedData(23 downto 0) & x"0000000000";
+                  when 6 => EXEMemWriteMask <= "11000000"; EXEMemWriteData <= rotatedData(15 downto 0) & x"000000000000";
+                  when 7 => EXEMemWriteMask <= "10000000"; EXEMemWriteData <= rotatedData(7 downto 0) & x"00000000000000";
+                  when others => null;
+               end case;
+            else
+               case (to_integer(calcMemAddr(2 downto 0))) is
+                  when 0 => EXEMemWriteMask <= "00010000"; EXEMemWriteData <= rotatedData(55 downto 0) & rotatedData(63 downto 56);
+                  when 1 => EXEMemWriteMask <= "00110000"; EXEMemWriteData <= rotatedData(47 downto 0) & rotatedData(63 downto 48);
+                  when 2 => EXEMemWriteMask <= "01110000"; EXEMemWriteData <= rotatedData(39 downto 0) & rotatedData(63 downto 40);
+                  when 3 => EXEMemWriteMask <= "11110000"; EXEMemWriteData <= rotatedData(31 downto 0) & rotatedData(63 downto 32);
+                  when 4 => EXEMemWriteMask <= "11110001"; EXEMemWriteData <= rotatedData(23 downto 0) & rotatedData(63 downto 24);
+                  when 5 => EXEMemWriteMask <= "11110011"; EXEMemWriteData <= rotatedData(15 downto 0) & rotatedData(63 downto 16);
+                  when 6 => EXEMemWriteMask <= "11110111"; EXEMemWriteData <= rotatedData(7 downto 0) & rotatedData(63 downto 8);
+                  when 7 => EXEMemWriteMask <= "11111111"; EXEMemWriteData <= rotatedData(63 downto 0);
+                  when others => null;
+               end case;
+            end if;
          
          when MEMWRITETYPE_COP1L =>         
             EXEMemWriteMask(3 downto 0) <= "1111";
-            EXEMemWriteData(31 downto 0) <= byteswap32(decodeFPUValue2(31 downto 0));
+            EXEMemWriteData(31 downto 0) <= cpu_to_bus32(decodeFPUValue2(31 downto 0));
                   
          when MEMWRITETYPE_COP1H =>         
             EXEMemWriteMask(3 downto 0) <= "1111";
-            EXEMemWriteData(31 downto 0) <= byteswap32(decodeFPUValue2(63 downto 32));
+            EXEMemWriteData(31 downto 0) <= cpu_to_bus32(decodeFPUValue2(63 downto 32));
                
          when MEMWRITETYPE_COP1D =>    
             EXEMemWriteMask <= "11111111";
-            EXEMemWriteData   <= byteswap32(decodeFPUValue2(63 downto 32)) & byteswap32(decodeFPUValue2(31 downto 0));
+            EXEMemWriteData   <= cpu_to_bus64(decodeFPUValue2);
 
       end case;
 
@@ -2663,7 +4134,7 @@ begin
                
                if (executeStallFromMEM = '1') then               
                   if (executeMemReadEnable = '1' and executeCOP1ReadEnable = '0') then
-                     if (executeMemUseCache = '1') then
+                     if (executeMemUseCacheEffective = '1') then
                         if (datacache_readdone = '1') then
                            stall3 <= '0';
                         end if;
@@ -2986,20 +4457,58 @@ begin
                         end if;
                      end if;
                         
-                     if (TLB_dataStall = '1') then
-                        stall3              <= '1';
-                        executeStallFromMEM <= '0';
-                     end if; 
-                     
+                     -- The TLB stall term used to sit here, as the last
+                     -- assignment inside this nest. It is hoisted to the end of
+                     -- the process instead; see below.
+
                   end if;
-                  
+
                end if;
-               
-               
+
+
+            end if;
+
+            -- Hoisted TLB stall.
+            --
+            -- stall3 was the largest critical endpoint in the CPU domain when
+            -- this was written: 152 of the 300 worst setup paths ended here, and
+            -- the last thing to arrive is TLB_dataStall, which sits behind the
+            -- address adder and the mini-TLB CAM. Written inside the nest above,
+            -- this term reached stall3's D input through two levels of logic,
+            -- because synthesis has to interleave it with the enclosing
+            -- set/clear priority cone. Hoisted to the end of the process it is
+            -- one OR against everything else, and everything else settles well
+            -- before it does. It does remove stall3 from the critical set - but
+            -- see the note below on what that was worth.
+            --
+            -- No gate is needed, and that is not an approximation. This term
+            -- fired inside "stall = 0", "decodeNew = '1' and (exception = '0' or
+            -- exceptionAllowDelay = '1')" and "executeIgnoreNext = '0'", but
+            -- TLB_dataStall is TLB_dataReq and not mini_hit, and TLB_dataReq is
+            -- EXETLBDataAccess, which is already '0' unless exception = '0',
+            -- stall = 0, executeIgnoreNext = '0' and decodeNew = '1'. Every
+            -- enclosing condition is therefore implied by the term itself, so
+            -- the hoisted form fires on exactly the same cycles.
+            --
+            -- executeStallFromMEM comes with it and stays correct at the end.
+            -- The two earlier writes it must not disturb are the load-delay
+            -- block's clear, which requires stall3 = '1', and the TLB unstall's
+            -- set, which requires TLB_dataUnStall. Both imply stall /= 0, which
+            -- TLB_dataStall excludes, so neither can coincide with this one.
+            --
+            -- This did NOT raise Fmax. stall3 owned the most critical endpoints
+            -- but was not the binding path: instrcache_fill sat a fraction of a
+            -- ns behind and took over the moment stall3 was relieved. Kept
+            -- because it is free (+39 ALMs, no fanout change) and the cone binds
+            -- again once the I-cache tag path is fixed. Judge any successor with
+            -- a DSE sweep, not a single fit - one seed cannot resolve this.
+            if (TLB_dataStall = '1') then
+               stall3              <= '1';
+               executeStallFromMEM <= '0';
             end if;
 
          end if;
-         
+
       end if;
    end process;
    
@@ -3011,11 +4520,16 @@ begin
    cache_commandEnableD <= executeDCacheEnable when (stall = 0) else '0';
 
    icpu_datacache : entity work.cpu_datacache
+   generic map
+   (
+      LITTLE_ENDIAN => LITTLE_ENDIAN
+   )
    port map
    (
       clk1x             => clk1x,
       clk93             => clk93,
       clk2x             => clk2x,
+      reset_1x          => reset_1x,
       reset_93          => reset_93,
       ce_93             => ce_93,
       stall             => stall,
@@ -3025,6 +4539,7 @@ begin
       
       slow_in           => DATACACHESLOW,
       force_wb_in       => DATACACHEFORCEWEB,
+      write_through_in  => DATACACHEWRITETHROUGH,
       
       ram_request       => datacache_request,
       ram_reqAddr       => datacache_reqAddr,
@@ -3063,7 +4578,8 @@ begin
       
       writeTagEna       => writeDatacacheTagEna,      
       writeTagValue     => writeDatacacheTagValue,
-      
+
+      debug_state       => datacache_debug_state,
       SS_reset          => SS_reset
    );
 
@@ -3104,9 +4620,15 @@ begin
          if (executeMemWriteEnable = '1') then
             skipmem := '0';
          
-            if (executeMemUseCache = '1') then
+            if (executeMemUseCacheEffective = '1') then
                datacache_writeena <= '1';
                skipmem            := '1';
+               if (DATACACHEWRITETHROUGH = '1') then
+                  mem4_request <= '1';
+                  if (writefifo_mem4_ready = '0') then
+                     stallNew4 <= '1';
+                  end if;
+               end if;
                if (datacache_writedone = '0') then
                   stallNew4      <= '1';
                end if;
@@ -3114,7 +4636,7 @@ begin
             
             if (skipmem = '0') then
                mem4_request   <= '1';
-               if (writefifo_block = '1') then
+               if (writefifo_mem4_ready = '0') then
                   stallNew4      <= '1';
                end if;
             end if;
@@ -3131,7 +4653,7 @@ begin
          if (executeMemReadEnable = '1') then
             skipmem := '0';
             
-            if (executeMemUseCache = '1') then
+            if (executeMemUseCacheEffective = '1') then
                datacache_readena  <= '1';
                skipmem            := '1';
                if (datacache_readdone = '0') then
@@ -3154,12 +4676,67 @@ begin
          end if;
          
       end if;
+
+      if (read_fifoStall = '1' and writefifo_mem4_ready = '1') then
+         mem4_request <= '1';
+         mem4_rnw     <= '1';
+         -- Same latching as the store replay below, for the same reason. This
+         -- path is NOT demonstrated broken by a bench, but it is the identical
+         -- construct - re-offering from executeMemAddress after stage 3 has
+         -- moved on - so it would read from whatever address happened to be in
+         -- the register rather than the one that was blocked.
+         mem4_address <= read_fifoStall_address;
+         mem4_req64   <= read_fifoStall_req64;
+      end if;
+
+      -- A blocked store was not accepted into the FIFO. Replay it once the
+      -- arbiter is ready, then let the clocked stage retire it on that edge.
+      if (writeback_fifoStall = '1' and writefifo_mem4_ready = '1') then
+         mem4_request   <= '1';
+         mem4_rnw       <= '0';
+         -- From the LATCHED copy. Replaying from executeMem* re-offered the
+         -- store with whatever stage 3 had advanced to, which in the game's
+         -- ATA loop was the next iteration's LOAD: the bench measured 0 of 176
+         -- replays carrying the data-port address, all of them carrying
+         -- 0800000c/08000010/08000014 with halfword masks instead. The ATA
+         -- write was lost and a stray halfword was written into main RAM.
+         mem4_address   <= fifoStall_address;
+         mem4_dataWrite <= fifoStall_dataWrite;
+         mem4_writeMask <= fifoStall_writeMask;
+         mem4_req64     <= fifoStall_req64;
+         if (fifoStall_useCache = '1') then
+            datacache_writeena <= '1';
+         end if;
+      end if;
       
    end process;
    
-   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRead);
-   read4_dataReadRot64  <= byteswap32(read4_dataReadData(31 downto 0)) & byteswap32(read4_dataReadData(63 downto 32));
-   read4_dataReadRot32  <= byteswap32(read4_dataReadData(31 downto 0));
+   read4_uncachedRot <=
+      "00"                   when (read4_useLoadType = LOADTYPE_LEFT    or
+                                   read4_useLoadType = LOADTYPE_RIGHT   or
+                                   read4_useLoadType = LOADTYPE_LEFT64  or
+                                   read4_useLoadType = LOADTYPE_RIGHT64 or
+                                   read4_useLoadType = LOADTYPE_QWORD)  else
+      read4_Addr(1 downto 0);
+
+   -- The response mailbox registers the raw bus word before completion is
+   -- asserted. Rotate that stable CPU-domain copy; a second mailbox stage
+   -- registers the rotated value before the completion pulse reaches users.
+   read4_uncachedData <=
+      unsigned(mem_finished_dataRead(63 downto 32)) &
+      (x"000000" & unsigned(mem_finished_dataRead(31 downto 24)))
+                                     when (read4_uncachedRot = "11") else
+      unsigned(mem_finished_dataRead(63 downto 32)) &
+      (x"0000" & unsigned(mem_finished_dataRead(31 downto 16)))
+                                     when (read4_uncachedRot = "10") else
+      unsigned(mem_finished_dataRead(63 downto 32)) &
+      (x"00" & unsigned(mem_finished_dataRead(31 downto 8)))
+                                     when (read4_uncachedRot = "01") else
+      unsigned(mem_finished_dataRead);
+
+   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRot);
+   read4_dataReadRot64  <= bus_to_cpu64(std_logic_vector(read4_dataReadData));
+   read4_dataReadRot32  <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
    
    read4_Addr         <= writebackReadAddress         when (stall4 = '1') else executeMemAddress;
    read4_oldData      <= writebackReadLastData        when (stall4 = '1') else executeMemReadLastData;
@@ -3178,9 +4755,12 @@ begin
          if (reset_93 = '1') then
          
             stall4                           <= '0';
+            read_fifoStall                   <= '0';
             writebackNew                     <= '0';
             writebackStallFromMEM            <= '0';                  
             writebackWriteEnable             <= '0';
+            writebackMemWrite                <= '0';
+            writeback_fifoStall              <= '0';
             cop1_stage4_writeEnable          <= '0';
             COP2Latch                        <= (others => '0');
             
@@ -3215,6 +4795,7 @@ begin
 
                   writebackWriteEnable         <= resultWriteEnable;
                   writeback_UseCache           <= datacache_readena or datacache_writeena or executeDCacheEnable;
+                  writebackMemWrite            <= executeMemWriteEnable;
                   
                   writeback_COP1_ReadEnable    <= executeCOP1ReadEnable;
                   cop1_stage4_target           <= executeCOP1Target;
@@ -3232,10 +4813,27 @@ begin
                      if (decodeSource2 > 0 and resultTarget = decodeSource2) then writebackForwardValue2 <= '1'; end if;
                   end if;
                   
+                  if (executeMemReadEnable = '1' and
+                      executeMemUseCacheEffective = '0' and
+                      mem4_request = '1' and
+                      writefifo_mem4_ready = '0') then
+                     read_fifoStall         <= '1';
+                     read_fifoStall_address <= mem4_address;
+                     read_fifoStall_req64   <= mem4_req64;
+                  end if;
+
                   if (executeMemWriteEnable = '1') then
-                  
-                     if (mem4_request = '1' and writefifo_block = '1') then
+
+
+                     if (mem4_request = '1' and writefifo_mem4_ready = '0') then
                         writeback_fifoStall <= '1';
+                        -- mem4_* here are this store's own combinational
+                        -- values, already address-masked by the issue path.
+                        fifoStall_address   <= mem4_address;
+                        fifoStall_dataWrite <= mem4_dataWrite;
+                        fifoStall_writeMask <= mem4_writeMask;
+                        fifoStall_req64     <= mem4_req64;
+                        fifoStall_useCache  <= executeMemUseCacheEffective;
                      else
                         writebackNew        <= '1';
                      end if;
@@ -3291,6 +4889,16 @@ begin
                
             end if; -- stall4Masked
             
+            if (writeback_fifoStall = '1' and
+                not (writefifo_mem4_ready = '1' and mem4_request = '1') and
+                (datacache_CmdDone = '1' or TLBDone = '1' or
+                 datacache_writedone = '1' or datacache_readdone = '1' or
+                 (writeback_UseCache = '0' and mem_finished_read = '1') or
+                 (writebackMemWrite = '1' and writeback_UseCache = '1' and
+                  DATACACHEWRITETHROUGH = '1' and
+                  datacache_debug_state = "0000"))) then
+            end if;
+
             if (datacache_CmdDone = '1') then
                stall4        <= '0';
                writebackNew  <= '1';
@@ -3301,7 +4909,15 @@ begin
                writebackNew  <= '1';
             end if;
             
-            if (writeback_fifoStall = '1' and writefifo_cnt = 4 and writefifo_wr = '0') then
+            -- The replayed load has been taken by the FIFO. Drop the retry
+            -- flag but leave stall4 alone: the load is now genuinely in
+            -- flight and mem_finished_read releases it.
+            if (read_fifoStall = '1' and writefifo_mem4_ready = '1') then
+               read_fifoStall <= '0';
+            end if;
+
+            if (writeback_fifoStall = '1' and
+                writefifo_mem4_ready = '1' and mem4_request = '1') then
                stall4              <= '0';
                writebackNew        <= '1';
                writeback_fifoStall <= '0';
@@ -3310,6 +4926,18 @@ begin
             if (datacache_writedone = '1') then
                stall4        <= '0';
                writebackNew  <= '1';
+            end if;
+
+            -- A write-through cache store can be accepted by the CPU FIFO
+            -- before the cache's one-cycle write_done indication is sampled.
+            -- Once that accepted store's cache side is idle, release the
+            -- retained stage-4 entry rather than waiting forever for the
+            -- already-missed pulse.
+            if (stall4 = '1' and writebackMemWrite = '1' and
+                writeback_UseCache = '1' and DATACACHEWRITETHROUGH = '1' and
+                writeback_fifoStall = '0' and datacache_debug_state = "0000") then
+               stall4       <= '0';
+               writebackNew <= '1';
             end if;
             
             if ((writeback_UseCache = '0' and mem_finished_read = '1') or datacache_readdone = '1') then
@@ -3332,21 +4960,21 @@ begin
             
             if ((writeback_UseCache = '0' and mem_finished_read = '1') or datacache_readena = '1' or datacache_readbusy = '1') then
                
-               cop1_stage4_data <= byteswap32(read4_dataReadData(31 downto 0)) & byteswap32(read4_dataReadData(63 downto 32));
+               cop1_stage4_data <= bus_to_cpu64(std_logic_vector(read4_dataReadData));
                
                cop1_stage4_writeMask   <= "11";
                if (fpuRegMode = '1') then
                   if (read4_useLoadType = LOADTYPE_DWORD) then
-                     cop1_stage4_data(31 downto 0) <= byteswap32(read4_dataReadData(31 downto 0));
+                     cop1_stage4_data(31 downto 0) <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
                      cop1_stage4_writeMask         <= "01";
                   end if;
                else
                   if (read4_useLoadType = LOADTYPE_DWORD) then
                      if (read4_cop1_target(0) = '1') then
-                        cop1_stage4_data(63 downto 32) <= byteswap32(read4_dataReadData(31 downto 0));
+                        cop1_stage4_data(63 downto 32) <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
                         cop1_stage4_writeMask          <= "10";
                      else
-                        cop1_stage4_data(31 downto 0) <= byteswap32(read4_dataReadData(31 downto 0));
+                        cop1_stage4_data(31 downto 0) <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
                         cop1_stage4_writeMask         <= "01";
                      end if;
                   end if;
@@ -3355,56 +4983,30 @@ begin
                case (read4_useLoadType) is
                   
                   when LOADTYPE_SBYTE => writebackData <= unsigned(resize(signed(read4_dataReadData(7 downto 0)), 64));
-                  when LOADTYPE_SWORD => writebackData <= unsigned(resize(signed(byteswap16(read4_dataReadData(15 downto 0))), 64));
-                  when LOADTYPE_LEFT =>
-                     case (to_integer(read4_Addr(1 downto 0))) is
-                        when 3 => writebackData <= unsigned(resize(signed(read4_dataReadRot32( 7 downto 0)) & signed(read4_oldData(23 downto 0)), 64));
-                        when 2 => writebackData <= unsigned(resize(signed(read4_dataReadRot32(15 downto 0)) & signed(read4_oldData(15 downto 0)), 64));
-                        when 1 => writebackData <= unsigned(resize(signed(read4_dataReadRot32(23 downto 0)) & signed(read4_oldData( 7 downto 0)), 64)); 
-                        when 0 => writebackData <= unsigned(resize(signed(read4_dataReadRot32(31 downto 0)), 64));
-                        when others => null;
-                     end case;
+                  when LOADTYPE_SWORD => writebackData <= unsigned(resize(signed(bus_to_cpu16(std_logic_vector(read4_dataReadData(15 downto 0)))), 64));
+                   when LOADTYPE_LEFT =>
+                      writebackData <= unsigned(resize(signed(merge_left32(read4_dataReadRot32,
+                                                                          read4_oldData(31 downto 0),
+                                                                          read4_Addr(1 downto 0))), 64));
                         
-                  when LOADTYPE_DWORD  => writebackData <= unsigned(resize(signed(byteswap32(read4_dataReadData(31 downto 0))), 64));
-                  when LOADTYPE_DWORDU => writebackData <= x"00000000" & byteswap32(read4_dataReadData(31 downto 0));
+                  when LOADTYPE_DWORD  => writebackData <= unsigned(resize(signed(bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)))), 64));
+                  when LOADTYPE_DWORDU => writebackData <= x"00000000" & bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
                   when LOADTYPE_BYTE  => writebackData <= x"00000000" & x"000000" & read4_dataReadData(7 downto 0);
-                  when LOADTYPE_WORD  => writebackData <= x"00000000" & x"0000" & byteswap16(read4_dataReadData(15 downto 0));
-                  when LOADTYPE_RIGHT =>
-                     case (to_integer(read4_Addr(1 downto 0))) is
-                        when 3 => writebackData <= unsigned(resize(signed(read4_dataReadRot32(31 downto 0)), 64));
-                        when 2 => writebackData <= unsigned(resize(signed(read4_oldData(31 downto 24)) & signed(read4_dataReadRot32(31 downto  8)), 64));
-                        when 1 => writebackData <= unsigned(resize(signed(read4_oldData(31 downto 16)) & signed(read4_dataReadRot32(31 downto 16)), 64));
-                        when 0 => writebackData <= unsigned(resize(signed(read4_oldData(31 downto  8)) & signed(read4_dataReadRot32(31 downto 24)), 64));
-                        when others => null;
-                     end case;
+                  when LOADTYPE_WORD  => writebackData <= x"00000000" & x"0000" & bus_to_cpu16(std_logic_vector(read4_dataReadData(15 downto 0)));
+                   when LOADTYPE_RIGHT =>
+                      writebackData <= unsigned(resize(signed(merge_right32(read4_dataReadRot32,
+                                                                           read4_oldData(31 downto 0),
+                                                                           read4_Addr(1 downto 0))), 64));
                      
-                  when LOADTYPE_QWORD =>  writebackData <= byteswap32(read4_dataReadData(31 downto 0)) & byteswap32(read4_dataReadData(63 downto 32));
+                  when LOADTYPE_QWORD => writebackData <= bus_to_cpu64(std_logic_vector(read4_dataReadData));
                   
-                  when LOADTYPE_LEFT64 => 
-                     case (to_integer(read4_Addr(2 downto 0))) is
-                        when 7 => writebackData <= read4_dataReadRot64( 7 downto 0) & read4_oldData(55 downto 0);
-                        when 6 => writebackData <= read4_dataReadRot64(15 downto 0) & read4_oldData(47 downto 0);
-                        when 5 => writebackData <= read4_dataReadRot64(23 downto 0) & read4_oldData(39 downto 0);
-                        when 4 => writebackData <= read4_dataReadRot64(31 downto 0) & read4_oldData(31 downto 0);
-                        when 3 => writebackData <= read4_dataReadRot64(39 downto 0) & read4_oldData(23 downto 0);
-                        when 2 => writebackData <= read4_dataReadRot64(47 downto 0) & read4_oldData(15 downto 0);
-                        when 1 => writebackData <= read4_dataReadRot64(55 downto 0) & read4_oldData( 7 downto 0);
-                        when 0 => writebackData <= read4_dataReadRot64;
-                        when others => null;
-                     end case;
+                   when LOADTYPE_LEFT64 =>
+                      writebackData <= merge_left64(read4_dataReadRot64, read4_oldData,
+                                                    read4_Addr(2 downto 0));
                   
-                  when LOADTYPE_RIGHT64 =>
-                     case (to_integer(read4_Addr(2 downto 0))) is
-                        when 7 => writebackData <= read4_dataReadRot64;
-                        when 6 => writebackData <= read4_oldData(63 downto 56) & read4_dataReadRot64(63 downto  8);
-                        when 5 => writebackData <= read4_oldData(63 downto 48) & read4_dataReadRot64(63 downto 16);
-                        when 4 => writebackData <= read4_oldData(63 downto 40) & read4_dataReadRot64(63 downto 24);
-                        when 3 => writebackData <= read4_oldData(63 downto 32) & read4_dataReadRot64(63 downto 32);
-                        when 2 => writebackData <= read4_oldData(63 downto 24) & read4_dataReadRot64(63 downto 40);
-                        when 1 => writebackData <= read4_oldData(63 downto 16) & read4_dataReadRot64(63 downto 48);
-                        when 0 => writebackData <= read4_oldData(63 downto  8) & read4_dataReadRot64(63 downto 56);
-                        when others => null;
-                     end case;
+                   when LOADTYPE_RIGHT64 =>
+                      writebackData <= merge_right64(read4_dataReadRot64, read4_oldData,
+                                                     read4_Addr(2 downto 0));
                      
                end case; 
                
@@ -3421,6 +5023,9 @@ begin
 --############################### stage 5
 --##############################################################
    process (clk93)
+      variable store_byte     : std_logic_vector(7 downto 0);
+      variable write_data_slv : std_logic_vector(63 downto 0);
+      variable store_word     : std_logic_vector(31 downto 0);
    begin
       if (rising_edge(clk93)) then
       
@@ -3431,18 +5036,31 @@ begin
          --debugTmr <= debugTmr + 1;
 
          if (reset_93 = '1') then
+            debug_retired_count <= (others => '0');
+            debug_gpr_s1_register <= (others => '0');
+            debug_gpr_s2_register <= (others => '0');
+            debug_retire_pc_register <= (others => '0');
+            debug_retire_opcode_register <= (others => '0');
+            debug_irq_count_register <= (others => '0');
             
             --debugCnt             <= (others => '0');
             --debugSum             <= (others => '0');
             --debugTmr             <= (others => '0');
          
          elsif (ce_93 = '1') then
+
+            if (decode_irq = '1') then
+               debug_irq_count_register <= debug_irq_count_register + 1;
+            end if;
             
             dbg_retire_i <= '0';   -- SGI: default; set below when one retires
 
             if (stall4Masked = 0 and writebackNew = '1') then
+               debug_retired_count <= debug_retired_count + 1;
             
 -- synthesis translate_off
+               debug_retire_pc_register <= std_logic_vector(PCold3(31 downto 0));
+               debug_retire_opcode_register <= std_logic_vector(opcode3);
                pcOld4               <= pcOld3;
                opcode4              <= opcode3;
                hi_2                 <= hi_1;
@@ -3454,6 +5072,14 @@ begin
                -- export
                if (writebackWriteEnable = '1') then 
                   if (writebackTarget > 0) then
+                      -- Track the decompressor stream state used by the
+                      -- frozen fault trace.
+                      if (writebackTarget = 17) then
+                         debug_gpr_s1_register <= std_logic_vector(writebackData(31 downto 0));
+                      end if;
+                      if (writebackTarget = 18) then
+                         debug_gpr_s2_register <= std_logic_vector(writebackData(31 downto 0));
+                      end if;
 -- synthesis translate_off
                      regs(to_integer(writebackTarget)) <= writebackData;
 -- synthesis translate_on
@@ -3516,6 +5142,11 @@ begin
    
    
    icop0 : entity work.cpu_cop0
+   generic map
+   (
+      LITTLE_ENDIAN => LITTLE_ENDIAN,
+      ADDR32_ONLY   => ADDR32_ONLY
+   )
    port map
    (
       clk93                   => clk93,
@@ -3529,11 +5160,16 @@ begin
       RANDOMMISS              => RANDOMMISS,
       DISABLE_BOOTCOUNT       => DISABLE_BOOTCOUNT,
       DISABLE_DTLBMINI        => DISABLE_DTLBMINI, 
+      ALECK64                 => ALECK64,
             
       error_exception         => error_exception,
       error_TLB               => error_TLB,
       
+<<<<<<< KI
+      irqRequest              => irqRequest,
+=======
       irqLines                => irqLines,
+>>>>>>> OURS
       irqTrigger              => irqTrigger,
       decode_irq              => decode_irq,
 
@@ -3550,11 +5186,22 @@ begin
       exceptionCode_3         => exceptionCode_3,
       exception_COP           => exception_COP,
       isDelaySlot             => executeBranchdelaySlot,
+      chainedDelaySlot        => chainedDelaySlot,
       nextDelaySlot           => EXECOPBranchDelaySlot,
       pcOld1                  => PCold1,
             
       eretPC                  => eretPC,
       exceptionPC             => exceptionPC,
+      debug_cause             => cop0_debug_cause,
+      debug_epc               => cop0_debug_epc,
+      debug_badvaddr          => cop0_debug_badvaddr,
+      debug_eret_epc          => cop0_debug_eret_epc,
+      debug_eret_target       => cop0_debug_eret_target,
+      debug_eret_flags        => cop0_debug_eret_flags,
+      debug_ds_count          => cop0_debug_ds_count,
+      debug_ds_first          => cop0_debug_ds_first,
+      debug_tlb_census        => cop0_debug_tlb_census,
+      debug_tlb_exc_stb       => cop0_debug_tlb_exc_stb,
       exception               => exception,   
       exceptionStage1         => exceptionStage1,   
             
@@ -3562,6 +5209,7 @@ begin
       COP2_enable             => COP2_enable,
       fpuRegMode              => fpuRegMode,
       privilegeMode           => privilegeMode,
+      kusegUnmapped           => kusegUnmapped,
       bit64region             => bit64region,
       dbg_exc                 => dbg_exc,
       dbg_exc_code            => dbg_exc_code_u,
@@ -3793,14 +5441,16 @@ begin
          
             if (stall = 0) then
                debugStallcounter <= (others => '0');
-            elsif (cpuPaused = '0') then  
+            elsif (cpuPaused = '0' and debugStallcounter(12) = '0') then
                debugStallcounter <= debugStallcounter + 1;
-            end if;         
-            
-            --if (debugStallcounter(12) = '1' and debugwrite = '0') then
-            if (debugStallcounter(12) = '1') then
-               error_stall       <= '1';
             end if;
+
+            if (stall /= 0 and debugStallcounter(12) = '1') then
+               error_stall <= '1';
+            end if;
+
+            -- Capture the first cycle over the threshold while the pipeline
+            -- is still stalled. Do not overwrite it on the recovery cycle.
             
 -- synthesis translate_off
             

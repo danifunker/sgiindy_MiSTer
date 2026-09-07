@@ -7,6 +7,31 @@ library mem;
 use work.pexport.all;
 
 entity cpu_cop0 is
+   generic
+   (
+      LITTLE_ENDIAN         : boolean := false;
+      -- Narrow the exception-address capture to 32 bits.
+      --
+      -- BadVAddr, EntryHi and XContext are 64 bits wide and are all written
+      -- from one 64-bit excAddr. At 80 MHz that capture IS the CPU critical
+      -- path - every one of the 25 worst paths ends in this file, with
+      -- COP0_8_BADVIRTUALADDRESS[42] and COP0_20_XCONTEXT_BadVPN among the
+      -- endpoints.
+      --
+      -- KI uses the 32-bit addressing mode. With the extended-address bits
+      -- clear software reads these registers with mfc0, which returns bits
+      -- 31 downto 0; dmfc0 needs the 64-bit operations those same Status bits
+      -- gate. The upper halves are therefore unreadable by the game.
+      --
+      -- XContext exists only to serve the XTLB refill vector at 0x80000080,
+      -- which is unreachable without 64-bit addressing, and its Region and
+      -- BadVPN fields are written from nothing but excAddr - so with this set
+      -- they are constant zero and synthesis removes them outright.
+      --
+      -- tb_ki_cpu_badvaddr.sv is the guard: it raises a real AdEL and checks
+      -- BadVAddr through mfc0, the same way a game would.
+      ADDR32_ONLY           : boolean := false
+   );
    port 
    (
       clk93                   : in  std_logic;
@@ -20,20 +45,55 @@ entity cpu_cop0 is
       RANDOMMISS              : in  unsigned(3 downto 0);
       DISABLE_BOOTCOUNT       : in  std_logic;
       DISABLE_DTLBMINI        : in  std_logic;
+      ALECK64                 : in  std_logic;
             
       error_exception         : out std_logic := '0';
       error_TLB               : out std_logic := '0';
             
+<<<<<<< KI
+      irqRequest              : in  std_logic_vector(1 downto 0);
+=======
       -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
       -- separate N64 lines. See where it is assigned, below.
       irqLines                : in  std_logic_vector(4 downto 0);
+>>>>>>> OURS
       irqTrigger              : out std_logic;
       decode_irq              : in  std_logic;
 
 -- synthesis translate_off
       cop0_export             : out tExportRegs := (others => (others => '0'));
 -- synthesis translate_on
-                    
+
+      -- Cause and EPC, OUTSIDE translate_off. cop0_export carries both but is
+      -- simulation-only, and the exception that restarts the game during video
+      -- playback only happens on hardware - so it has to survive synthesis.
+      debug_cause             : out unsigned(31 downto 0) := (others => '0');
+      debug_epc               : out unsigned(31 downto 0) := (others => '0');
+      debug_badvaddr          : out unsigned(31 downto 0) := (others => '0');
+      -- Census of translation exceptions, so "this was the first" can be
+      -- stated rather than assumed:
+      --
+      --   digits 0-2  data-read TLB exceptions   (bits 31:20)
+      --   digits 3-4  data-write TLB exceptions  (bits 19:12)
+      --   digits 5-6  instruction TLB exceptions (bits 11:4)
+      --   digit  7    bit 0 = the first data exception was a refill MISS
+      --               rather than an invalid-entry hit
+      debug_tlb_census        : out unsigned(31 downto 0) := (others => '0');
+      -- One clk93 pulse per data-side translation exception. cpu.vhd uses it
+      -- to freeze the trace ON the fault instead of on the boot ROM entry the
+      -- handler eventually reaches, which puts the seven instructions BEFORE
+      -- the fault in the capture.
+      debug_tlb_exc_stb       : out std_logic := '0';
+      debug_eret_epc          : out unsigned(31 downto 0) := (others => '0');
+      -- The value eret actually jumped to, selected the same way line 536-540
+      -- selects eretPC. Captured rather than inferred so ERL does not have to
+      -- be trusted to reconstruct it.
+      debug_eret_target       : out unsigned(31 downto 0) := (others => '0');
+      --   31:16  eret count, saturating
+      --   3      ERL at the eret - if set, the target came from ErrorEPC
+      --   2      EXL   1  BEV   0  IE
+      debug_eret_flags        : out unsigned(31 downto 0) := (others => '0');
+
       eret                    : in  std_logic;
       exception3              : in  std_logic;
       exceptionNewPC          : in  std_logic;
@@ -42,7 +102,11 @@ entity cpu_cop0 is
       exceptionCode_1         : in  unsigned(3 downto 0);
       exceptionCode_3         : in  unsigned(3 downto 0);
       exception_COP           : in  unsigned(1 downto 0);
-      isDelaySlot             : in  std_logic;                   
+      isDelaySlot             : in  std_logic;
+      chainedDelaySlot        : in  std_logic := '0';
+
+      debug_ds_count          : out unsigned(31 downto 0) := (others => '0');
+      debug_ds_first          : out unsigned(31 downto 0) := (others => '0');
       nextDelaySlot           : in  std_logic;                   
       pcOld1                  : in  unsigned(63 downto 0);
                   
@@ -55,6 +119,7 @@ entity cpu_cop0 is
       COP2_enable             : out std_logic;
       fpuRegMode              : out std_logic;
       privilegeMode           : out unsigned(1 downto 0) := (others => '0');
+      kusegUnmapped           : out std_logic := '0';
       bit64region             : out std_logic;
 
       -- SGI: one strobe per exception accepted, with the three registers that
@@ -136,6 +201,11 @@ end entity;
 
 architecture arch of cpu_cop0 is
 
+<<<<<<< KI
+   -- IDT79R4600 processor ID, matching MAME's R4600 implementation.
+   constant COP0_PRID_R4600                 : unsigned(15 downto 0) := x"2020";
+
+=======
    -- SGI: an Indy has an R4400, and the R4400 has 48 TLB entries. The R4300
    -- this core is built from has 32, and IRIX does not probe: it takes the
    -- entry count from PRId, so a machine that reports 0x0440 and then aliases
@@ -182,6 +252,7 @@ architecture arch of cpu_cop0 is
    constant TLB_LAST      : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 1, 6);
    constant TLB_LAST_PREV : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 2, 6);
      
+>>>>>>> OURS
    signal COP0_0_INDEX_tlbEntry           : unsigned(5 downto 0) := (others => '0');
    signal COP0_0_INDEX_probefailure       : std_logic := '0';
    signal COP0_1_RANDOM                   : unsigned(5 downto 0) := (others => '0');
@@ -261,6 +332,12 @@ architecture arch of cpu_cop0 is
    -- whether this exception interrupted a handler. See the EPC writes.
    signal excSavedEXL                     : std_logic := '0';
    signal isDelaySlot_1                   : std_logic := '0';
+   -- Written only by the exception process below.
+   signal suppressed_1                    : std_logic := '0';
+   signal ds_count_reg                    : unsigned(31 downto 0) := (others => '0');
+   signal ds_first_reg                    : unsigned(31 downto 0) := (others => '0');
+
+   signal ds_seen                         : std_logic := '0';
    
    signal cop0Written6                    : integer range 0 to 2 := 0;
    signal cop0Written9                    : integer range 0 to 3 := 0;
@@ -370,6 +447,26 @@ architecture arch of cpu_cop0 is
    signal TLB_ExcDataWrite                : std_logic;
    signal TLB_ExcDataDirty                : std_logic;
    signal TLB_ExcDataMiss                 : std_logic;
+
+   signal tlbexc_dr_prev                  : std_logic := '0';
+   signal tlbexc_dw_prev                  : std_logic := '0';
+   signal tlbexc_ir_prev                  : std_logic := '0';
+   signal tlbexc_dr_count                 : unsigned(11 downto 0) := (others => '0');
+   signal tlbexc_dw_count                 : unsigned(7 downto 0) := (others => '0');
+   signal tlbexc_ir_count                 : unsigned(7 downto 0) := (others => '0');
+   signal tlbexc_first_miss               : std_logic := '0';
+   signal tlbexc_first_seen               : std_logic := '0';
+   signal tlbexc_data_stb                 : std_logic := '0';
+
+   -- Written by eret_capture_proc and nothing else.
+   signal eret_prev                       : std_logic := '0';
+   signal eret_epc_reg                    : unsigned(31 downto 0) := (others => '0');
+   signal eret_target_reg                 : unsigned(31 downto 0) := (others => '0');
+   signal eret_count_reg                  : unsigned(15 downto 0) := (others => '0');
+   signal eret_erl_reg                    : std_logic := '0';
+   signal eret_exl_reg                    : std_logic := '0';
+   signal eret_bev_reg                    : std_logic := '0';
+   signal eret_ie_reg                     : std_logic := '0';
    
    signal TLB_InstrClearEna               : std_logic;
    signal TLB_InstrClearIndex             : unsigned(5 downto 0);
@@ -421,6 +518,15 @@ begin
    COP1_enable   <= COP0_12_SR_enable_cop1;
    COP2_enable   <= COP0_12_SR_enable_cop2;
    fpuRegMode    <= COP0_12_SR_floatingPointMode;
+<<<<<<< KI
+   -- MIPS III: EXL or ERL forces kernel mode regardless of KSU, and while ERL is
+   -- set kuseg is unmapped (and uncached). The donor never needed either term -
+   -- the N64 does not run with ERL set over kuseg, and KI1 never leaves
+   -- KSEG0/KSEG1 - but KI2's boot ROM stores to kuseg with ERL = 1, and without
+   -- this it takes a TLBS refill exception on every one of them.
+   privilegeMode <= "00" when (COP0_12_SR_exceptionLevel = '1' or COP0_12_SR_errorLevel = '1') else COP0_12_SR_privilegeMode;
+   kusegUnmapped <= COP0_12_SR_errorLevel;
+=======
    -- SGI: THE PROCESSOR IS IN KERNEL MODE WHENEVER EXL OR ERL IS SET, whatever
    -- Status.KSU says. Upstream exported the raw KSU here and applied the rule
    -- only to `bit64mode`, twenty lines of the same file away - see "set mode"
@@ -446,6 +552,7 @@ begin
                                COP0_12_SR_errorLevel     = '1') else
                     "10" when (COP0_12_SR_privilegeMode > 2) else
                     COP0_12_SR_privilegeMode;
+>>>>>>> OURS
    bit64region   <= bit64mode;
    
    TagLo_Valid   <= COP0_28_TAGLO_primaryCacheState(1);
@@ -542,6 +649,9 @@ begin
             
          when 14 => readValue <= COP0_14_EPC;
             
+<<<<<<< KI
+         when 15 => readValue(15 downto 0) <= COP0_PRID_R4600;
+=======
          -- SGI: see PRESENT_AS_R4400. R4300 is 0x0B22, R4400 is 0x0440.
          when 15 =>
             if (PRESENT_AS_R4400) then
@@ -549,6 +659,7 @@ begin
             else
                readValue(11 downto 0) <= x"B22";
             end if;
+>>>>>>> OURS
          
          when 16 =>
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
@@ -745,7 +856,11 @@ begin
             COP0_14_EPC                     <= 32x"0" & ss_in(14)(31 downto 0); -- (others => '0'); will not work for savestates with TLB
             COP0_16_CONFIG_cacheAlgoKSEG0   <= ss_in(16)(1 downto 0); -- (others => '0'); required for systemtest
             COP0_16_CONFIG_cu               <= (others => '0'); 
-            COP0_16_CONFIG_bigEndian        <= '1';
+            if LITTLE_ENDIAN then
+               COP0_16_CONFIG_bigEndian     <= '0';
+            else
+               COP0_16_CONFIG_bigEndian     <= '1';
+            end if;
             COP0_16_CONFIG_sysadWBPattern   <= (others => '0'); 
             COP0_16_CONFIG_systemClockRatio <= (others => '1'); 
             COP0_17_LOADLINKEDADDRESS       <= (others => '0'); 
@@ -777,6 +892,12 @@ begin
          elsif (ce = '1') then
          
             -- interrupt
+<<<<<<< KI
+            COP0_13_CAUSE_interruptPending(3 downto 2) <= unsigned(irqRequest);
+            if (preNMI = '1') then
+               COP0_13_CAUSE_interruptPending(4) <= preNMI;
+            end if;
+=======
             -- SGI: all five hardware lines, level-sensitive, both ways.
             --
             -- Upstream drives IP2 from irqRequest, IP3 from irqCartRequest,
@@ -794,6 +915,7 @@ begin
             -- Count/Compare timer) and IP1:0 (the two software interrupts)
             -- are CP0's own and are not touched here.
             COP0_13_CAUSE_interruptPending(6 downto 2) <= unsigned(irqLines);
+>>>>>>> OURS
 
             -- count
             if (cop0Written9 = 0) then
@@ -844,6 +966,22 @@ begin
             -- CPU access
             if (exception = '1') then
          
+<<<<<<< KI
+               COP0_14_EPC               <= nextEPC_1;
+               -- nextEPC_1 is pcOld1 unmodified when the suppression applied,
+               -- so the recorded EPC IS the address the predicate refused to
+               -- back up from.
+               if (suppressed_1 = '1') then
+                  if (ds_count_reg /= x"FFFFFFFF") then
+                     ds_count_reg <= ds_count_reg + 1;
+                  end if;
+                  if (ds_seen = '0') then
+                     ds_seen      <= '1';
+                     ds_first_reg <= nextEPC_1(31 downto 0);
+                  end if;
+               end if;
+               COP0_13_CAUSE_branchDelay <= isDelaySlot_1;
+=======
                -- SGI: "If the EXL bit in the Status register is set, the EPC
                -- register is not updated and the exception vector is the
                -- general exception vector" - R4000 manual, exception
@@ -899,6 +1037,7 @@ begin
                   COP0_13_CAUSE_branchDelay <= isDelaySlot_1;
                end if;
                excFetchProvisional <= '0';
+>>>>>>> OURS
                
                case (COP0_13_CAUSE_exceptionCode(3 downto 0)) is
                   when x"4" | x"5" | x"9" | x"A" | x"C"  => error_exception <= '1';
@@ -1050,8 +1189,8 @@ begin
 
             -- new exception
             nextEPC := pcOld1;
-            if (isDelaySlot = '1') then
-               nextEPC := pcOld1 - 4; -- should this be pcOld2 instead? need to test with exception in branch delay slot after branch in branch delay slot 
+            if (isDelaySlot = '1' and chainedDelaySlot = '0') then
+               nextEPC := pcOld1 - 4;
             end if;
             if (exceptionNewPC = '1') then
                nextEPC := exceptionPCStore;
@@ -1060,7 +1199,8 @@ begin
                exception       <= '0';
                exceptionStage1 <= '0';
                nextEPC_1       <= nextEPC;
-               isDelaySlot_1   <= isDelaySlot;
+               isDelaySlot_1   <= isDelaySlot and (not chainedDelaySlot);
+               suppressed_1    <= isDelaySlot and chainedDelaySlot;
                if (exception = '0' and exceptionStage1 = '1') then
                   COP0_13_CAUSE_coprocessorError <= "00";
                   COP0_13_CAUSE_exceptionCode    <= '0' & x"2";
@@ -1167,15 +1307,31 @@ begin
             end if;
 
             if (excAddrWE = '1') then
-               COP0_8_BADVIRTUALADDRESS       <= excAddr;
-               
-               COP0_10_ENTRYHI_virtualAddress <= excAddr(39 downto 13);
-               COP0_10_ENTRYHI_region         <= excAddr(63 downto 62);
-               
+
                COP0_4_CONTEXT_BADVPN          <= excAddr(31 downto 13);
-               
-               COP0_20_XCONTEXT_Region        <= excAddr(63 downto 62);
-               COP0_20_XCONTEXT_BadVPN        <= excAddr(39 downto 13);
+
+               if (ADDR32_ONLY) then
+                  -- See the generic. The upper half is a sign-extension of
+                  -- bit 31 by construction, so it carries no information and
+                  -- is driven from that one bit instead of from the adder.
+                  -- EntryHi's VPN2 is bits 31 downto 13 in 32-bit mode; the
+                  -- bits above it are the 64-bit extension and read zero.
+                  -- XContext is not written at all.
+                  COP0_8_BADVIRTUALADDRESS(63 downto 32) <= (others => excAddr(31));
+                  COP0_8_BADVIRTUALADDRESS(31 downto 0)  <= excAddr(31 downto 0);
+
+                  COP0_10_ENTRYHI_virtualAddress(26 downto 19) <= (others => '0');
+                  COP0_10_ENTRYHI_virtualAddress(18 downto 0)  <= excAddr(31 downto 13);
+                  COP0_10_ENTRYHI_region                       <= (others => '0');
+               else
+                  COP0_8_BADVIRTUALADDRESS       <= excAddr;
+
+                  COP0_10_ENTRYHI_virtualAddress <= excAddr(39 downto 13);
+                  COP0_10_ENTRYHI_region         <= excAddr(63 downto 62);
+
+                  COP0_20_XCONTEXT_Region        <= excAddr(63 downto 62);
+                  COP0_20_XCONTEXT_BadVPN        <= excAddr(39 downto 13);
+               end if;
             end if;
             
             -- tlb
@@ -1307,8 +1463,8 @@ begin
                            end if;
                            
                            TLB_fetchDirty <= TLB_dirty;
-                           
                            TLB_fetchRandom <= TLBREAD_random;
+
                            
                            if (TLBState = TLBINSTR) then
                               TLB_Instr_fetchDone <= '1';
@@ -1477,6 +1633,14 @@ begin
    TLBREAD_region   <= unsigned(TLBMEM_readData(99 downto 98));
    TLBREAD_random   <= TLBMEM_readData(100);
    
+<<<<<<< KI
+   -- A stock N64 exposes a 29-bit physical bus, so the console path masks
+   -- TLB PFNs as before. Aleck64 software deliberately maps full 32-bit
+   -- physical regions at C0000000, C0800000 and D0000000; truncating those
+   -- aliases input/video/board RAM onto ordinary N64 memory.
+   TLB_fetchAddrOutMasked <= TLB_fetchAddrOut when ALECK64 = '1' else
+                             "000" & TLB_fetchAddrOut(28 downto 0);
+=======
    -- SGI: was `"000" & TLB_fetchAddrOut(28 downto 0)`. Upstream truncates every
    -- TLB translation to 29 bits because the N64's whole physical address space
    -- is 512 MB, so nothing there can notice. On an IP24 it is fatal: high local
@@ -1487,6 +1651,7 @@ begin
    -- R4000/R4400 forms a 36-bit physical address from the PFN and truncates
    -- nothing; 32 bits is this core's limit and is the right one to keep.
    TLB_fetchAddrOutMasked <= TLB_fetchAddrOut;
+>>>>>>> OURS
    
    icpu_TLB_instr : entity work.cpu_TLB_instr
    port map
@@ -1520,12 +1685,16 @@ begin
       TLB_fetchExcInvalid  => TLB_fetchExcInvalid,  
       TLB_fetchExcNotFound => TLB_fetchExcNotFound,
       TLB_fetchCached      => TLB_fetchCached,     
-      TLB_fetchRandom      => TLB_fetchRandom, 
+      TLB_fetchRandom      => TLB_fetchRandom,
       TLB_fetchSource      => TLB_fetchSource,
       TLB_fetchAddrOut     => TLB_fetchAddrOutMasked 
    );
    
    icpu_TLB_data : entity work.cpu_TLB_data
+   generic map
+   (
+      ADDR32_ONLY => ADDR32_ONLY
+   )
    port map
    (
       clk93                => clk93,          
@@ -1611,6 +1780,161 @@ begin
    end process;
 
 
+<<<<<<< KI
+   debug_cause(16)           <= COP0_12_SR_exceptionLevel;
+   debug_cause(17)           <= COP0_12_SR_errorLevel;
+   debug_cause(19 downto 18) <= COP0_12_SR_privilegeMode;
+   debug_cause(6 downto 2)   <= COP0_13_CAUSE_exceptionCode;
+   debug_cause(15 downto 8)  <= COP0_13_CAUSE_interruptPending;
+   debug_cause(29 downto 28) <= COP0_13_CAUSE_coprocessorError;
+   debug_cause(31)           <= COP0_13_CAUSE_branchDelay;
+   -- The three Status bits that decide whether an interrupt can be TAKEN, in
+   -- the spare bits of the same word. IP alone cannot answer that, and the FMV
+   -- question is now specifically whether the pipeline redirected itself:
+   --
+   --   bit 0     IE    global interrupt enable
+   --   bit 1     BEV   1 selects the BFC0xxxx exception vectors
+   --   27:20     IM    per-line interrupt mask
+   --
+   -- With IE, IM and IP together a "pending but masked" interrupt can be told
+   -- from one that should have been serviced, which is the difference between
+   -- a missed vector and a spurious redirect.
+   -- Bits 7 and 30 are architecturally zero. Driving them keeps debug_cause
+   -- free of X in simulation, where an undriven bit poisons any comparison a
+   -- bench makes against the whole word.
+   debug_cause(7)            <= '0';
+   debug_cause(30)           <= '0';
+   debug_cause(0)            <= COP0_12_SR_interruptEnable;
+   debug_cause(1)            <= COP0_12_SR_vectorLocation;
+   debug_cause(27 downto 20) <= COP0_12_SR_interruptMask;
+   -- EPC is 64-bit; the low half is the instruction address.
+   debug_epc                 <= COP0_14_EPC(31 downto 0);
+
+   -- BadVAddr is written by the exception process above from
+   -- TLB_Data_fetchAddrIn, so the low half is the faulting data address.
+   debug_badvaddr            <= COP0_8_BADVIRTUALADDRESS(31 downto 0);
+
+   debug_tlb_census(31 downto 20) <= tlbexc_dr_count;
+   debug_tlb_census(19 downto 12) <= tlbexc_dw_count;
+   debug_tlb_census(11 downto  4) <= tlbexc_ir_count;
+   debug_tlb_census(3 downto 1)   <= (others => '0');
+   debug_tlb_census(0)            <= tlbexc_first_miss;
+   debug_tlb_exc_stb              <= tlbexc_data_stb;
+
+   debug_ds_count                 <= ds_count_reg;
+   debug_ds_first                 <= ds_first_reg;
+   debug_eret_epc                 <= eret_epc_reg;
+   debug_eret_target              <= eret_target_reg;
+   debug_eret_flags(31 downto 16) <= eret_count_reg;
+   debug_eret_flags(15 downto 4)  <= (others => '0');
+   debug_eret_flags(3)            <= eret_erl_reg;
+   debug_eret_flags(2)            <= eret_exl_reg;
+   debug_eret_flags(1)            <= eret_bev_reg;
+   debug_eret_flags(0)            <= eret_ie_reg;
+
+   -- The eret condition mirrors the one that actually performs the eret at the
+   -- "-- eret" comment below, plus the stall gate, and is edge detected: `eret`
+   -- is a level and holds across a stall, so without the edge one eret would
+   -- be counted many times.
+   --
+   -- The target is recomputed here from ERL rather than read back from the
+   -- eretPC output port. Reading an out port is legal in VHDL-2008 but the
+   -- synthesis flow does not necessarily compile this file as 2008, and a
+   -- diagnostic is not worth that risk.
+   --
+   -- Every signal here is written by this process and no other.
+   eret_capture_proc : process (clk93)
+      variable eret_now : std_logic;
+   begin
+      if rising_edge(clk93) then
+         if (reset = '1') then
+            eret_prev       <= '0';
+            eret_epc_reg    <= (others => '0');
+            eret_target_reg <= (others => '0');
+            eret_count_reg  <= (others => '0');
+            eret_erl_reg    <= '0';
+            eret_exl_reg    <= '0';
+            eret_bev_reg    <= '0';
+            eret_ie_reg     <= '0';
+         else
+            eret_now := '0';
+            if (eret = '1' and exception = '0' and exceptionStage1 = '0' and stall = 0) then
+               eret_now := '1';
+            end if;
+            eret_prev <= eret_now;
+
+            if (eret_now = '1' and eret_prev = '0') then
+               eret_epc_reg    <= COP0_14_EPC(31 downto 0);
+               if (COP0_12_SR_errorLevel = '1') then
+                  eret_target_reg <= COP0_30_EPCERROR(31 downto 0);
+               else
+                  eret_target_reg <= COP0_14_EPC(31 downto 0);
+               end if;
+               eret_erl_reg <= COP0_12_SR_errorLevel;
+               eret_exl_reg <= COP0_12_SR_exceptionLevel;
+               eret_bev_reg <= COP0_12_SR_vectorLocation;
+               eret_ie_reg  <= COP0_12_SR_interruptEnable;
+               if (eret_count_reg /= x"FFFF") then
+                  eret_count_reg <= eret_count_reg + 1;
+               end if;
+            end if;
+         end if;
+      end if;
+   end process;
+
+   -- The exception inputs are levels that hold across a stall, so every one is
+   -- edge-detected. Counts saturate rather than wrap: a wrapped count reads as
+   -- a small number and would be indistinguishable from a healthy one.
+   tlb_census_proc : process (clk93)
+   begin
+      if rising_edge(clk93) then
+         tlbexc_data_stb <= '0';
+
+         if (reset = '1') then
+            tlbexc_dr_prev     <= '0';
+            tlbexc_dw_prev     <= '0';
+            tlbexc_ir_prev     <= '0';
+            tlbexc_dr_count    <= (others => '0');
+            tlbexc_dw_count    <= (others => '0');
+            tlbexc_ir_count    <= (others => '0');
+            tlbexc_first_miss  <= '0';
+            tlbexc_first_seen  <= '0';
+         else
+            tlbexc_dr_prev <= TLB_ExcDataRead;
+            tlbexc_dw_prev <= TLB_ExcDataWrite;
+            tlbexc_ir_prev <= TLB_ExcInstrRead;
+
+            if (TLB_ExcDataRead = '1' and tlbexc_dr_prev = '0') then
+               if (tlbexc_dr_count /= x"FFF") then
+                  tlbexc_dr_count <= tlbexc_dr_count + 1;
+               end if;
+               tlbexc_data_stb <= '1';
+               if (tlbexc_first_seen = '0') then
+                  tlbexc_first_seen <= '1';
+                  tlbexc_first_miss <= TLB_ExcDataMiss;
+               end if;
+            end if;
+
+            if (TLB_ExcDataWrite = '1' and tlbexc_dw_prev = '0') then
+               if (tlbexc_dw_count /= x"FF") then
+                  tlbexc_dw_count <= tlbexc_dw_count + 1;
+               end if;
+               tlbexc_data_stb <= '1';
+               if (tlbexc_first_seen = '0') then
+                  tlbexc_first_seen <= '1';
+                  tlbexc_first_miss <= TLB_ExcDataMiss;
+               end if;
+            end if;
+
+            if (TLB_ExcInstrRead = '1' and tlbexc_ir_prev = '0') then
+               if (tlbexc_ir_count /= x"FF") then
+                  tlbexc_ir_count <= tlbexc_ir_count + 1;
+               end if;
+            end if;
+         end if;
+      end if;
+   end process;
+=======
    -- SGI: the three registers that say what an exception was, live rather than
    -- latched, for the harness to sample on dbg_exc. THIS MUST STAY OUTSIDE the
    -- `-- synthesis translate_off` below: everything in there is the savestate
@@ -1639,6 +1963,7 @@ begin
    dbg_exc_code <= COP0_13_CAUSE_exceptionCode;
    dbg_exc_epc  <= COP0_14_EPC(31 downto 0);
    dbg_exc_bad  <= COP0_8_BADVIRTUALADDRESS(31 downto 0);
+>>>>>>> OURS
 
    -- synthesis translate_off
    cop0_export(0)(5 downto 0)    <= COP0_0_INDEX_tlbEntry;
@@ -1702,7 +2027,7 @@ begin
    cop0_export(13)(31)           <= COP0_13_CAUSE_branchDelay;   
    
    cop0_export(14)               <= COP0_14_EPC;
-   cop0_export(15)(11 downto 0)  <= x"B22";
+   cop0_export(15)(15 downto 0)  <= COP0_PRID_R4600;
    
    CONFIG_K0 <= COP0_16_CONFIG_cu(0) & COP0_16_CONFIG_cacheAlgoKSEG0;   -- SGI
 
