@@ -481,12 +481,12 @@ begin
          when x"2" => -- cfc1
             transfer_data <= (others => '0');
             if (transfer_RD = 0) then
-               -- SGI: FIR. The R4300's FPU reports implementation 0x0A; an
-               -- R4000/R4400 FPU reports 0x05, which is what FIR_R4000 in the
-               -- test suite expects and what an Indy has. Kept in step with
-               -- cpu_cop0.vhd's PRESENT_AS_R4400 by hand: threading a generic
-               -- down here is not worth a single nibble.
-               transfer_data(11 downto 8) <= x"5";  -- revision
+               -- SGI: FIR. The R4300's FPU reports implementation 0x0A; the
+               -- R4600's reports 0x20 with revision 2.0, matching its PRId, and
+               -- that is what `hinv` names the FPU from. Kept in step with
+               -- cpu_cop0.vhd's PRESENT_AS_R4600 by hand: threading a generic
+               -- down here is not worth a single byte.
+               transfer_data(15 downto 0) <= x"2020";  -- imp 0x20, rev 2.0
             end if;
             if (transfer_RD = 31) then
                transfer_data(24 downto 0) <= csr; 

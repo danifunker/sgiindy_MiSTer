@@ -74,13 +74,9 @@ entity cpu is
       DISABLE_DTLBMINI      : in  std_logic;
       ALECK64               : in  std_logic;
 
-<<<<<<< KI
-      irqRequest            : in  std_logic_vector(1 downto 0);
-=======
       -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
       -- separate N64 lines - see cpu_cop0.vhd where it is assigned.
       irqLines              : in  std_logic_vector(4 downto 0);
->>>>>>> OURS
       cpuPaused             : in  std_logic;
       
       error_instr           : out std_logic := '0';
@@ -89,7 +85,6 @@ entity cpu is
       error_exception       : out std_logic := '0';
       error_fifo            : out std_logic := '0';
       error_TLB             : out std_logic := '0';
-<<<<<<< KI
       debug_fetch_pc        : out std_logic_vector(31 downto 0) := (others => '0');
       debug_retired         : out std_logic_vector(31 downto 0) := (others => '0');
       -- Bitstream reader source pointer used by the frozen fault trace.
@@ -130,8 +125,6 @@ entity cpu is
       debug_trace_frozen      : out std_logic := '0';
       debug_trace_trigger     : in  std_logic := '0';
 
-=======
-
       -- SGI: the PC of the instruction entering decode, and a strobe that says
       -- one entered this clock. This is OUTSIDE the savestate export's
       -- `-- synthesis translate_off` block on purpose: pcOld2..4 and
@@ -159,7 +152,6 @@ entity cpu is
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
       dbg_retire            : out std_logic := '0';
       
->>>>>>> OURS
       mem_request           : out std_logic := '0';
       mem_rnw               : out std_logic := '0'; 
       mem_address           : buffer unsigned(31 downto 0) := (others => '0'); 
@@ -196,7 +188,6 @@ end entity;
 
 architecture arch of cpu is
 
-<<<<<<< KI
    constant FB0_LOW  : unsigned(31 downto 0) := x"00030000";
    constant FB0_HIGH : unsigned(31 downto 0) := x"00055800";
    constant FB1_LOW  : unsigned(31 downto 0) := x"00058000";
@@ -315,13 +306,11 @@ architecture arch of cpu is
       end case;
       return result;
    end function;
-     
-=======
-   -- SGI: kept in step with cpu_cop0.vhd's constant of the same name. See its
-   -- comment there for what claiming to be an R4400 commits the core to.
-   constant PRESENT_AS_R4400 : boolean := true;
 
->>>>>>> OURS
+   -- SGI: kept in step with cpu_cop0.vhd's constant of the same name. See its
+   -- comment there for what claiming to be an R4600 commits the core to.
+   constant PRESENT_AS_R4600 : boolean := true;
+
    -- register file
    signal regs_address_a               : std_logic_vector(4 downto 0);
    signal regs_data_a                  : std_logic_vector(63 downto 0);
@@ -493,9 +482,9 @@ architecture arch of cpu is
    signal mem_finished_read            : std_logic := '0';
    signal mem_finished_dataRead        : std_logic_vector(63 downto 0);
           
-   signal writefifo_Din                : std_logic_vector(115 downto 0) := (others => '0');
+   signal writefifo_Din                : std_logic_vector(107 downto 0) := (others => '0');
    signal writefifo_wr                 : std_logic := '0';
-   signal writefifo_Dout               : std_logic_vector(115 downto 0);
+   signal writefifo_Dout               : std_logic_vector(107 downto 0);
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
    signal writefifo_Full               : std_logic;
@@ -516,61 +505,27 @@ architecture arch of cpu is
    signal writefifo_issue_wb           : std_logic := '0';
    signal datacache_wb_busy            : std_logic;
    signal datacache_debug_state        : std_logic_vector(3 downto 0);
-          
-   -- The transaction FIFO belongs entirely to clk93.  Transfer its wide
-   -- payload to clk1x through a bundled-data request/acknowledge mailbox so
-   -- address, data and control bits can never be sampled from different FIFO
-   -- entries while the clocks drift relative to one another.
-   signal write_cdc_data_93            : std_logic_vector(115 downto 0) := (others => '0');
-   signal write_cdc_req_93             : std_logic := '0';
-   signal write_cdc_busy_93            : std_logic := '0';
-   signal write_cdc_ack_1x             : std_logic := '0';
-   signal write_cdc_ack_meta_93        : std_logic := '0';
-   signal write_cdc_ack_sync_93        : std_logic := '0';
-   signal write_cdc_req_meta_1x        : std_logic := '0';
-   signal write_cdc_req_sync_1x        : std_logic := '0';
-   signal write_cdc_req_seen_1x        : std_logic := '0';
 
-   -- Read-response mailbox from the memory clock domain to the CPU clock
-   -- domain. The payload remains stable until the CPU acknowledges it.
-   signal response_cdc_data_1x         : std_logic_vector(104 downto 0) := (others => '0');
-   signal response_cdc_req_1x          : std_logic := '0';
-   signal response_cdc_busy_1x         : std_logic := '0';
-   signal response_cdc_ack_93          : std_logic := '0';
-   signal response_cdc_ack_meta_1x     : std_logic := '0';
-   signal response_cdc_ack_sync_1x     : std_logic := '0';
-   signal response_cdc_req_meta_93     : std_logic := '0';
-   signal response_cdc_req_sync_93     : std_logic := '0';
-   signal response_cdc_req_seen_93     : std_logic := '0';
-   signal response_cdc_pending_93      : std_logic := '0';
-   signal response_cdc_deliver_93      : std_logic := '0';
-   signal response_cdc_class_93        : std_logic := '0';
-
-   -- Independent clk93-domain ownership scoreboard. The main transaction
-   -- FIFO carries a sequence tag to clk1x and back; this queue records what
-   -- was accepted before that CDC path, so a lost, duplicated, reordered or
-   -- misclassified response cannot validate itself with its own metadata.
-   type t_read_meta_tag is array (0 to 15) of std_logic_vector(7 downto 0);
-   type t_read_meta_class is array (0 to 15) of std_logic;
-   type t_read_meta_address is array (0 to 15) of std_logic_vector(31 downto 0);
-   signal read_meta_tag               : t_read_meta_tag := (others => (others => '0'));
-   signal read_meta_class             : t_read_meta_class := (others => '0');
-   signal read_meta_address           : t_read_meta_address := (others => (others => '0'));
-   signal read_meta_wrptr             : unsigned(3 downto 0) := (others => '0');
-   signal read_meta_rdptr             : unsigned(3 downto 0) := (others => '0');
-   signal read_meta_count             : integer range 0 to 16 := 0;
-   signal read_sequence_93            : unsigned(7 downto 0) := (others => '0');
-   signal read_meta_push              : std_logic;
-   signal read_meta_pop               : std_logic;
-   signal read_meta_tag_mismatch      : std_logic;
-   signal read_meta_class_mismatch    : std_logic;
-   signal read_meta_address_mismatch  : std_logic;
-   signal debug_response_status_reg   : std_logic_vector(31 downto 0) := (others => '0');
-
-   -- Active clk1x transaction metadata is registered with the bus command,
-   -- then held until mem_done builds the response mailbox payload.
-   signal memory_read_tag_1x          : std_logic_vector(7 downto 0) := (others => '0');
-   signal memory_read_address_1x      : std_logic_vector(31 downto 0) := (others => '0');
+   -- SGI: NO CLOCK-DOMAIN CROSSING. Killer Instinct runs this file's clk93
+   -- against a 50 MHz clk1x memory bridge and moved every transaction through
+   -- a bundled-data request/acknowledge mailbox each way (two synchroniser
+   -- flops per direction, a response mailbox, and a 16-entry read-ownership
+   -- scoreboard). rtl/cpu/r4300_wrap.vhd ties clk1x, clk2x and clk93 to the
+   -- ONE system clock, where that machinery is ~7 dead clocks on every
+   -- uncached access and every cache miss - and the L1 miss cost IS this
+   -- machine's sluggishness (docs/39, auto-memory cpu-throughput-measured).
+   -- So the FIFO is consumed the way the N64 base did it: the clk1x side reads
+   -- the fall-through FIFO directly and pulses writefifo_rd_1x, the clk93 side
+   -- edge-detects that into the pop, and a completed read is delivered one
+   -- clock after mem_done straight off mem_dataRead (rtl/cpu/r4300_bus.sv
+   -- already presents it address-shifted, so KI's read4_uncachedRot is gone
+   -- too). KI's scheduler above the FIFO - the held payload, the writeback
+   -- staging queue, the retained refill and stage-1 requests, the stage-4
+   -- ready/valid handshake - is kept as is: it is what makes the 32-byte
+   -- line's four-beat writeback safe against FIFO pressure.
+   signal writefifo_rd_1x              : std_logic := '0';
+   signal writefifo_rd_93              : std_logic := '0';
+   signal mem_done_1                   : std_logic := '0';
           
    -- common   
    type t_memstate is
@@ -1017,7 +972,6 @@ architecture arch of cpu is
    signal privilegeMode                : unsigned(1 downto 0);
    signal kusegUnmapped                : std_logic;
    signal bit64region                  : std_logic;
-<<<<<<< KI
    -- Region decode width. bit64region is Status.KX/SX/UX via cpu_cop0; with
    -- ADDR32_ONLY it is forced to '0' at elaboration so the 64-bit branch is
    -- never built.
@@ -1032,7 +986,6 @@ architecture arch of cpu is
    -- The KI wrapper enables ADDR32_ONLY because both supported games execute
    -- with 32-bit virtual addresses and keep Status.KX/SX/UX clear.
    signal region64                     : std_logic;
-=======
    -- SGI: the PC carried down the pipeline alongside pcOld2..4, but OUTSIDE
    -- the `-- synthesis translate_off` blocks those live in, so it reaches the
    -- netlist GHDL lowers for Verilator. dbg_pc taps DECODE, which re-presents
@@ -1046,7 +999,6 @@ architecture arch of cpu is
    signal dbg_exc_code_u               : unsigned(4 downto 0);    -- SGI
    signal dbg_exc_epc_u                : unsigned(31 downto 0);   -- SGI
    signal dbg_exc_bad_u                : unsigned(31 downto 0);   -- SGI
->>>>>>> OURS
    signal irqTrigger                   : std_logic;
    signal TLBDone                      : std_logic;
    
@@ -1139,9 +1091,6 @@ architecture arch of cpu is
    signal mem4_writeMask               : std_logic_vector(7 downto 0) := (others => '0');    
    
    signal read4_dataReadData           : unsigned(63 downto 0);
-   signal read4_uncachedRot            : unsigned(1 downto 0);
-   signal read4_uncachedData           : unsigned(63 downto 0);
-   signal mem_finished_dataRot         : std_logic_vector(63 downto 0);
    signal read4_dataReadRot64          : unsigned(63 downto 0);
    signal read4_dataReadRot32          : unsigned(31 downto 0);
    signal read4_Addr                   : unsigned(31 downto 0);
@@ -1608,32 +1557,15 @@ begin
       else executeMemUseCache;
 
    stall        <= '0' & stall4 & stall3 & stall2 & stall1;
-   read_meta_push <= writefifo_wr_accept and writefifo_Din(105);
-   read_meta_pop <= '1' when
-      (response_cdc_pending_93 = '0' and
-       response_cdc_deliver_93 = '0' and
-       response_cdc_req_sync_93 /= response_cdc_req_seen_93) else '0';
-   read_meta_tag_mismatch <= '1' when
-      response_cdc_data_1x(72 downto 65) /=
-        read_meta_tag(to_integer(read_meta_rdptr)) else '0';
-   read_meta_class_mismatch <= '1' when
-      response_cdc_data_1x(64) /=
-        read_meta_class(to_integer(read_meta_rdptr)) else '0';
-   read_meta_address_mismatch <= '1' when
-      response_cdc_data_1x(104 downto 73) /=
-        read_meta_address(to_integer(read_meta_rdptr)) else '0';
    
    process (clk93)
    begin
       if (rising_edge(clk93)) then
       
          writefifo_Rd          <= '0';
-         write_cdc_ack_meta_93 <= write_cdc_ack_1x;
-         write_cdc_ack_sync_93 <= write_cdc_ack_meta_93;
-         response_cdc_req_meta_93 <= response_cdc_req_1x;
-         response_cdc_req_sync_93 <= response_cdc_req_meta_93;
-         mem_finished_instr       <= '0';
-         mem_finished_read        <= '0';
+         writefifo_rd_93       <= writefifo_rd_1x;   -- SGI: no CDC - see the signal declarations
+         mem_finished_instr    <= '0';
+         mem_finished_read     <= '0';
          
          if (reset_93 = '1') then
          
@@ -1645,93 +1577,13 @@ begin
             datacache_wb_fifo_count   <= 0;
             writefifo_issue_pending <= '0';
             writefifo_issue_wb      <= '0';
-            write_cdc_data_93         <= (others => '0');
-            write_cdc_req_93          <= '0';
-            write_cdc_busy_93         <= '0';
-            write_cdc_ack_meta_93     <= '0';
-            write_cdc_ack_sync_93     <= '0';
-            response_cdc_req_meta_93  <= '0';
-            response_cdc_req_sync_93  <= '0';
-            response_cdc_req_seen_93  <= '0';
-            response_cdc_pending_93   <= '0';
-            response_cdc_deliver_93   <= '0';
-             response_cdc_class_93     <= '0';
-             response_cdc_ack_93       <= '0';
-             mem_finished_dataRead     <= (others => '0');
-             mem_finished_dataRot      <= (others => '0');
-             read_meta_wrptr           <= (others => '0');
-             read_meta_rdptr           <= (others => '0');
-             read_meta_count           <= 0;
-             read_sequence_93          <= (others => '0');
-             debug_response_status_reg   <= (others => '0');
+            mem_done_1                <= '0';
+            mem_finished_dataRead     <= (others => '0');
 
           else
 
-             -- Record every accepted read independently of the request CDC.
-             -- A depth of 16 covers the seven-entry transaction FIFO plus
-             -- both CDC mailboxes and the active memory transaction.
-             if (read_meta_push = '1') then
-                if (read_meta_count < 16 or read_meta_pop = '1') then
-                   read_meta_tag(to_integer(read_meta_wrptr)) <=
-                      writefifo_Din(115 downto 108);
-                   read_meta_class(to_integer(read_meta_wrptr)) <=
-                      writefifo_Din(104);
-                   read_meta_address(to_integer(read_meta_wrptr)) <=
-                      writefifo_Din(95 downto 64);
-                   read_meta_wrptr <= read_meta_wrptr + 1;
-                elsif (debug_response_status_reg(31) = '0') then
-                   debug_response_status_reg <=
-                      '1' & '0' & '1' & "000" &
-                      '0' & '0' & x"00" & writefifo_Din(115 downto 108) &
-                      "10000" & "000";
-                end if;
-                read_sequence_93 <= read_sequence_93 + 1;
-             end if;
-
-             if (read_meta_pop = '1') then
-                if (read_meta_count > 0) then
-                   read_meta_rdptr <= read_meta_rdptr + 1;
-                   if (debug_response_status_reg(31) = '0' and
-                       (read_meta_tag_mismatch = '1' or
-                        read_meta_class_mismatch = '1' or
-                        read_meta_address_mismatch = '1')) then
-                      debug_response_status_reg <=
-                         '1' & '0' & '0' &
-                         read_meta_address_mismatch &
-                         read_meta_class_mismatch &
-                         read_meta_tag_mismatch &
-                         read_meta_class(to_integer(read_meta_rdptr)) &
-                         response_cdc_data_1x(64) &
-                         read_meta_tag(to_integer(read_meta_rdptr)) &
-                         response_cdc_data_1x(72 downto 65) &
-                         std_logic_vector(to_unsigned(read_meta_count, 5)) &
-                         "000";
-                   end if;
-                elsif (debug_response_status_reg(31) = '0') then
-                   debug_response_status_reg <=
-                      '1' & '1' & '0' & "000" &
-                      '0' & response_cdc_data_1x(64) &
-                      x"00" & response_cdc_data_1x(72 downto 65) &
-                      "00000" & "000";
-                end if;
-             end if;
-
-             if (read_meta_push = '1' and read_meta_pop = '0' and
-                 read_meta_count < 16) then
-                read_meta_count <= read_meta_count + 1;
-             elsif (read_meta_push = '0' and read_meta_pop = '1' and
-                    read_meta_count > 0) then
-                read_meta_count <= read_meta_count - 1;
-             end if;
-         
-            if (write_cdc_busy_93 = '1') then
-               if (write_cdc_ack_sync_93 = write_cdc_req_93) then
-                  write_cdc_busy_93 <= '0';
-               end if;
-            elsif (writefifo_Empty = '0') then
-               write_cdc_data_93 <= writefifo_Dout;
-               write_cdc_req_93  <= not write_cdc_req_93;
-               write_cdc_busy_93 <= '1';
+            -- SGI: the pop, one clock after the clk1x side took the head.
+            if (writefifo_rd_93 = '0' and writefifo_rd_1x = '1') then
                writefifo_Rd <= '1';
             end if;
          
@@ -1791,10 +1643,10 @@ begin
                   mem1_cache_latched   <= instrcache_request;
                   if (instrcache_request = '1') then
                      mem1_address_latched <=
-                        "000" & mem1_address(28 downto 5) & "00000";
+                        mem1_address(31 downto 5) & "00000";   -- SGI: 32-bit physical
                   else
                      mem1_address_latched <=
-                        "000" & mem1_address(28 downto 0);
+                        mem1_address;                          -- SGI: already physical, all 32 bits
                   end if;
                end if;            
             end if;
@@ -1819,7 +1671,6 @@ begin
                    writefifo_Din(105)           <= '0';
                    writefifo_Din(106)           <= '1';
                    writefifo_Din(107)           <= '0';
-                   writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
                end if;
             elsif (datacache_wb_ena = '1') then
                -- Reserve this scheduler cycle while the first unacknowledged
@@ -1834,7 +1685,6 @@ begin
                   writefifo_Din(105)           <= '1';
                   writefifo_Din(106)           <= '1';
                   writefifo_Din(107)           <= '1';
-                  writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
 
                   -- A cache cannot normally issue a second miss while its
                   -- first is outstanding, but retaining a simultaneous pulse
@@ -1856,17 +1706,16 @@ begin
                   writefifo_Din(105)           <= '1';
                   writefifo_Din(106)           <= mem1_cache_latched;
                   writefifo_Din(107)           <= mem1_cache_latched;
-                  writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
 
                   if (mem1_request = '1' or instrcache_request = '1') then
                      mem1_request_latched <= '1';
                      mem1_cache_latched   <= instrcache_request;
                      if (instrcache_request = '1') then
                         mem1_address_latched <=
-                           "000" & mem1_address(28 downto 5) & "00000";
+                           mem1_address(31 downto 5) & "00000";   -- SGI: 32-bit physical
                      else
                         mem1_address_latched <=
-                           "000" & mem1_address(28 downto 0);
+                           mem1_address;                          -- SGI: already physical, all 32 bits
                      end if;
                   else
                      mem1_request_latched <= '0';
@@ -1883,7 +1732,6 @@ begin
                 writefifo_Din(105)           <= '0';
                 writefifo_Din(106)           <= mem4_req64;
                 writefifo_Din(107)           <= '0';
-                writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
              elsif (mem4_request = '1' and writefifo_mem4_ready = '1') then
                 writefifo_issue_pending      <= '1';
                 writefifo_issue_wb           <= '0';
@@ -1892,7 +1740,6 @@ begin
                writefifo_Din(105)           <= '1';
                writefifo_Din(106)           <= mem4_req64;
                writefifo_Din(107)           <= '0';
-               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
              elsif (datacache_request = '1' and
                     writefifo_schedule_ready = '1') then
                 writefifo_issue_pending      <= '1';
@@ -1901,75 +1748,35 @@ begin
                   std_logic_vector(datacache_reqAddr(31 downto 5)) & "00000";
                writefifo_Din(104)           <= '1';
                writefifo_Din(105)           <= '1';
-<<<<<<< KI
                writefifo_Din(106)           <= '1';
                writefifo_Din(107)           <= '1';
-               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
              elsif ((mem1_request = '1' or instrcache_request = '1') and
                     writefifo_schedule_ready = '1') then
                 writefifo_issue_pending      <= '1';
                 writefifo_issue_wb           <= '0';
-                writefifo_Din( 95 downto 64) <=
-                  "000" & std_logic_vector(mem1_address(28 downto 0));
-=======
-               writefifo_Din(106)           <= mem4_req64;
-               writefifo_Din(107)           <= datacache_request;
-               if (datacache_request = '1') then
-                  writefifo_Din( 95 downto 64) <= std_logic_vector(datacache_reqAddr(31 downto 4)) & "0000";
-               end if;
-            elsif (mem1_request = '1' or instrcache_request = '1') then
-               writefifo_wr                 <= '1';
-               writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical
->>>>>>> OURS
+                writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical, all 32 bits
                writefifo_Din(104)           <= '0';
                writefifo_Din(105)           <= '1';
                writefifo_Din(106)           <= instrcache_request;
                writefifo_Din(107)           <= instrcache_request;
-               writefifo_Din(115 downto 108) <= std_logic_vector(read_sequence_93);
                if (instrcache_request = '1') then
-<<<<<<< KI
                   writefifo_Din( 95 downto 64) <=
-                     "000" & std_logic_vector(mem1_address(28 downto 5)) & "00000";
+                     std_logic_vector(mem1_address(31 downto 5)) & "00000";   -- SGI: 32-bit physical
                end if;
-=======
-                  writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
-               end if;  
-            elsif (mem1_request_latched = '1') then
-               mem1_request_latched         <= '0';
-               writefifo_wr                 <= '1';
-               writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address);   -- SGI: already physical
-               writefifo_Din(104)           <= '0';
-               writefifo_Din(105)           <= '1';
-               writefifo_Din(106)           <= '0';
-               writefifo_Din(107)           <= mem1_cache_latched;
-               if (mem1_cache_latched = '1') then
-                  writefifo_Din( 95 downto 64) <= std_logic_vector(mem1_address(31 downto 5)) & "00000";  -- SGI
-               end if;  
->>>>>>> OURS
             end if;
             
-            -- The memory-domain source holds this mailbox payload until the
-            -- acknowledgement returns. Capture the raw word first, register
-            -- the load-aligned copy on the next cycle, and only then pulse the
-            -- appropriate completion. This keeps completion, transaction type
-            -- and data atomic across the clk1x-to-clk93 boundary.
-            if (response_cdc_deliver_93 = '1') then
-               if (response_cdc_class_93 = '1') then
-                  mem_finished_read <= '1';
+            -- SGI: a completed access, one clock after mem_done, off the word
+            -- rtl/cpu/r4300_bus.sv presents on that same edge.
+            mem_finished_dataRead <= mem_dataRead;
+            mem_done_1            <= mem_done;
+            if (mem_done = '1' and mem_done_1 = '0') then
+               if (memoryMuxStage4 = '1') then
+                  if (mem_rnw = '1') then
+                     mem_finished_read <= '1';
+                  end if;
                else
                   mem_finished_instr <= '1';
                end if;
-               response_cdc_ack_93     <= response_cdc_req_seen_93;
-               response_cdc_deliver_93 <= '0';
-            elsif (response_cdc_pending_93 = '1') then
-               mem_finished_dataRot    <= std_logic_vector(read4_uncachedData);
-               response_cdc_pending_93 <= '0';
-               response_cdc_deliver_93 <= '1';
-            elsif (response_cdc_req_sync_93 /= response_cdc_req_seen_93) then
-               mem_finished_dataRead    <= response_cdc_data_1x(63 downto 0);
-               response_cdc_class_93    <= response_cdc_data_1x(64);
-               response_cdc_req_seen_93 <= response_cdc_req_sync_93;
-               response_cdc_pending_93  <= '1';
             end if;
             
          end if;
@@ -1980,7 +1787,7 @@ begin
    generic map
    (
       SIZE              => 8,
-      DATAWIDTH         => 116, -- existing 108-bit transaction plus 8-bit read sequence tag
+      DATAWIDTH         => 108, -- 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache
       NEARFULLDISTANCE  => 4
    )
    port map
@@ -1997,7 +1804,7 @@ begin
 
    -- Keep the established full indication and make the first ownership
    -- failure sticky through the existing protocol-error output.
-   error_fifo <= writefifo_Full or debug_response_status_reg(31);
+   error_fifo <= writefifo_Full;
 
    -- Pending is the producer-valid bit. The payload is loaded once and held
    -- unchanged until the FIFO acknowledges it.
@@ -2067,67 +1874,47 @@ begin
    process (clk1x)
    begin
       if (rising_edge(clk1x)) then
-      
-         write_cdc_req_meta_1x <= write_cdc_req_93;
-         write_cdc_req_sync_1x <= write_cdc_req_meta_1x;
-         response_cdc_ack_meta_1x <= response_cdc_ack_93;
-         response_cdc_ack_sync_1x <= response_cdc_ack_meta_1x;
-         mem_request           <= '0';
-      
+
+         writefifo_rd_1x <= '0';
+         mem_request     <= '0';
+
          if (reset_1x = '1') then
-         
-            memoryMuxStage4       <= '0'; 
+
+            memoryMuxStage4       <= '0';
             memstate              <= MEMSTATE_IDLE;
-            write_cdc_req_meta_1x <= '0';
-            write_cdc_req_sync_1x <= '0';
-            write_cdc_req_seen_1x <= '0';
-            write_cdc_ack_1x      <= '0';
-            response_cdc_data_1x     <= (others => '0');
-            response_cdc_req_1x      <= '0';
-             response_cdc_busy_1x     <= '0';
-             response_cdc_ack_meta_1x <= '0';
-             response_cdc_ack_sync_1x <= '0';
-             memory_read_tag_1x       <= (others => '0');
-             memory_read_address_1x   <= (others => '0');
-         
+
          else
 
-            if (response_cdc_busy_1x = '1' and
-                response_cdc_ack_sync_1x = response_cdc_req_1x) then
-               response_cdc_busy_1x <= '0';
-            end if;
-
             case (memstate) is
-               when MEMSTATE_IDLE => 
+               when MEMSTATE_IDLE =>
 
-                  if (ce_1x = '1' and response_cdc_busy_1x = '0') then
-                  
-                     if (write_cdc_req_sync_1x /= write_cdc_req_seen_1x) then
+                  if (ce_1x = '1') then
 
-                        write_cdc_req_seen_1x <= write_cdc_req_sync_1x;
-                        write_cdc_ack_1x      <= write_cdc_req_sync_1x;
+                     -- SGI: straight off the fall-through FIFO; see the
+                     -- signal declarations for why there is no mailbox here.
+                     if (writefifo_Empty = '0') then
+
+                        writefifo_rd_1x   <= '1';
                         memstate          <= MEMSTATE_BUSY;
                         mem_request       <= '1';
                         memoryMuxStage4   <= '1';
-                        mem_dataWrite     <= write_cdc_data_93(63 downto 0);
-                        mem_address       <= unsigned(write_cdc_data_93(95 downto 64));
-                        mem_writeMask     <= write_cdc_data_93(103 downto 96);
-                        memoryMuxStage4   <= write_cdc_data_93(104);
-                        mem_rnw           <= write_cdc_data_93(105);
-                        mem_req64         <= write_cdc_data_93(106);
-                        memory_read_tag_1x <= write_cdc_data_93(115 downto 108);
-                        memory_read_address_1x <= write_cdc_data_93(95 downto 64);
-                        
+                        mem_dataWrite     <= writefifo_Dout(63 downto 0);
+                        mem_address       <= unsigned(writefifo_Dout(95 downto 64));
+                        mem_writeMask     <= writefifo_Dout(103 downto 96);
+                        memoryMuxStage4   <= writefifo_Dout(104);
+                        mem_rnw           <= writefifo_Dout(105);
+                        mem_req64         <= writefifo_Dout(106);
+
                         mem_size          <= "001";
-                        
-                        if (write_cdc_data_93(104) = '1' and write_cdc_data_93(107) = '1') then
+
+                        if (writefifo_Dout(104) = '1' and writefifo_Dout(107) = '1') then
                            -- The KI data cache fills a 32-byte line as four
                            -- 64-bit DDR words (see cpu_datacache.vhd).
                            mem_size          <= "100";
                            datacache_active  <= '1';
                         end if;
-                        
-                        if (write_cdc_data_93(104) = '0' and write_cdc_data_93(107) = '1') then
+
+                        if (writefifo_Dout(104) = '0' and writefifo_Dout(107) = '1') then
                            mem_size          <= "100";
                            instrcache_active  <= '1';
                         end if;
@@ -2135,35 +1922,19 @@ begin
                      end if;
 
                   end if;
-                  
+
                when MEMSTATE_BUSY =>
-                  -- The FILL DATA the instruction cache is handed for that
-                  -- line - the last link before the opcode reaches decode.
-                  -- Captured in clk1x, the domain the bridge returns beats in
-                  -- (cpu_instrcache's fill path was rewritten to consume them
-                  -- here), so the first beat is unambiguous. Sampling a clk1x
-                  -- ready pulse from clk93 would land on beat 0 or beat 1
-                  -- depending on phase, and a probe that reports a different
-                  -- word run to run is worse than none.
-                  --
                   if (mem_done = '1') then
-                      if (mem_rnw = '1') then
-                         response_cdc_data_1x <=
-                            memory_read_address_1x & memory_read_tag_1x &
-                            memoryMuxStage4 & mem_dataRead;
-                        response_cdc_req_1x  <= not response_cdc_req_1x;
-                        response_cdc_busy_1x <= '1';
-                     end if;
                      memstate          <= MEMSTATE_IDLE;
                      if (memoryMuxStage4 = '1') then
                         datacache_active <= '0';
                      else
                         instrcache_active <= '0';
                      end if;
-                  end if;               
-                  
+                  end if;
+
             end case;
-            
+
          end if;
       end if;
    end process;
@@ -2356,26 +2127,19 @@ begin
       SS_reset          => SS_reset
    );
    
-<<<<<<< KI
+   kseg0_cached   <= '0' when (config_K0 = 2) else '1';   -- SGI
+
    fetchCache1 <= '0' when (INSTRCACHEON = '0') else
                   TLB_instrUseCache when (TLB_instrMapped1 = '1') else
-                  '1' when (FetchAddr1(31 downto 29) = "100") else  -- todo: only in kernelmode and only in 32bit mode
+                  kseg0_cached when (FetchAddr1(31 downto 29) = "100") else  -- SGI: was '1'. todo: only in kernelmode and only in 32bit mode
                   '0';
 
    fetchCache2 <= '0' when (INSTRCACHEON = '0') else
                   TLB_instrUseCache when (TLB_instrMapped2 = '1') else
-                  '1' when (FetchAddr2(31 downto 29) = "100") else  -- todo: only in kernelmode and only in 32bit mode
+                  kseg0_cached when (FetchAddr2(31 downto 29) = "100") else  -- SGI: was '1'. todo: only in kernelmode and only in 32bit mode
                   '0';
 
    fetchCache <= fetchCache2 when (FetchAddrSelect = '1') else fetchCache1;
-=======
-   kseg0_cached   <= '0' when (config_K0 = 2) else '1';   -- SGI
-
-   fetchCache     <= '0' when (INSTRCACHEON = '0') else
-                     TLB_instrUseCache when (TLB_instrMapped = '1') else
-                     kseg0_cached when (FetchAddr1(31 downto 29) = "100") else  -- SGI: was '1'. todo: only in kernelmode and only in 32bit mode
-                     '0';
->>>>>>> OURS
    
    FetchAddr <= FetchAddr2 when (FetchAddrSelect = '1') else FetchAddr1;
    
@@ -2470,16 +2234,10 @@ begin
                      opcode0        <= (others => '0');
                      useCached_data <= '0';
                   else
-<<<<<<< KI
-                     mem1_address    <= TLB_instrAddrOutLookup;
-                     useCached_data  <= TLB_instrUseCache and INSTRCACHEON;
-                     if (TLB_instrUseCache = '1' and INSTRCACHEON = '1') then
-=======
                      mem1_address     <= TLB_instrAddrOutLookup;
                      mem1_addrCompare <= TLB_instrAddrOutLookup;   -- SGI
-                     useCached_data   <= TLB_instrUseCache;
-                     if (TLB_instrUseCache = '1') then
->>>>>>> OURS
+                     useCached_data   <= TLB_instrUseCache and INSTRCACHEON;
+                     if (TLB_instrUseCache = '1' and INSTRCACHEON = '1') then
                         instrcache_fill <= '1';
                      else
                         mem1_request    <= '1';
@@ -3154,7 +2912,7 @@ begin
                         -- FPU's Unimplemented Operation, which is what the
                         -- manual asks for and what already works.
                         -- cpu-tests: mips4/recip_rsqrt(_d), mips4/fp_cond_move_s(_d).
-                        if (PRESENT_AS_R4400 and COP1_enable = '1' and decSource1(4) = '1') then
+                        if (PRESENT_AS_R4600 and COP1_enable = '1' and decSource1(4) = '1') then
                            case (to_integer(decFunct)) is
                               when 16#11# |   -- MOVF.fmt / MOVT.fmt
                                    16#12# |   -- MOVZ.fmt
@@ -3176,7 +2934,7 @@ begin
                         -- which is why upstream implements the transfers. A
                         -- machine claiming to be an R4400 should not.
                         -- cpu-tests: excep/cop2_unusable.
-                        if (COP2_enable = '0' or PRESENT_AS_R4400) then
+                        if (COP2_enable = '0' or PRESENT_AS_R4600) then
                            decodeExcType           <= EXCTYPE_DECODE;
                            decodeExcCode           <= x"B";
                            decodeExcCOP            <= "10";
@@ -3341,19 +3099,6 @@ begin
                         -- writeback of it has nothing to write back - but only
                         -- if the op stops at decode.
                         case (to_integer(decSource2)) is
-<<<<<<< KI
-                           when 16#00# | 16#08# | 16#10# => decodeCacheTLBTranslate <= '0';
-                           when others => null;
-                        end case;
-                        
-                        case (to_integer(decSource2)) is
-                           -- KI's R4600 boot ROM uses Fill I-cache (0x14). The
-                           -- uncached bring-up path treats it as a legal hint;
-                           -- explicit cache-fill handshaking is added with the
-                           -- cached execution milestone.
-                           when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# | 16#0D# | 16#10# | 16#11# | 16#14# | 16#15# | 16#19# => null;
-                           when others => error_instr <= '1';
-=======
                            when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# |
                                 16#0D# | 16#10# | 16#11# | 16#15# | 16#19# =>
                               decodeCacheEnable       <= '1';
@@ -3374,7 +3119,6 @@ begin
                               end case;
                            when others =>
                               error_instr <= '1';
->>>>>>> OURS
                         end case;
 
                      when 16#30# => -- LL
@@ -3841,11 +3585,7 @@ begin
    -- region check
    -- we optimize the 64bit region to use only the base address for timing purposes. 
    -- If base+immidiate switches the region-> bad luck
-<<<<<<< KI
-   process (value1, calcMemAddr, privilegeMode, region64, kusegUnmapped)
-=======
-   process (value1, calcMemAddr, privilegeMode, bit64region, kseg0_cached)   -- SGI: kseg0_cached
->>>>>>> OURS
+   process (value1, calcMemAddr, privilegeMode, region64, kusegUnmapped, kseg0_cached)   -- SGI: kseg0_cached
    begin
    
       region_TLBmapped <= '0';
@@ -3897,13 +3637,8 @@ begin
          -- kusegUnmapped is Status.ERL. See the note in cpu_cop0.vhd: while it is
          -- set, region < 4 is unmapped and must not go to the TLB.
          if (privilegeMode = "00") then
-<<<<<<< KI
             if ((calcMemAddr(31 downto 29) < 4 and kusegUnmapped = '0') or calcMemAddr(31 downto 29) = 6 or calcMemAddr(31 downto 29) = 7) then region_TLBmapped <= '1'; end if;
-            if (calcMemAddr(31 downto 29) = 4) then region_cached <= '1'; end if;
-=======
-            if (calcMemAddr(31 downto 29) < 4 or calcMemAddr(31 downto 29) = 6 or calcMemAddr(31 downto 29) = 7) then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) = 4) then region_cached <= kseg0_cached; end if;  -- SGI: was '1'
->>>>>>> OURS
          elsif (privilegeMode = "01") then
             if ((calcMemAddr(31 downto 29) < 4 and kusegUnmapped = '0') or calcMemAddr(31 downto 29) = 6) then region_TLBmapped <= '1'; end if;
             if (calcMemAddr(31 downto 29) = 4 or calcMemAddr(31 downto 29) = 5 or calcMemAddr(31 downto 29) = 7) then region_unused <= '1'; end if;
@@ -4711,30 +4446,8 @@ begin
       
    end process;
    
-   read4_uncachedRot <=
-      "00"                   when (read4_useLoadType = LOADTYPE_LEFT    or
-                                   read4_useLoadType = LOADTYPE_RIGHT   or
-                                   read4_useLoadType = LOADTYPE_LEFT64  or
-                                   read4_useLoadType = LOADTYPE_RIGHT64 or
-                                   read4_useLoadType = LOADTYPE_QWORD)  else
-      read4_Addr(1 downto 0);
 
-   -- The response mailbox registers the raw bus word before completion is
-   -- asserted. Rotate that stable CPU-domain copy; a second mailbox stage
-   -- registers the rotated value before the completion pulse reaches users.
-   read4_uncachedData <=
-      unsigned(mem_finished_dataRead(63 downto 32)) &
-      (x"000000" & unsigned(mem_finished_dataRead(31 downto 24)))
-                                     when (read4_uncachedRot = "11") else
-      unsigned(mem_finished_dataRead(63 downto 32)) &
-      (x"0000" & unsigned(mem_finished_dataRead(31 downto 16)))
-                                     when (read4_uncachedRot = "10") else
-      unsigned(mem_finished_dataRead(63 downto 32)) &
-      (x"00" & unsigned(mem_finished_dataRead(31 downto 8)))
-                                     when (read4_uncachedRot = "01") else
-      unsigned(mem_finished_dataRead);
-
-   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRot);
+   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRead);
    read4_dataReadRot64  <= bus_to_cpu64(std_logic_vector(read4_dataReadData));
    read4_dataReadRot32  <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
    
@@ -5165,11 +4878,7 @@ begin
       error_exception         => error_exception,
       error_TLB               => error_TLB,
       
-<<<<<<< KI
-      irqRequest              => irqRequest,
-=======
       irqLines                => irqLines,
->>>>>>> OURS
       irqTrigger              => irqTrigger,
       decode_irq              => decode_irq,
 

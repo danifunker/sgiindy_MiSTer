@@ -39,6 +39,8 @@ architecture arch of SyncFifoFallThroughMLAB is
  
    signal full_wire     : std_logic;
    signal empty_wire    : std_logic;
+   signal wr_accept     : std_logic;
+   signal rd_accept     : std_logic;
 
 begin
 
@@ -51,7 +53,7 @@ begin
    port map
    (
       inclock         => clk,
-      wren            => Wr,
+      wren            => wr_accept,
       data            => Din,
       wraddress       => std_logic_vector(wrcnt),
       rdaddress       => std_logic_vector(rdcnt),
@@ -61,6 +63,10 @@ begin
 
    full_wire      <= '1' when fifocnt = (SIZEBITS - 1 downto 0 => '1')  else '0';
    empty_wire     <= '1' when fifocnt = 0                               else '0';
+   rd_accept      <= Rd and not empty_wire;
+   -- A simultaneous read frees the current head, so a full FIFO may replace
+   -- it on the same edge without overwriting any unread entry.
+   wr_accept      <= Wr and (not full_wire or rd_accept);
 
    process(clk)
       variable newCount : unsigned(SIZEBITS - 1 downto 0);
@@ -72,13 +78,15 @@ begin
             fifocnt <= (others => '0');
             Full    <= '0';
             Empty   <= '1';
+            NearFull  <= '0';
+            NearEmpty <= '0';
          else
             newCount := fifocnt;
-            if (Wr = '1' and full_wire = '0') then
-               if (Rd = '0' or empty_wire = '1') then
+            if (wr_accept = '1') then
+               if (rd_accept = '0') then
                   newCount := newCount + 1;
                end if;
-            elsif (Rd = '1' and empty_wire = '0') then
+            elsif (rd_accept = '1') then
                newCount := newCount - 1;
             end if;
             
@@ -94,11 +102,11 @@ begin
                NearEmpty <= '1';
             end if;
          
-            if (Wr = '1') then
+            if (wr_accept = '1') then
                wrcnt <= wrcnt+1;
             end if;
             
-            if (Rd = '1') then
+            if (rd_accept = '1') then
                rdcnt <= rdcnt+1;
             end if;
             
@@ -108,7 +116,7 @@ begin
                Empty <= '0';
             end if;
             
-            if (newCount = (SIZEBITS - 1 downto 0 => '1') or full_wire = '1') then
+            if (newCount = (SIZEBITS - 1 downto 0 => '1')) then
                Full <= '1'; 
             else
                Full <= '0';

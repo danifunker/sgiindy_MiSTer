@@ -20,9 +20,17 @@ entity cpu_datacache is
       reset_1x          : in  std_logic;
       reset_93          : in  std_logic;
       ce_93             : in  std_logic;
+      -- SGI: the cache is PHYSICALLY indexed. cpu.vhd overrides tag_addr(13
+      -- downto 12) with the data mini-TLB's translation (and 11 downto 3 too
+      -- on the unstall clock), so the index never carries a virtual page
+      -- colour: a 16 KB direct-mapped VIPT cache aliases on bit 13 and killed
+      -- IRIX init deterministically - docs/39-42, UPSTREAM.md. On a mini-TLB
+      -- MISS the combinational translation is stale, so the tag has to be
+      -- re-read with the resolved address on TLB_dataUnStall; this port lets
+      -- ce_fetch do that while the pipeline is still stalled.
+      tlb_unstall       : in  std_logic;   -- SGI: re-read tags on mini-TLB unstall for the physical index (docs/40)
       stall             : in  unsigned(4 downto 0);
       stall4            : in  std_logic;
-      tlb_unstall       : in  std_logic;   -- SGI: re-read tags on mini-TLB unstall for the physical 16 KB index (docs/40)
       fifo_block        : in  std_logic;
       
       slow_in           : in  std_logic_vector(3 downto 0); 
@@ -77,10 +85,10 @@ architecture arch of cpu_datacache is
    signal ce_fetch         : std_logic;
 
    -- tags
-   signal tag_address_a    : std_logic_vector(9 downto 0) := (others => '0');
+   signal tag_address_a    : std_logic_vector(8 downto 0) := (others => '0');
    signal tag_data_a       : std_logic_vector(21 downto 0) := (others => '0');
    signal tag_wren_a       : std_logic := '0';
-   signal tag_address_b    : std_logic_vector(9 downto 0);
+   signal tag_address_b    : std_logic_vector(8 downto 0);
    signal tag_q_b          : std_logic_vector(21 downto 0);
    
    signal tag_newEna       : std_logic := '0';
@@ -90,29 +98,17 @@ architecture arch of cpu_datacache is
    signal read_hit         : std_logic;
    
    signal tag_addr_1       : unsigned(31 downto 0) := (others => '0');
-<<<<<<< KI
    signal tag_addr_low     : unsigned(4 downto 0) := (others => '0');
-=======
-   signal tag_addr_low     : unsigned(3 downto 0) := (others => '0');
->>>>>>> OURS
    signal tag_read_addr    : unsigned(13 downto 0) := (others => '0');
    signal fillAddr         : unsigned(31 downto 0) := (others => '0');
 
    -- data
-<<<<<<< KI
    signal fill_line_saved  : unsigned(8 downto 0) := (others => '0');
    signal fill_line_2x     : unsigned(8 downto 0) := (others => '0');
    signal fill_beat_2x     : unsigned(1 downto 0) := (others => '0');
    signal fill_active_2x   : std_logic := '0';
    signal fill_grant       : std_logic;
    signal cache_ram_addr_a : std_logic_vector(10 downto 0);
-=======
-   signal tag_read_addr_1x : unsigned(9 downto 0) := (others => '0');
-   signal tag_read_addr_2x : unsigned(9 downto 0) := (others => '0');
-   
-   signal ram_grant_2x     : std_logic := '0';
-   signal cache_addr_a     : unsigned(10 downto 0) := (others => '0');
->>>>>>> OURS
    signal cache_wr_a       : std_logic;
    
    signal cache_address_b  : std_logic_vector(10 downto 0);
@@ -150,19 +146,14 @@ architecture arch of cpu_datacache is
    signal writeMode        : std_logic := '0';
    signal fillNext         : std_logic := '0';
    signal write_ena_1      : std_logic := '0';
-<<<<<<< KI
 
    signal clearAddr        : std_logic_vector(8 downto 0) := (others => '0');
-=======
-         
-   signal clearAddr        : std_logic_vector(9 downto 0);
->>>>>>> OURS
       
    signal isCommand        : std_logic := '0';
    signal isWB             : std_logic := '0';
    
    signal tag_wren_cmd     : std_logic := '0';
-   signal tag_addr_cmd     : std_logic_vector(9 downto 0) := (others => '0');
+   signal tag_addr_cmd     : std_logic_vector(8 downto 0) := (others => '0');
    signal tag_data_cmd     : std_logic_vector(21 downto 0) := (others => '0');
    
    -- slow
@@ -175,14 +166,10 @@ architecture arch of cpu_datacache is
    
 begin 
 
-<<<<<<< KI
    debug_state <= std_logic_vector(to_unsigned(tState'pos(state), 4));
    fill_grant <= ram_grant and ram_active;
 
-   ce_fetch <= '1' when (stall = 0 and ce_93 = '1') else '0';
-=======
    ce_fetch <= '1' when ((stall = 0 or tlb_unstall = '1') and ce_93 = '1') else '0'; -- SGI: re-read on TLB unstall (docs/40)
->>>>>>> OURS
 
    ------------------ tags   
    
@@ -191,11 +178,7 @@ begin
                      '0';
                      
    tag_address_a  <= tag_addr_cmd when (tag_wren_cmd = '1') else
-<<<<<<< KI
                      std_logic_vector(tag_addr_1(13 downto 5));
-=======
-                     std_logic_vector(tag_addr_1(13 downto 4));
->>>>>>> OURS
                      
    tag_data_a     <= tag_data_cmd when (tag_wren_cmd = '1') else
                      (not write_through_in) & tag_compare(20 downto 0);
@@ -204,7 +187,7 @@ begin
    itagram : entity mem.dpram
    generic map 
    ( 
-      addr_width  => 10,
+      addr_width  => 9,
       data_width  => 22 -- 20 bits(31..12) of address + 1 bit valid + 1 bit dirty
    )
    port map
@@ -222,11 +205,7 @@ begin
       q_b         => tag_q_b
    ); 
    
-<<<<<<< KI
    tag_address_b <= std_logic_vector(tag_addr(13 downto 5));
-=======
-   tag_address_b <= std_logic_vector(tag_addr(13 downto 4));
->>>>>>> OURS
    
    tag_compare   <= tag_newData when (tag_newEna = '1') else
                     tag_q_b;
@@ -249,7 +228,7 @@ begin
    --   q          => tag_q_b
    --);
    --
-   --tag_address_b <= std_logic_vector(tag_addr_1(13 downto 4));
+   --tag_address_b <= std_logic_vector(tag_addr_1(12 downto 4));
    
    --tag_compare   <= tag_q_b;
    
@@ -260,7 +239,6 @@ begin
    process (clk1x)
    begin
       if rising_edge(clk1x) then
-<<<<<<< KI
          if (reset_1x = '1') then
             fill_active_2x <= '0';
             fill_line_2x   <= (others => '0');
@@ -281,28 +259,6 @@ begin
                fill_active_2x <= '0';
             else
                fill_beat_2x <= fill_beat_2x + 1;
-=======
-         tag_read_addr_1x <= tag_read_addr(13 downto 4);
-      end if;
-   end process;
-   
-   process (clk2x)
-   begin
-      if rising_edge(clk2x) then
-      
-         tag_read_addr_2x <= tag_read_addr_1x;
-      
-         if (ram_grant = '1'and ram_active = '1') then
-            ram_grant_2x <= '1';
-         end if;
-         
-         if (ram_grant = '1') then
-            cache_addr_a <= tag_read_addr_2x & "0";
-         elsif (ddr3_DOUT_READY = '1') then
-            cache_addr_a <= cache_addr_a + 1;
-            if (ram_grant_2x = '1' and cache_addr_a(0) = '1') then
-               ram_grant_2x <= '0';
->>>>>>> OURS
             end if;
          end if;
       end if;
@@ -409,22 +365,14 @@ begin
             tag_newEna   <= '0';
             if (tag_wren_a = '1') then
                tag_newData  <= tag_data_a;
-<<<<<<< KI
                if (tag_address_a = std_logic_vector(tag_addr(13 downto 5))) then
-=======
-               if (tag_address_a = std_logic_vector(tag_addr(13 downto 4))) then
->>>>>>> OURS
                   tag_newEna   <= '1';
                end if;
             end if;
          else
             if (tag_wren_a = '1') then
                tag_newData  <= tag_data_a;
-<<<<<<< KI
                if (tag_address_a = std_logic_vector(tag_addr_1(13 downto 5))) then
-=======
-               if (tag_address_a = std_logic_vector(tag_addr_1(13 downto 4))) then
->>>>>>> OURS
                   tag_newEna   <= '1';
                end if;
             end if;
@@ -455,28 +403,17 @@ begin
                   write_data_1   <= write_data_rot;
                   fillNext       <= '0';
                   write_ena_1    <= write_ena;
-<<<<<<< KI
                   fillAddr       <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 5) & "00000";
                   fill_line_saved <= tag_addr_1(13 downto 5);
                   tag_addr_low   <= tag_addr_1(4 downto 0);
-=======
-                  fillAddr       <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 4) & "0000";
-                  tag_addr_low   <= tag_addr_1(3 downto 0);
->>>>>>> OURS
                   tag_read_addr  <= tag_addr_1(13 downto 0);
                   isCommand      <= '0'; 
                   isWB           <= '0'; 
                   ram_reqAddr    <= RW_addr(31 downto 0); 
-<<<<<<< KI
                   tag_data_cmd   <= (write_ena and (not write_through_in)) &
                                     '1' & std_logic_vector(RW_addr(31 downto 12)); -- default for fill
                   tag_addr_cmd   <= std_logic_vector(tag_addr_1(13 downto 5)); 
                   writeback_addr <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 5) & "00000";
-=======
-                  tag_data_cmd   <= write_ena & '1' & std_logic_vector(RW_addr(31 downto 12)); -- default for fill
-                  tag_addr_cmd   <= std_logic_vector(tag_addr_1(13 downto 4)); 
-                  writeback_addr <= unsigned(tag_compare(19 downto 2)) & RW_addr(13 downto 4) & "0000";
->>>>>>> OURS
                   
                   if (write_ena = '1' and read_hit = '0' and
                       write_through_in = '1') then
@@ -569,7 +506,7 @@ begin
                   tag_wren_cmd <= '1';
                   tag_addr_cmd <= clearAddr; 
                   tag_data_cmd <= (others => '0');
-                  if (clearAddr /= 10x"3FF") then
+                  if (clearAddr /= 9x"1FF") then
                      clearAddr <= std_logic_vector(unsigned(clearAddr) + 1);
                   else
                      state          <= IDLE;
@@ -692,7 +629,7 @@ begin
    goutput : if 1 = 0 generate
       type ttracecounts_out is array(1 to 4) of integer;
       signal tracecounts_out : ttracecounts_out;
-      type t_dachefull is array(0 to 1023, 0 to 1) of std_logic_vector(63 downto 0);
+      type t_dachefull is array(0 to 511, 0 to 1) of std_logic_vector(63 downto 0);
       signal dcachefull : t_dachefull;
    begin
    
@@ -740,12 +677,12 @@ begin
                      if (export_TagWrite(20) = '1') then write(line_out, string'(" V 1")); else write(line_out, string'(" V 0")); end if;
                      write(line_out, string'(" D 0"));
                      write(line_out, string'(" I ")); 
-                     write(line_out, to_hstring(export_AddrSave(13 downto 4)));
+                     write(line_out, to_hstring(export_AddrSave(12 downto 4)));
                      write(line_out, string'(" S ")); 
                      write(line_out, to_hstring(to_unsigned(i * 2, 4)));
                      write(line_out, string'(" Data ")); 
                      write(line_out, to_hstring(ddr3_DOUT));
-                     dcachefull(to_integer(export_AddrSave(13 downto 4)), i) <= ddr3_DOUT;
+                     dcachefull(to_integer(export_AddrSave(12 downto 4)), i) <= ddr3_DOUT;
                      writeline(outfile, line_out);
                      wait until rising_edge(clk2x);
                      wait for 1 ns;
@@ -777,7 +714,7 @@ begin
                   if (export_TagSave(21) = '1') then write(line_out, string'(" D 1")); else write(line_out, string'(" D 0")); end if;
                end if;
                write(line_out, string'(" I ")); 
-               write(line_out, to_hstring(export_AddrSave(13 downto 4)));
+               write(line_out, to_hstring(export_AddrSave(12 downto 4)));
                write(line_out, string'(" S 0")); 
                write(line_out, string'(" Data ")); 
                write(line_out, to_hstring(cache_q_b));
@@ -792,16 +729,16 @@ begin
                write(line_out, string'("Store: I ")); 
                write(line_out, to_string_len(tracecounts_out(2) + 1, 8));
                write(line_out, string'(" A ")); 
-               write(line_out, to_hstring(export_AddrSave(28 downto 14) & unsigned(cache_address_b) & "000"));
+               write(line_out, to_hstring(export_AddrSave(28 downto 13) & unsigned(cache_address_b) & "000"));
                write(line_out, string'(" T ")); 
                write(line_out, to_hstring(export_TagWrite(16 downto 0)));
                if (export_TagWrite(20) = '1') then write(line_out, string'(" V 1")); else write(line_out, string'(" V 0")); end if;
                if (export_TagWrite(21) = '1') then write(line_out, string'(" D 1")); else write(line_out, string'(" D 0")); end if;
                write(line_out, string'(" I ")); 
-               write(line_out, to_hstring(export_AddrSave(13 downto 4)));
+               write(line_out, to_hstring(export_AddrSave(12 downto 4)));
                write(line_out, string'(" S 0")); 
                write(line_out, string'(" Data ")); 
-               export_DataSave := dcachefull(to_integer(export_AddrSave(13 downto 4)), to_integer(to_unsigned(0, 1) & export_AddrSave(3)));
+               export_DataSave := dcachefull(to_integer(export_AddrSave(12 downto 4)), to_integer(to_unsigned(0, 1) & export_AddrSave(3)));
                if (cache_be_b(0) = '1') then export_DataSave( 7 downto  0) := cache_data_b( 7 downto  0); end if;
                if (cache_be_b(1) = '1') then export_DataSave(15 downto  8) := cache_data_b(15 downto  8); end if;
                if (cache_be_b(2) = '1') then export_DataSave(23 downto 16) := cache_data_b(23 downto 16); end if;
@@ -810,7 +747,7 @@ begin
                if (cache_be_b(5) = '1') then export_DataSave(47 downto 40) := cache_data_b(47 downto 40); end if;
                if (cache_be_b(6) = '1') then export_DataSave(55 downto 48) := cache_data_b(55 downto 48); end if;
                if (cache_be_b(7) = '1') then export_DataSave(63 downto 56) := cache_data_b(63 downto 56); end if;
-               dcachefull(to_integer(export_AddrSave(13 downto 4)), to_integer(to_unsigned(0, 1) & export_AddrSave(3))) <= export_DataSave;
+               dcachefull(to_integer(export_AddrSave(12 downto 4)), to_integer(to_unsigned(0, 1) & export_AddrSave(3))) <= export_DataSave;
                write(line_out, to_hstring(export_DataSave));
                writeline(outfile, line_out);
                tracecounts_out(2) <= tracecounts_out(2) + 1;
@@ -827,7 +764,7 @@ begin
                if (export_TagSave(20) = '1') then write(line_out, string'(" V 1")); else write(line_out, string'(" V 0")); end if;
                if (export_TagSave(21) = '1') then write(line_out, string'(" D 1")); else write(line_out, string'(" D 0")); end if;
                write(line_out, string'(" I ")); 
-               write(line_out, to_hstring(writeback_addr(13 downto 4)));
+               write(line_out, to_hstring(writeback_addr(12 downto 4)));
                if (state = WRITEBACK2WRITE) then write(line_out, string'(" S 0")); else write(line_out, string'(" S 1")); end if; 
                write(line_out, string'(" Data ")); 
                write(line_out, to_hstring(writeback_data));

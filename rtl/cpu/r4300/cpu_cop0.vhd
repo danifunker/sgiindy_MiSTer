@@ -50,13 +50,9 @@ entity cpu_cop0 is
       error_exception         : out std_logic := '0';
       error_TLB               : out std_logic := '0';
             
-<<<<<<< KI
-      irqRequest              : in  std_logic_vector(1 downto 0);
-=======
       -- SGI: one interrupt vector, Cause.IP[6:2], in place of upstream's two
       -- separate N64 lines. See where it is assigned, below.
       irqLines                : in  std_logic_vector(4 downto 0);
->>>>>>> OURS
       irqTrigger              : out std_logic;
       decode_irq              : in  std_logic;
 
@@ -201,58 +197,53 @@ end entity;
 
 architecture arch of cpu_cop0 is
 
-<<<<<<< KI
    -- IDT79R4600 processor ID, matching MAME's R4600 implementation.
    constant COP0_PRID_R4600                 : unsigned(15 downto 0) := x"2020";
 
-=======
-   -- SGI: an Indy has an R4400, and the R4400 has 48 TLB entries. The R4300
-   -- this core is built from has 32, and IRIX does not probe: it takes the
-   -- entry count from PRId, so a machine that reports 0x0440 and then aliases
-   -- entries 32..47 onto 0..15 corrupts its own page tables the first time the
-   -- kernel writes a high index. Presenting as an R4400 and leaving the TLB at
-   -- 32 is therefore not an option; the two go together.
+   -- SGI: what this CPU tells software it is, and what that commits it to.
+   --
+   -- An Indy shipped with an R4000, R4400, R4600 or R5000; it never shipped
+   -- with an R4300. Software identifies the part from PRId and nothing else -
+   -- there is no architectural "how many TLB entries" register on an R4000 -
+   -- and the Killer Instinct base this core is built on already reports the
+   -- R4600 above (imp 0x20, revision 2.0). IRIX 5.3 supports that part
+   -- natively: it selects the R4600 code paths, including a 32-byte
+   -- data-cache line hard-coded from PRId (it never reads Config.DB), which is
+   -- exactly the geometry cpu_datacache.vhd has. See docs/39-44, UPSTREAM.md.
+   --
+   -- This is a promise, not a label. It selects the TLB size (TLB_ENTRIES
+   -- below is derived from it) and the cache geometry Config reports, it makes
+   -- coprocessor 2 unusable and the MIPS IV COP1 function codes reserved in
+   -- cpu.vhd, which has the same constant, and it picks the FPU's FIR in
+   -- cpu_FPU.vhd. Set all three copies false to go back to reporting the
+   -- R4300 the N64 core was built as, which is what the cpu-tests suite needs
+   -- to apply honest R4300 expectations - see docs/10-r4300-integration.md.
+   constant PRESENT_AS_R4600 : boolean := true;
+
+   -- SGI: an R4600 has 48 TLB entries (so do the R4000/R4400 and R5000). The
+   -- R4300 this core descends from has 32, and IRIX does not probe: it takes
+   -- the entry count from PRId, so a machine that reports an R4600 and then
+   -- aliases entries 32..47 onto 0..15 corrupts its own page tables the first
+   -- time the kernel writes a high index. Derived from PRESENT_AS_R4600 rather
+   -- than set independently, because the two are the same decision: a part
+   -- whose identity and TLB size disagree is one no operating system can
+   -- drive correctly.
    --
    -- The cost is small because the TLB is searched sequentially rather than
    -- associatively (see the TLBPROBE/TLBINSTR/TLBDATA states): one more address
    -- bit on the entry RAM, and a worst-case search of 48 rather than 32 - and
    -- the mini-TLB in cpu_TLB_instr/data absorbs most lookups before the search
-   -- runs at all.
-   -- SGI: what this CPU tells software it is.
-   --
-   -- An Indy shipped with an R4000, R4400, R4600 or R5000; it never shipped
-   -- with an R4300. Software identifies the part from PRId and nothing else -
-   -- there is no architectural "how many TLB entries" register on an R4000 -
-   -- so reporting 0x0B22 makes the IP24 PROM and IRIX configure themselves for
-   -- a CPU that is not in any Indy, and `hinv` would say so out loud.
-   --
-   -- 0x0440 is imp 0x04 revision 4.0. R4000 and R4400 share imp 0x04 and are
-   -- told apart by revision major >= 4, which is the rule IRIX and Linux both
-   -- use. Presenting as the PC variant: Config.SC stays 1, no secondary cache.
-   --
-   -- This is a promise, not a label. It selects the TLB size (TLB_ENTRIES
-   -- below is derived from it) and the cache geometry Config reports, and it
-   -- makes coprocessor 2 unusable in cpu.vhd, which has the same constant.
-   -- Set all three copies false to go back to reporting the R4300 the core is
-   -- built from, which is what the cpu-tests suite needs to apply honest
-   -- R4300 expectations - see docs/10-r4300-integration.md.
-   constant PRESENT_AS_R4400 : boolean := true;
-
-   -- Derived from PRESENT_AS_R4400 rather than set independently, because the
-   -- two are the same decision: software takes the entry count from PRId, so a
-   -- part whose identity and TLB size disagree is one no operating system can
-   -- drive correctly. The entry RAM is addressed with six bits either way -
+   -- runs at all. The entry RAM is addressed with six bits either way -
    -- allocating 64 and using 32 costs nothing worth splitting.
-   function tlb_entry_count(as_r4400 : boolean) return natural is
+   function tlb_entry_count(as_r4600 : boolean) return natural is
    begin
-      if as_r4400 then return 48; else return 32; end if;
+      if as_r4600 then return 48; else return 32; end if;
    end function;
 
-   constant TLB_ENTRIES   : natural := tlb_entry_count(PRESENT_AS_R4400);
+   constant TLB_ENTRIES   : natural := tlb_entry_count(PRESENT_AS_R4600);
    constant TLB_LAST      : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 1, 6);
    constant TLB_LAST_PREV : unsigned(5 downto 0) := to_unsigned(TLB_ENTRIES - 2, 6);
      
->>>>>>> OURS
    signal COP0_0_INDEX_tlbEntry           : unsigned(5 downto 0) := (others => '0');
    signal COP0_0_INDEX_probefailure       : std_logic := '0';
    signal COP0_1_RANDOM                   : unsigned(5 downto 0) := (others => '0');
@@ -518,41 +509,24 @@ begin
    COP1_enable   <= COP0_12_SR_enable_cop1;
    COP2_enable   <= COP0_12_SR_enable_cop2;
    fpuRegMode    <= COP0_12_SR_floatingPointMode;
-<<<<<<< KI
    -- MIPS III: EXL or ERL forces kernel mode regardless of KSU, and while ERL is
    -- set kuseg is unmapped (and uncached). The donor never needed either term -
    -- the N64 does not run with ERL set over kuseg, and KI1 never leaves
    -- KSEG0/KSEG1 - but KI2's boot ROM stores to kuseg with ERL = 1, and without
    -- this it takes a TLBS refill exception on every one of them.
-   privilegeMode <= "00" when (COP0_12_SR_exceptionLevel = '1' or COP0_12_SR_errorLevel = '1') else COP0_12_SR_privilegeMode;
-   kusegUnmapped <= COP0_12_SR_errorLevel;
-=======
-   -- SGI: THE PROCESSOR IS IN KERNEL MODE WHENEVER EXL OR ERL IS SET, whatever
-   -- Status.KSU says. Upstream exported the raw KSU here and applied the rule
-   -- only to `bit64mode`, twenty lines of the same file away - see "set mode"
-   -- in the exception process, which computes exactly this correction and then
-   -- throws it away.
    --
-   -- `privilegeMode` is what the address-region decode in cpu.vhd uses, so
-   -- the raw value means every exception taken FROM USER CODE decodes its
-   -- handler's addresses with the user table. On an N64 that is invisible:
-   -- the handler touches KSEG0, which the user table calls unused and which
-   -- upstream's strip then maps correctly anyway. On IRIX it is fatal. Its
-   -- general exception handler keeps its scratch area in KSEG3 and reaches it
-   -- with `sd $at, 0xa038($zero)` / `ld $k0, 0xa038($zero)`; with KSU still 2
-   -- the decode calls KSEG3 unmapped, strips the top three bits, and the save
-   -- area lands at PHYSICAL 0x1FFFA038 where nothing answers. The handler then
-   -- reads its own saved stack pointer back as 0xFFFFFFFF, faults on the first
-   -- push, and re-enters itself forever - about five million times before the
-   -- run gives up. docs/09 has the measurement.
-   --
-   -- The `> 2` arm is upstream's, kept: KSU has four encodings and only three
-   -- are defined.
+   -- SGI: the EXL/ERL rule is the one this core needed first (docs/09): with
+   -- the raw KSU exported, every exception taken FROM USER CODE decoded its
+   -- handler's addresses with the user table, and IRIX's general exception
+   -- handler, which keeps its scratch area in KSEG3, saved its stack pointer
+   -- to PHYSICAL 0x1FFFA038 where nothing answers and re-entered itself
+   -- forever. The KI base now applies the same rule; the `> 2` arm is
+   -- upstream N64's, kept: KSU has four encodings and only three are defined.
    privilegeMode <= "00" when (COP0_12_SR_exceptionLevel = '1' or
                                COP0_12_SR_errorLevel     = '1') else
-                    "10" when (COP0_12_SR_privilegeMode > 2) else
+                    "10" when (COP0_12_SR_privilegeMode > 2) else   -- SGI
                     COP0_12_SR_privilegeMode;
->>>>>>> OURS
+   kusegUnmapped <= COP0_12_SR_errorLevel;
    bit64region   <= bit64mode;
    
    TagLo_Valid   <= COP0_28_TAGLO_primaryCacheState(1);
@@ -649,23 +623,20 @@ begin
             
          when 14 => readValue <= COP0_14_EPC;
             
-<<<<<<< KI
-         when 15 => readValue(15 downto 0) <= COP0_PRID_R4600;
-=======
-         -- SGI: see PRESENT_AS_R4400. R4300 is 0x0B22, R4400 is 0x0440.
+         -- SGI: see PRESENT_AS_R4600. R4300 is 0x0B22; the KI base's R4600 is
+         -- COP0_PRID_R4600 (0x2020, imp 0x20 revision 2.0).
          when 15 =>
-            if (PRESENT_AS_R4400) then
-               readValue(11 downto 0) <= x"440";
+            if (PRESENT_AS_R4600) then
+               readValue(15 downto 0) <= COP0_PRID_R4600;
             else
                readValue(11 downto 0) <= x"B22";
             end if;
->>>>>>> OURS
          
          when 16 =>
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
-            if (PRESENT_AS_R4400) then
-               readValue(14 downto 4) <= "11001001000";   -- SGI: 16K/16K, 16 B lines
+            if (PRESENT_AS_R4600) then
+               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines (R4600; both caches really are)
             else
                readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
             end if;
@@ -892,12 +863,6 @@ begin
          elsif (ce = '1') then
          
             -- interrupt
-<<<<<<< KI
-            COP0_13_CAUSE_interruptPending(3 downto 2) <= unsigned(irqRequest);
-            if (preNMI = '1') then
-               COP0_13_CAUSE_interruptPending(4) <= preNMI;
-            end if;
-=======
             -- SGI: all five hardware lines, level-sensitive, both ways.
             --
             -- Upstream drives IP2 from irqRequest, IP3 from irqCartRequest,
@@ -915,7 +880,6 @@ begin
             -- Count/Compare timer) and IP1:0 (the two software interrupts)
             -- are CP0's own and are not touched here.
             COP0_13_CAUSE_interruptPending(6 downto 2) <= unsigned(irqLines);
->>>>>>> OURS
 
             -- count
             if (cop0Written9 = 0) then
@@ -966,22 +930,6 @@ begin
             -- CPU access
             if (exception = '1') then
          
-<<<<<<< KI
-               COP0_14_EPC               <= nextEPC_1;
-               -- nextEPC_1 is pcOld1 unmodified when the suppression applied,
-               -- so the recorded EPC IS the address the predicate refused to
-               -- back up from.
-               if (suppressed_1 = '1') then
-                  if (ds_count_reg /= x"FFFFFFFF") then
-                     ds_count_reg <= ds_count_reg + 1;
-                  end if;
-                  if (ds_seen = '0') then
-                     ds_seen      <= '1';
-                     ds_first_reg <= nextEPC_1(31 downto 0);
-                  end if;
-               end if;
-               COP0_13_CAUSE_branchDelay <= isDelaySlot_1;
-=======
                -- SGI: "If the EXL bit in the Status register is set, the EPC
                -- register is not updated and the exception vector is the
                -- general exception vector" - R4000 manual, exception
@@ -1037,7 +985,18 @@ begin
                   COP0_13_CAUSE_branchDelay <= isDelaySlot_1;
                end if;
                excFetchProvisional <= '0';
->>>>>>> OURS
+               -- nextEPC_1 is pcOld1 unmodified when the suppression applied,
+               -- so the recorded EPC IS the address the predicate refused to
+               -- back up from.
+               if (suppressed_1 = '1') then
+                  if (ds_count_reg /= x"FFFFFFFF") then
+                     ds_count_reg <= ds_count_reg + 1;
+                  end if;
+                  if (ds_seen = '0') then
+                     ds_seen      <= '1';
+                     ds_first_reg <= nextEPC_1(31 downto 0);
+                  end if;
+               end if;
                
                case (COP0_13_CAUSE_exceptionCode(3 downto 0)) is
                   when x"4" | x"5" | x"9" | x"A" | x"C"  => error_exception <= '1';
@@ -1633,14 +1592,6 @@ begin
    TLBREAD_region   <= unsigned(TLBMEM_readData(99 downto 98));
    TLBREAD_random   <= TLBMEM_readData(100);
    
-<<<<<<< KI
-   -- A stock N64 exposes a 29-bit physical bus, so the console path masks
-   -- TLB PFNs as before. Aleck64 software deliberately maps full 32-bit
-   -- physical regions at C0000000, C0800000 and D0000000; truncating those
-   -- aliases input/video/board RAM onto ordinary N64 memory.
-   TLB_fetchAddrOutMasked <= TLB_fetchAddrOut when ALECK64 = '1' else
-                             "000" & TLB_fetchAddrOut(28 downto 0);
-=======
    -- SGI: was `"000" & TLB_fetchAddrOut(28 downto 0)`. Upstream truncates every
    -- TLB translation to 29 bits because the N64's whole physical address space
    -- is 512 MB, so nothing there can notice. On an IP24 it is fatal: high local
@@ -1651,7 +1602,6 @@ begin
    -- R4000/R4400 forms a 36-bit physical address from the PFN and truncates
    -- nothing; 32 bits is this core's limit and is the right one to keep.
    TLB_fetchAddrOutMasked <= TLB_fetchAddrOut;
->>>>>>> OURS
    
    icpu_TLB_instr : entity work.cpu_TLB_instr
    port map
@@ -1780,7 +1730,6 @@ begin
    end process;
 
 
-<<<<<<< KI
    debug_cause(16)           <= COP0_12_SR_exceptionLevel;
    debug_cause(17)           <= COP0_12_SR_errorLevel;
    debug_cause(19 downto 18) <= COP0_12_SR_privilegeMode;
@@ -1934,7 +1883,7 @@ begin
          end if;
       end if;
    end process;
-=======
+
    -- SGI: the three registers that say what an exception was, live rather than
    -- latched, for the harness to sample on dbg_exc. THIS MUST STAY OUTSIDE the
    -- `-- synthesis translate_off` below: everything in there is the savestate
@@ -1963,7 +1912,6 @@ begin
    dbg_exc_code <= COP0_13_CAUSE_exceptionCode;
    dbg_exc_epc  <= COP0_14_EPC(31 downto 0);
    dbg_exc_bad  <= COP0_8_BADVIRTUALADDRESS(31 downto 0);
->>>>>>> OURS
 
    -- synthesis translate_off
    cop0_export(0)(5 downto 0)    <= COP0_0_INDEX_tlbEntry;

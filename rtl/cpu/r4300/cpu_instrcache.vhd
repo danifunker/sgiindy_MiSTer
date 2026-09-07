@@ -97,13 +97,7 @@ architecture arch of cpu_instrcache is
    signal state : tstate := IDLE;
    
    signal fill_latched : std_logic := '0';
-<<<<<<< KI
 
-begin 
-
-   fill_grant <= ram_grant and ram_active;
-=======
-   
    -- SGI: A CACHE COMMAND THAT ARRIVES WHILE THIS CACHE IS FILLING USED TO BE
    -- DROPPED. The command was only looked at in the IDLE arm of the state
    -- machine below, `cache_commandEnableI` in cpu.vhd is a one-clock pulse,
@@ -127,12 +121,12 @@ begin
 
 begin 
 
+   fill_grant <= ram_grant and ram_active;
+
    -- A live command takes priority over the latched one; see cmd_pending.
    cmd_ena_eff  <= CacheCommandEna or cmd_pending;
    cmd_code_eff <= CacheCommand     when (CacheCommandEna = '1') else cmd_code;
    cmd_addr_eff <= CacheCommandAddr when (CacheCommandEna = '1') else cmd_addr;
-
->>>>>>> OURS
 
    -- use two tag rams, so different fetch paths can be calculated in parallel to improve timing
 
@@ -185,7 +179,6 @@ begin
    process (clk1x)
    begin
       if rising_edge(clk1x) then
-<<<<<<< KI
          if (reset_1x = '1') then
             fill_active_2x <= '0';
             fill_line_2x   <= (others => '0');
@@ -206,46 +199,6 @@ begin
                fill_active_2x <= '0';
             else
                fill_beat_2x <= fill_beat_2x + 1;
-=======
-         fill_addrTag_1x <= fill_addrTag_sav(13 downto 5);
-      end if;
-   end process;
-   
-   process (clk2x)
-   begin
-      if rising_edge(clk2x) then
-      
-         fill_addrTag_2x <= fill_addrTag_1x;
-      
-         if (ram_grant = '1'and ram_active = '1') then
-            ram_grant_2x <= '1';
-         end if;
-         
-         if (ram_grant = '1') then
-            -- SGI: fill_addrTag_sav, NOT the fill_addrTag_1x/2x pipeline.
-            --
-            -- A LINE'S TAG AND ITS DATA HAVE TO GO TO THE SAME INDEX. The FILL
-            -- arm below writes the tag at fill_addrTag_sav(13:5); this wrote
-            -- the data at fill_addrTag_2x, the same value delayed through two
-            -- registers, one clocked on clk1x and one on clk2x. Upstream those
-            -- are different clocks and the delay is a fraction of a cycle;
-            -- rtl/cpu/r4300_wrap.vhd ties clk1x, clk2x and clk93 all to the one
-            -- system clock, which turns it into two whole cycles of skew
-            -- against a `ram_grant` that r4300_bus.sv raises in the cycle it
-            -- accepts the request.
-            --
-            -- IN PRACTICE THE TWO AGREE TODAY - making this change moved no
-            -- measurement, so it is a hazard removed and not a bug fixed, and
-            -- it is recorded that way on purpose. fill_addrTag_sav stops
-            -- changing when the state machine leaves IDLE, so the pipelined
-            -- copy catches up before the first beat as long as the bus takes
-            -- its time. Correctness should not rest on the bus being slow.
-            cache_addr_a <= fill_addrTag_sav(13 downto 5) & "00";
-         elsif (ddr3_DOUT_READY = '1') then
-            cache_addr_a <= cache_addr_a + 1;
-            if (ram_grant_2x = '1' and cache_addr_a(1 downto 0) = "11") then
-               ram_grant_2x <= '0';
->>>>>>> OURS
             end if;
          end if;
       end if;
@@ -330,16 +283,11 @@ begin
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1' and cmd_code_eff = 5x"08") then
                      tag_wren_a     <= '1';
-<<<<<<< KI
                      tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 2));
-                     tag_address_a  <= std_logic_vector(CacheCommandAddr(13 downto 5));
-=======
-                     tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 0));
                      tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1') then
                      cmd_pending    <= '0';   -- SGI: a code this cache ignores
->>>>>>> OURS
                   elsif (fill_request = '1' or fill_latched = '1') then
                      state          <= FILL;
                      ram_request    <= '1';

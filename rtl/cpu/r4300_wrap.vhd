@@ -1,5 +1,7 @@
 --------------------------------------------------------------------------------
--- r4300_wrap - flat-port wrapper around the MiSTer N64 project's R4300i.
+-- r4300_wrap - flat-port wrapper around the vendored MIPS CPU (the Killer
+-- Instinct project's R4600, itself a fork of the MiSTer N64 R4300i - see
+-- rtl/cpu/r4300/UPSTREAM.md).
 --
 -- Two jobs:
 --
@@ -129,11 +131,11 @@ architecture arch of r4300_wrap is
    -- The instruction cache survives it only because it latches fill_request
    -- separately from its state machine.
    --
-   -- So the settle has to outlast the longer of the two clears. The data
-   -- cache is now 1024 entries (docs/40's physically indexed 16 KB), so its
-   -- CLEARCACHE walks 0..1023; 2048 is that with a factor of two in hand, and
-   -- it costs two thousand clocks once. (The 8 KB cache cleared 512 entries
-   -- and this was 1024.)
+   -- So the settle has to outlast the longer of the two clears. Both caches
+   -- are 512 lines of 32 bytes (the KI R4600 geometry, docs/43-44), so each
+   -- CLEARCACHE walks 0..511; 2048 is that with a factor of four in hand, and
+   -- it costs two thousand clocks once. (The docs/40 16 KB/16-byte data cache
+   -- cleared 1024 entries, which is why this is not 1024.)
    constant SETTLE_CLOCKS : integer := 2048;
    signal settle    : integer range 0 to SETTLE_CLOCKS := SETTLE_CLOCKS;
 
@@ -188,6 +190,14 @@ begin
    end process;
 
    icpu : entity work.cpu
+   generic map
+   (
+      -- KI's arcade diagnostics: a 896-bit execution-trace bus and its capture
+      -- registers. The export is what the generic gates; with no reader the
+      -- captures are dead logic and synthesis removes them. Nothing here
+      -- consumes any debug_* port, so they are all left open below.
+      DEBUG_TRACE           => false
+   )
    port map
    (
       clk1x                 => clk,
@@ -255,6 +265,10 @@ begin
       RANDOMMISS            => "0000",
       DISABLE_BOOTCOUNT     => '1',
       DISABLE_DTLBMINI      => '0',
+      -- An N64 cartridge-variant switch in the base; the only thing it did,
+      -- widening the TLB's physical address past 29 bits, is unconditional
+      -- here (UPSTREAM.md, "Machine size").
+      ALECK64               => '0',
 
       irqLines              => irq_lines,
       cpuPaused             => '0',
