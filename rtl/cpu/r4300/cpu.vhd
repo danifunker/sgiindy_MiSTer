@@ -482,9 +482,9 @@ architecture arch of cpu is
    signal mem_finished_read            : std_logic := '0';
    signal mem_finished_dataRead        : std_logic_vector(63 downto 0);
           
-   signal writefifo_Din                : std_logic_vector(107 downto 0) := (others => '0');
+   signal writefifo_Din                : std_logic_vector(107 downto 0) := (others => '0');   -- SGI: 108 bits, no sequence tag (see below)
    signal writefifo_wr                 : std_logic := '0';
-   signal writefifo_Dout               : std_logic_vector(107 downto 0);
+   signal writefifo_Dout               : std_logic_vector(107 downto 0);   -- SGI
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
    signal writefifo_Full               : std_logic;
@@ -1787,7 +1787,7 @@ begin
    generic map
    (
       SIZE              => 8,
-      DATAWIDTH         => 108, -- 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache
+      DATAWIDTH         => 108, -- SGI: 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache - KI's read sequence tag went with its scoreboard
       NEARFULLDISTANCE  => 4
    )
    port map
@@ -1804,7 +1804,7 @@ begin
 
    -- Keep the established full indication and make the first ownership
    -- failure sticky through the existing protocol-error output.
-   error_fifo <= writefifo_Full;
+   error_fifo <= writefifo_Full;   -- SGI: no scoreboard to fold in
 
    -- Pending is the producer-valid bit. The payload is loaded once and held
    -- unchanged until the FIFO acknowledges it.
@@ -4447,7 +4447,9 @@ begin
    end process;
    
 
-   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRead);
+   -- SGI: KI's read4_uncachedRot/mem_finished_dataRot stage is gone - r4300_bus.sv
+   -- delivers the word already shifted by the address's byte offset.
+   read4_dataReadData   <= unsigned(datacache_data_out) when (writeback_UseCache = '1' or datacache_readena = '1') else unsigned(mem_finished_dataRead);   -- SGI
    read4_dataReadRot64  <= bus_to_cpu64(std_logic_vector(read4_dataReadData));
    read4_dataReadRot32  <= bus_to_cpu32(std_logic_vector(read4_dataReadData(31 downto 0)));
    
@@ -4878,7 +4880,7 @@ begin
       error_exception         => error_exception,
       error_TLB               => error_TLB,
       
-      irqLines                => irqLines,
+      irqLines                => irqLines,   -- SGI
       irqTrigger              => irqTrigger,
       decode_irq              => decode_irq,
 

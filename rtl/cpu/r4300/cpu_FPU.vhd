@@ -541,7 +541,7 @@ begin
       end if;      
       
       if (checkInputs2_nan = '1' and nanB = '1') then
-         if ((bit64 = '1' and command_op2(51) = '0') or (bit64 = '0' and command_op2(22) = '0')) then
+         if ((bit64 = '1' and command_op2(51) = '0') or (bit64 = '0' and command_op2(22) = '0')) then   -- SGI: quiet-bit polarity, see above
             if (csr_ena_invalidOperation = '1') then
                exceptionFPU <= '1';
                command_done <= '1';

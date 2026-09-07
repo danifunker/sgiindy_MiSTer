@@ -428,8 +428,8 @@ architecture arch of cpu_cop0 is
    
    signal TLBMEM_writeEnable              : std_logic;
    signal TLBMEM_writeData                : std_logic_vector(100 downto 0);
-   signal TLBMEM_writeAddr                : std_logic_vector(5 downto 0);
-   signal TLBMEM_readAddr                 : std_logic_vector(5 downto 0);
+   signal TLBMEM_writeAddr                : std_logic_vector(5 downto 0);   -- SGI: 48 entries
+   signal TLBMEM_readAddr                 : std_logic_vector(5 downto 0);   -- SGI: 48 entries
    signal TLBMEM_readData                 : std_logic_vector(100 downto 0);
    
    signal TLB_ExcInstrRead                : std_logic;
@@ -460,7 +460,7 @@ architecture arch of cpu_cop0 is
    signal eret_ie_reg                     : std_logic := '0';
    
    signal TLB_InstrClearEna               : std_logic;
-   signal TLB_InstrClearIndex             : unsigned(5 downto 0);
+   signal TLB_InstrClearIndex             : unsigned(5 downto 0);   -- SGI: 48 entries
    
    signal TLB_Instr_fetchReq              : std_logic;
    signal TLB_Data_fetchReq               : std_logic;
@@ -475,7 +475,7 @@ architecture arch of cpu_cop0 is
    signal TLB_fetchCached                 : std_logic := '0';
    signal TLB_fetchDirty                  : std_logic := '0';
    signal TLB_fetchRandom                 : std_logic := '0';
-   signal TLB_fetchSource                 : unsigned(5 downto 0) := (others => '0');
+   signal TLB_fetchSource                 : unsigned(5 downto 0) := (others => '0');   -- SGI: 48 entries
    signal TLB_fetchAddrOut                : unsigned(31 downto 0) := (others => '0');
    signal TLB_fetchAddrOutMasked          : unsigned(31 downto 0) := (others => '0');
    
@@ -496,7 +496,7 @@ architecture arch of cpu_cop0 is
       region                 : unsigned(1 downto 0);
       random                 : std_logic;
    end record; 
-   type tTLBENTRYS  is array(0 to 63) of tTLBENTRY;
+   type tTLBENTRYS  is array(0 to 63) of tTLBENTRY;   -- SGI: 48 entries, six address bits
    signal TLBENTRYS : tTLBENTRYS;
 -- synthesis translate_on
    
@@ -685,7 +685,7 @@ begin
          TLB_Instr_fetchDone <= '0';
          TLB_Data_fetchDone  <= '0';
          TLBInvalidate       <= '0';
-         -- excFetchProvisional IS DELIBERATELY NOT DEFAULTED HERE. Everything
+         -- SGI: excFetchProvisional IS DELIBERATELY NOT DEFAULTED HERE. Everything
          -- above is a one-clock pulse and wants a default; that flag is STATE
          -- and has to survive the ~50 cycles between the two faults of one
          -- trap. Defaulting it here made it a one-cycle pulse, and it died on
@@ -1574,7 +1574,7 @@ begin
       q          => TLBMEM_readData
 	);
    
-   TLBMEM_readAddr <= std_logic_vector(COP0_0_INDEX_tlbEntry) when (TLBState = TLBIDLE) else
+   TLBMEM_readAddr <= std_logic_vector(COP0_0_INDEX_tlbEntry) when (TLBState = TLBIDLE) else   -- SGI: 48 entries
                       std_logic_vector(TLB_readAddr);
    
    TLBREAD_global   <= TLBMEM_readData(0);           
@@ -1660,7 +1660,7 @@ begin
       TLB_useCacheFound    => TLB_dataUseCacheFound, 
       TLB_useCacheLookup   => TLB_dataUseCacheLookup, 
       TLB_Stall            => TLB_dataStall,  
-      TLB_UnStall          => TLB_dataUnStall_i,
+      TLB_UnStall          => TLB_dataUnStall_i,   -- SGI: also exported for the physical D-cache index
       TLB_AddrOutFound     => TLB_dataAddrOutFound,
       TLB_AddrOutLookup    => TLB_dataAddrOutLookup,
       
