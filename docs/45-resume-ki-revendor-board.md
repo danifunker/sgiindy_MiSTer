@@ -14,8 +14,11 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
 * **Branch `claude/ki-revendor`** in the worktree
   `.claude/worktrees/modest-robinson-cad59e`. `main` is still the N64-base
   build 22 (`08d13e6`) and its rbf `output_files/sgiindy-b22-seed2.rbf`
-  (md5 `BD342F18E6BE032FEE53BFDC07FAE3AA`) is the board fallback. **Do not
-  merge to `main` until build 23 boots IRIX to the desktop on the board.**
+  (md5 `BD342F18E6BE032FEE53BFDC07FAE3AA`) is the board fallback. The
+  session that wrote this MERGED the branch into `main` (a merge commit -
+  main had its own docs/44 commit, so no fast-forward) once all four
+  simulation gates of docs/43 were green; if the board rejects build 23,
+  `git revert -m 1 <that merge>` puts the N64 base back.
 * **Every simulation gate is GREEN on the branch:**
   - GHDL lowers the whole CPU (54722 lines; the one signed-shift rewrite).
   - `make -C verilator cpuonly`: **728 runs / 0 against expectation**, 78
@@ -30,9 +33,15 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
     HPC3-PBUS-PIO at 181.46M vs 192.50M) - the KI core does the same boot
     faster. It went further than the reference's libgen regex spin (user PCs
     in 0x1000xxxx / 0x0fb6-8xxxx / libc) and then sat in KERNEL mode from
-    281.36M to the 300M cap. The board judges that phase; a rerun traced at
-    281.3M (`~/kicpu/irix4/stdout.log`, `--pc-from 281300000 --trace-from
-    281300000`) says what the kernel was doing if anyone wants to know.
+    281.36M to the 300M cap. A rerun traced at 281.3M (`~/kicpu/irix4`)
+    names it with `/unix`'s own symbols (`ecoffsyms.py unix.ecoff syms`):
+    at 281.30M the kernel is in EFS serving a user program's file I/O
+    (`efs_findfree`, `efs_dirlookup`, `get_buf`, `read_buf`), and at the
+    cap it is in `idle` / `wait_for_interrupt` - the idle loop, waiting for
+    a device completion the simulator never delivers. That is the known
+    sim-only peripheral wait (`irix-sim-postinit-livelock`,
+    `scsi-fsck-transfer-count-livelock`), reached later than the reference
+    because the KI core got further; not a CPU fault. The board judges it.
 * **Build 23 is FITTED** (SEED=2, 19:28-19:51 on 2026-09-07, via the new
   `scripts/fit_when_free.sh b23`): `output_files/sgiindy-b23-seed2.rbf`,
   34,743 ALMs (83 %), 42,770 registers, block memory unchanged, every clock
@@ -43,8 +52,19 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   are altsyncram in the map report. `b23.log`/`b23.console` have the detail.
 * **The Indy board is `192.168.99.94`** (`scripts/local.env`), and it is NOT
   shared: the other Claude session's ssh traffic goes to `192.168.99.143`, a
-  different MiSTer (MacQuadra800). The Indy board is where docs/42 left it -
-  build 22 or 21 on it, halted ("Okay to power off"). Board control is an
+  different MiSTer (MacQuadra800). **At 20:05 on 2026-09-07 the Indy board
+  was OFF THE NETWORK** - no ARP entry, ping unreachable, ssh timed out for
+  five minutes - i.e. powered off or unplugged, not a crashed core (a
+  MiSTer's Ethernet lives on the HPS and stays up while the board has
+  power). The Opus board session could not deploy; nothing on the board was
+  touched. It DID rebuild the hardware suite's boot ROM for the R4600
+  identity: `tests/out/hw-cputest/boot.rom` (md5
+  `964d3ce593631c526d8ac4d3f2536d91`, from the patched `~/cputests`; the
+  one on disk was build-21-era and would have refused PRId 0x2020). Note
+  `tests/hw-cputest/build.sh` must be copied to a native FS and de-CRLF'd
+  to run. If the board's address changed, `.52` and `.188` on that subnet
+  answered with the stock MiSTer host key. The board is otherwise where
+  docs/42 left it - build 22 or 21 on it, halted. Board control is an
   **Opus** session's job (the user's rule); see "Board".
 * Read the auto-memory first: `ki-revendor-wip` (this state),
   `prom-config-ec-per-family` (the PROM trap), `ki-cpu-revendor-decision`,
