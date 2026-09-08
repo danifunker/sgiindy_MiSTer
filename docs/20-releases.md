@@ -86,7 +86,12 @@ identical to build 24's to the tick (`i_cached` 500 ticks/kinstr,
   of this core: restore a clean image (docs/47).
 * The simulator never reaches "The system is coming up" (a sim-only device
   wait); the board does.
-* `hinv` has not been captured on this build; it should report an R4600.
+* `hinv` on this build (`tests/out/hw/hinv-b25.txt`): "1 50 MHZ IP22
+  Processor", "CPU: MIPS R4600 Processor Chip Revision: 2.0", FPU R4600
+  2.0, 16 KB / 16 KB caches, 48 MB, "Integral SCSI controller 0: Version
+  WD33C93A", disk on unit 1 and CD-ROM on unit 6, "Graphics board: Indy
+  24-bit". It also lists an ISDN unit, an Ethernet `ec0` and a Presenter
+  adapter - stubs answering probes; none of the three works (docs/48).
 
 ## SGIIndy_20260829 — the first build that draws
 

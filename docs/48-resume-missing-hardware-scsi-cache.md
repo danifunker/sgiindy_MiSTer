@@ -71,8 +71,54 @@ by the docs/45 recipe, types `root`, then `hinv > /hinv.txt` and `init 0`,
 and lifts the file off the image with efsread.py). Output:
 
 ```
-(see tests/out/hw/hinv-b25.txt - pasted below once captured)
+1 50 MHZ IP22 Processor
+FPU: MIPS R4600 Floating Point Coprocessor Revision: 2.0
+CPU: MIPS R4600 Processor Chip Revision: 2.0
+On-board serial ports: 2
+On-board bi-directional parallel port
+Data cache size: 16 Kbytes
+Instruction cache size: 16 Kbytes
+Main memory size: 48 Mbytes
+Integral ISDN: Basic Rate Interface unit 0, revision 1.0
+Integral Ethernet: ec0, version 0
+Integral SCSI controller 0: Version WD33C93A
+CDROM: unit 6 on SCSI controller 0
+Disk drive: unit 1 on SCSI controller 0
+Graphics board: Indy 24-bit
+Presenter adapter board.
 ```
+
+Captured 12:42 on 2026-09-08 (`tests/out/hw/hinv-b25.txt`; the login,
+the typed line and the halt all landed - `tests/out/hw/hinv-console.png`
+shows IRIX's shutdown dialog). What it says, line by line where it matters:
+
+* **"50 MHZ"**: IRIX derives the clock from Count, which ticks at half the
+  pipeline clock (`bench/count_rate` 25.0M/s) - the "66 MHz is a
+  measurement" note in `docs/FEATURES_EVALUATE.md`. A real Indy R4600 is
+  100 or 133 MHz. Cosmetic, unless something scales by it.
+* **"WD33C93A"**, not "WD33C93B, revision D" as on a real Indy: IRIX's
+  `wd93` driver reads the chip's revision and chooses timing/sync/burst
+  behaviour by it. Our `rtl/scsi/wd33c93.sv` identifies as an A. Whether
+  the B paths would matter (they enable faster transfer modes) is a
+  question for the SCSI work in §3 - check what the driver does
+  differently before changing the ID (the PROM has its own opinion:
+  `hardware-bug-instrument-first`, "read every consumer").
+* **"Integral ISDN ... revision 1.0"**, **"Integral Ethernet: ec0, version
+  0"** and **"Presenter adapter board."** are all STUBS answering probes:
+  IRIX believes an ISDN unit, a SEEQ Ethernet and an Indy Presenter LCD
+  adapter exist. The Ethernet one is what we want once a SEEQ exists; the
+  ISDN and Presenter ones are false positives to make honest (the
+  Presenter matters most: its presence can change how IRIX programs the
+  display timing; the desktop is fine today, so it is not being driven, but
+  a "video mode" feature would trip over it).
+* **"Graphics board: Indy 24-bit"**: the Newport reports the 24-bit XL
+  board while the frame buffer is an 8-bit index plane (that is what
+  irixstate.py counts). X runs the 8-bit PseudoColor desktop regardless;
+  a 24-bit visual would draw into planes that are not there. Either
+  report 8-bit or implement the planes - a decision for the graphics
+  follow-up.
+* Caches 16 KB / 16 KB: `Config` says so (an R4600 does); the I-cache is
+  physically 8 KB, under-reported on purpose (docs/45).
 
 ## 2. Hardware a real Indy has that this core does not
 
@@ -92,7 +138,8 @@ IRIX user.
 | **CD-ROM audio** (CD-DA through the SCSI CD) | `rtl/scsi/cd_audio.sv` exists from the Mac lineage; `docs/FEATURES_EVALUATE.md` says deferred, the CD is built without it | Wire the audio engine's output - it needs `AUDIO_L/R`, i.e. the HAL2 work above or a direct path | LOW (until HAL2 exists) |
 | **Parallel port** (PBUS channel) | stubs | Nothing IRIX needs to boot; a printer port | LOW |
 | **VINO video input + IndyCam** | absent, not decoded | A full capture engine; no source on a MiSTer | NONE |
-| **ISDN** (Integral ISDN BRI) | absent | Nothing to connect it to | NONE |
+| **ISDN** (Integral ISDN BRI) | absent - but `hinv` REPORTS one ("revision 1.0"): a stub answers its probe | Make the probe fail honestly (bus error / absent ack at its address); nothing to connect a real one to | NONE (fix the false positive) |
+| **Indy Presenter** LCD adapter | absent - but `hinv` reports "Presenter adapter board.": a stub answers its probe | Same: make the probe fail. Its presence can change how IRIX programs display timing, which any "video mode" feature would trip over | fix the false positive |
 | **GIO64 expansion slots** | absent (IRIX probes 0x1F400000/0x1F600000 and gets the absent ack) | Only if a GIO card (e.g. a second SCSI, 100BaseT) were ever modelled | NONE |
 | Second WD33C93 (Indigo2 only), EISA (Indigo2 only) | absent | Not Indy hardware | - |
 | **L2 cache** | none (an R4600PC) | An R4600SC's 512 KB L2 is what a real 100 MHz Indy ships with; our miss cost is the DDR3 round trip (docs/39) | performance only |

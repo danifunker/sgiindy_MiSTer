@@ -1,0 +1,15 @@
+1 50 MHZ IP22 Processor
+FPU: MIPS R4600 Floating Point Coprocessor Revision: 2.0
+CPU: MIPS R4600 Processor Chip Revision: 2.0
+On-board serial ports: 2
+On-board bi-directional parallel port
+Data cache size: 16 Kbytes
+Instruction cache size: 16 Kbytes
+Main memory size: 48 Mbytes
+Integral ISDN: Basic Rate Interface unit 0, revision 1.0
+Integral Ethernet: ec0, version 0
+Integral SCSI controller 0: Version WD33C93A
+CDROM: unit 6 on SCSI controller 0
+Disk drive: unit 1 on SCSI controller 0
+Graphics board: Indy 24-bit
+Presenter adapter board.
