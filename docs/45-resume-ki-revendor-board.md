@@ -50,14 +50,16 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   the fitter (build 22: 40,548), 8 "uninferred RAM" notices of which the two
   new ones (the I-cache data slices) are bypass logic - the arrays themselves
   are altsyncram in the map report. `b23.log`/`b23.console` have the detail.
-* **The Indy board is `192.168.99.94`** (`scripts/local.env`), and it is NOT
-  shared: the other Claude session's ssh traffic goes to `192.168.99.143`, a
-  different MiSTer (MacQuadra800). **At 20:05 on 2026-09-07 the Indy board
-  was OFF THE NETWORK** - no ARP entry, ping unreachable, ssh timed out for
-  five minutes - i.e. powered off or unplugged, not a crashed core (a
-  MiSTer's Ethernet lives on the HPS and stays up while the board has
-  power). The Opus board session could not deploy; nothing on the board was
-  touched. It DID rebuild the hardware suite's boot ROM for the R4600
+* **The Indy board is now `192.168.99.92`** (`scripts/local.env`, gitignored
+  - it was `.94` until 2026-09-07; DHCP moved it), and it is NOT shared: the
+  other Claude session's ssh traffic goes to `192.168.99.143`, a different
+  MiSTer (MacQuadra800). At 20:05 on 2026-09-07 the first Opus board session
+  found `.94` off the network and could not deploy; at 20:18 the user gave
+  the new address and the board answered (uptime 2 days, a test core named
+  DiskIOTest running, build 21's rbf in `_Unstable`, `SGIIndy53.img` on the
+  card), and a second Opus session was sent to bench build 22 then build 23
+  and boot IRIX on build 23. The first session touched nothing on the board
+  but DID rebuild the hardware suite's boot ROM for the R4600
   identity: `tests/out/hw-cputest/boot.rom` (md5
   `964d3ce593631c526d8ac4d3f2536d91`, from the patched `~/cputests`; the
   one on disk was build-21-era and would have refused PRId 0x2020). Note
