@@ -18,8 +18,11 @@ the two things that separate them exactly:
     background is index 9 (~37 % of the screen, 169 indices, calibrated on
     tests/out/hw/b22-boot1.raw); the X login screen is index 16 at ~61 %
     (23 indices, b22-login.raw) and the desktop index 16 at ~47 % (46
-    indices, b22-desk.raw). Index 0xE7 is what fb_poke.py leaves - a screen
-    still full of it never drew.
+    indices, b22-desk.raw); the login chooser WITH its user icons drawn is
+    index 16 at ~22 % over 166 indices (build 25 boot 3, docs/47), and X's
+    freshly cleared root window is index 16 at ~35 % over 2 indices - so the
+    cut is index 16 above 15 % with no boot panel. Index 0xE7 is what
+    fb_poke.py leaves - a screen still full of it never drew.
 
 Verdicts, first word of the line:
   PANIC      panicstr set (the message follows)
@@ -82,7 +85,7 @@ def main():
         v, why = "PANIC", guest_str(ps)
     elif mark > 50:
         v, why = "NEVER-DREW", ""
-    elif x16 > 30 and panel < 5:
+    elif x16 > 15 and panel < 5:
         v, why = "X-UP", ""
     elif panel > 8:
         v, why = "BOOTING", ""

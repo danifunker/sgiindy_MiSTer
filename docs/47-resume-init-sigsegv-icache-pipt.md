@@ -200,6 +200,13 @@ compare. Only bit 12 matters now (index 12:5):
   X-UP is real. The crash-loop diagnosis stands: same build, same board,
   pristine files -> clean boot. Boots 2-5 follow, then build 24 the same
   way (that is the number PIPT has to beat), then build 22.
+* **Build 25 pristine boots 2 and 3: clean as well** (boot 2 X-UP at 272 s;
+  boot 3 logged UNKNOWN at the 438 s deadline but `b25f-boot3.png` is the
+  same login chooser - the classifier's X-UP cut was index 16 > 30 %, and
+  the chooser with its icons drawn is 22 % over 166 indices; cut loosened
+  to 15 % in `irixstate.py`, pushed to the device for boots 4-5). **Build
+  25: 3 of 3 clean on pristine images.** The CPU at the login screen idles
+  at pc 0x88012b58 (kernel), EXL 0.
 * **Next, in order:** irix6 result -> fit result (core slack; if the clock
   fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
   output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag
