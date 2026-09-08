@@ -72,9 +72,11 @@ login chooser and the 4Dwm desktop, with a working keyboard and mouse.
 Verilator IRIX boot clean to 230M cycles with the exit device table
 identical to the previous build's; on the DE10-Nano, **five IRIX boots out
 of five to the login chooser**, each from a pristine disk image
-(`scripts/irixrate.sh --fresh`). The hardware cpu-tests (2165/3) were last
-run on build 24, which differs from this one only in the cache index; they
-were not re-run on this bitstream.
+(`scripts/irixrate.sh --fresh`); the hardware cpu-tests on this bitstream
+**2166 passed / 3 failed** (245 tests; the three are `fpu/vec_cvt_from_l`,
+unchanged since the N64 base), PRId and FIR 0x2020, and the bench numbers
+identical to build 24's to the tick (`i_cached` 500 ticks/kinstr,
+`ld_miss` 13 ticks/load, `count_rate` 25.0M/s).
 
 ### Known
 
