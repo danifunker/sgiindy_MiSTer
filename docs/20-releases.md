@@ -31,6 +31,34 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260908_2 — the CD-ROM cached too
+
+`releases/SGIIndy_20260908_2.rbf`, md5 `28e1b0c662efe8ef9df8eef89d9cf10c`
+(build 27, SEED=2; 36,609 ALMs, 44,279 registers, 475 / 553 M10K, core
+clock setup slack +3.069 ns, every domain met). Same `releases/boot.rom`.
+
+Two hours after 20260908, the same block cache with the CD-ROM slot cached
+as well: a 64-sector window like the disks', 8-sector transactions, so an
+install or a `dd` off the disc costs one HPS transaction per 4 KB instead
+of one per 512-byte sector (docs/49 §6). Nothing changes in Main_MiSTer:
+the CD slot of this core is served by Main's generic image path (the Mac
+fork's CD special cases are gated on the Mac cores), the same path the
+disks' multi-block reads already used. One rule of the cache changed with
+it: a mount pulse carrying the same image size now drops the slot's clean
+lines and keeps only the dirty ones, so two ISOs of one size swapped in
+the OSD cannot serve each other's blocks. A CHD in the CD slot was never
+decoded for this core by Main and still is not: use a flat ISO.
+
+Tested: the cache bench in three shapes (286,500 checks, 0 failures in the
+shipped one), the four PROM-level SCSI runs (the CD-block phase of the write
+test and the CD-ROM ratchet read the disc through the cache), the
+whole-machine IRIX boot identical to build 25's; on the board, four
+IRIX 5.3 boots to the login screen (two from a pristine image), 64 MB read
+raw off the install ISO with the cache on and off (16,752 vs 133,878 HPS
+transactions, target wait 8.1 s vs 18.9 s, the disc at 1.6 MB/s on the bus
+either way), and a 16 MB read checksummed by IRIX's `sum` against the ISO:
+checksum match (docs/49 §6).
+
 ## SGIIndy_20260908 — the SCSI block cache
 
 `releases/SGIIndy_20260908.rbf`, md5 `4e1cd4ea4d37ae42da9b0b17fb02ebe2`
@@ -97,8 +125,9 @@ misses) and again with it off (258 s, no panic; disk wait 20.2 s).
 * The cache holds up to 64 KB of the guest's writes for a few milliseconds
   after it acknowledges them. IRIX's own shutdown syncs long before the
   power goes; pulling the card mid-write was never safe.
-* The CD-ROM slot is not cached (`CACHE_CD = 0`): an install from CD still
-  costs one HPS transaction per 512-byte sector.
+* The CD-ROM slot is not cached in this build (`CACHE_CD = 0`): an install
+  from CD still costs one HPS transaction per 512-byte sector. 20260908_2
+  above fixes that.
 
 ## SGIIndy_20260907 — IRIX 5.3 to the desktop on the R4600 core
 

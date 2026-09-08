@@ -1,0 +1,19 @@
+[17:31:44] launching 28e1b0c662efe8ef9df8eef89d9cf10c, cache on
+[17:38:49] before: scsi: hps xact rd=29358 wr=7200 busy=43.8s | target wait=15.6s | bus busy=75.0s data=65.9s 100.81MB (1.53 MB/s) | cache hits=185223 misses=4964 writes=11673
+[17:39:43] after:  scsi: hps xact rd=29593 wr=7933 busy=45.3s | target wait=15.9s | bus busy=76.2s data=66.9s 102.05MB (1.53 MB/s) | cache hits=186724 misses=5005 writes=12588
+cdread 64 MB cache on: DATA 1.24 MB in 1.0 s of DATA phase (1.24 MB/s on the bus); wall ~32 s (0.04 MB/s to the guest, polled at 5 s); hps_io rd=235 wr=733, HPS busy 1.5 s; target wait 0.3 s; bus busy 1.2 s; cache hits=1501 misses=41
+[17:45:44] launching 28e1b0c662efe8ef9df8eef89d9cf10c, cache on
+[17:45:45] guest sum: 
+[17:45:45] disc  sum:   (/media/fat/games/SGIIndy/IRIX 5.3 XFS.iso, first 64 MB)
+[17:45:45] CHECKSUM MISMATCH
+[17:51:24] before: scsi: hps xact rd=12152 wr=6649 busy=27.2s | target wait=11.7s | bus busy=37.6s data=31.9s 40.28MB (1.26 MB/s) | cache hits=69239 misses=2264 writes=9435
+[17:53:37] no CD traffic in 120 s - wrong device name, or the console did not take the line
+[17:53:38] after:  scsi: hps xact rd=12589 wr=7730 busy=29.5s | target wait=12.2s | bus busy=39.9s data=33.5s 42.48MB (1.27 MB/s) | cache hits=72172 misses=2335 writes=10789
+cdread 64 MB cache on: DATA 2.20 MB in 1.6 s of DATA phase (1.37 MB/s on the bus); wall ~0 s (0.00 MB/s to the guest, polled at 5 s); hps_io rd=437 wr=1081, HPS busy 2.3 s; target wait 0.5 s; bus busy 2.3 s; cache hits=2933 misses=71
+[17:56:09] launching 28e1b0c662efe8ef9df8eef89d9cf10c, cache on
+[18:02:54] before: scsi: hps xact rd=29216 wr=7234 busy=45.0s | target wait=17.0s | bus busy=75.6s data=66.7s 100.00MB (1.50 MB/s) | cache hits=183788 misses=4956 writes=11525
+[18:05:15] after:  scsi: hps xact rd=33887 wr=16959 busy=79.8s | target wait=34.0s | bus busy=115.6s data=105.3s 136.05MB (1.29 MB/s) | cache hits=219794 misses=5863 writes=45932
+cdread 16 MB cache on: DATA 36.05 MB in 38.6 s of DATA phase (0.93 MB/s on the bus); wall ~113 s (0.32 MB/s to the guest, polled at 5 s); hps_io rd=4671 wr=9725, HPS busy 34.8 s; target wait 17.0 s; bus busy 40.0 s; cache hits=36006 misses=907
+[18:07:59] guest sum: 4864 32768 /tmp/cd.bin
+[18:07:59] disc  sum: sysv 4864 32768 | bsd 47444 16384  (/media/fat/games/SGIIndy/IRIX 5.3 XFS.iso, first 16 MB)
+[18:07:59] CHECKSUM MATCH

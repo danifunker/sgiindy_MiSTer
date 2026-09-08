@@ -185,6 +185,103 @@ What it says:
   first 105 s of the boot is where the disk is busiest (12.3 s of DATA
   phase by then, cache off); after ~190 s reads stop and rc2/X are CPU.
 
+## 6. The CD-ROM slot cached - build 27 (2026-09-08, after the 20260908 release)
+
+Asked for after the release: "can you add CD cache? Also do we need to do
+anything with Main?"
+
+**Main: nothing.** The board runs the MacQuadra800 Main FORK (its binary
+carries the "Mac CD:" strings; an Aug 28 build, before the fork's
+multi-block CD commit `4857af1`). Every Mac CD special case in that fork -
+`mac_cdda_window`, `mac_cdrom_fill`, the 2352-byte frames, the TOC blob -
+is gated on `is_mac_scsi_family()` (the core's name), so for this core the
+CD slot goes through the same generic `sd_image` path as the disks:
+`blks = ((c >> 9) & 0x3F) + 1`, `blksz = 128 << ((c >> 6) & 7)`, up to 16 KB
+per transaction, read-ahead of 32 blocks in Main's own buffer. That path is
+the one the build 26 measurement already exercised (8,313 read
+transactions for 26 MB). Stock Main has the same code. The one thing
+neither serves for a generic core is a **CHD** in the slot (`sd_type` knows
+DEFAULT/C64/A2/IIGS; CHD is only decoded for PSX/CDi/Saturn-class cores
+and, in the fork, for the Mac family): a `.chd` here is read as the raw
+container, which was true before the cache and is unchanged by it.
+`SC3,IMGISOCHD` in CONF_STR promises more than Main delivers.
+
+**What changed (all bench-covered):**
+
+* `sgi_scsi.sv`: `CACHE_CD = 1`, `CACHE_SECT2 = 64`, `MB_CD = 1`. The CD
+  slot gets the same 64-sector window as a disk rather than the Mac's 16:
+  an install reads the disc sequentially through scsi.v's 32-sector ring,
+  and a 16-sector window re-bases every 8 KB with a demand miss each time,
+  where 64 sectors gives one demand fetch and seven prefetches per 32 KB.
+  Store: 192 sectors = 96 M10Ks (build 26: 64).
+* `scsi_cache.sv`, the mount rule: a mount pulse with the SAME size keeps
+  only the dirty sectors (`valid <= dirty`) instead of everything. The Mac
+  keeps everything for its top level's post-reset mount replay; nothing
+  replays a mount here, so a same-size pulse is a real swap - and two ISOs
+  of one size in the read-only CD slot would otherwise be served from the
+  previous disc. Dirty disk sectors still flush (T6 checks both halves,
+  and the CD swap).
+* Bench: `make -C verilator tb_scsi_cache_sgi` is this shape (CACHE_CD=1,
+  SECT2=64, MB_CD=1); 286,500 checks, 0 failures; 127 device reads where
+  the passthrough shape needs 256.
+* `scripts/cdread.sh --mode on|off --mb N`: boots IRIX, logs in, types
+  `dd if=/dev/rdsk/dks0d6vol of=/dev/null bs=65536 count=N*16` at the
+  Console, and reads the beacon every 5 s until the DATA-phase byte count
+  stops - the deltas are the read's transactions, wait, bus time and cache
+  hits; the wall time is the span of the polls that saw it move.
+
+**Fit 27** (`output_files/sgiindy-b27-seed2.rbf`, md5
+`28e1b0c662efe8ef9df8eef89d9cf10c`, SEED=2, 16:29-17:05, `build.sh`
+direct): 36,609 ALMs (87 %), 44,279 registers, **475 / 553 M10K** (the CD's
+64 sectors = 32 more), core clock setup slack **+3.069 ns**, HDMI +0.469,
+every domain met. Gates before it: the three bench shapes, the four
+PROM-level runs (run-scsiwr's CD phase and run-cdrom read the disc through
+the cache), the IRIX boot identical to build 25's.
+
+**Results** (`scripts/cdread.sh --mode on|off --tag b27 --mb 64`, fit 27,
+17:11-17:27 on 2026-09-08, logs `tests/out/hw/cdread-b27-{on,off}.log`;
+the read is `dd` of the first 64 MB of "IRIX 5.3 XFS.iso" on ID 6; the
+deltas below span the read plus ~5 MB of the desktop's own traffic):
+
+| 64 MB off the disc | cache ON | cache OFF |
+|---|---|---|
+| hps_io read transactions | 16,752 (~4 KB each) | 133,878 (one per sector) |
+| target wait | 8.1 s | 18.9 s |
+| cache hits / misses | 133,401 / 2,156 (98.4 %) | - |
+| SCSI bus busy / DATA phases | 43.6 s / 41.6 s | 44.8 s / 42.6 s |
+| DATA-phase rate | 1.66 MB/s | 1.62 MB/s |
+| wall (polls, ±8 s) | ~143 s | ~106 s |
+
+The SCSI side is what the cache promised: an eighth of the transactions,
+the guest waiting 10.8 s less, the disc read at the byte path's 1.6 MB/s
+either way. The wall clock is NOT a like-for-like number: the cache-on run
+was the first login on a freshly restored image (40 MB of desktop traffic
+had already gone by when the read was typed), the cache-off run the second
+boot of that image, and the poll is a 5 s sleep plus an ssh round trip.
+Even so, both say the same thing as the boot did: a raw CD read at 0.5-0.65
+MB/s to the guest with the bus busy 40 % of the time is CPU-bound in the
+guest (dd, the driver's per-command work, copyout), and the SCSI byte path
+at 1.6 MB/s is the next thing after that. Correctness:
+`scripts/cdread.sh --mode on --tag b27 --mb 16 --sum` (`tests/out/hw/
+cdread-b27-on-sum.log`) copies the first 16 MB of the disc to a file through
+the cache and runs IRIX's `sum` on it; the file comes off the image with
+efsread.py and the same checksum is computed over the ISO on the device.
+Guest: `4864 32768 /tmp/cd.bin`. Disc: `sysv 4864 32768`. **CHECKSUM MATCH.** (A `|` typed through the ws API never
+reaches IRIX's shell as one - two runs with `dd ... | sum` moved no CD bytes
+at all; the script now writes a temporary file instead.)
+
+**A write-side follow-up the checksum run exposed.** Its 16 MB copy back to
+the disk took 9,725 hps_io write transactions for ~33,000 sectors: most
+flushes went out as single sectors, and the boot's 4,691 writes for 7,108
+sectors say the same. A partly dirty group is flushed sector by sector once
+the engine has been quiet for `FLUSH_IDLE` = 4096 cycles = 82 us, and IRIX's
+gap between one WRITE command and the next is longer than that at this CPU
+speed, so groups are drained before they fill - and every 64-sector window
+crossing (`E_FLUSHALL`) then waits for all of those single-sector O_SYNC
+writes (17 s of target wait in that run). Raise FLUSH_IDLE to a few ms and
+measure sectors per write transaction; the disk beacon words already carry
+both numbers.
+
 ## 5. Recipes (self-contained)
 
 * Bench: WSL, native FS: `rsync` `rtl tools verilator` into `~/kicpu`

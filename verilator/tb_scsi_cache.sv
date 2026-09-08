@@ -351,13 +351,32 @@ initial begin
 	settle;
 
 	$display("   fails so far: %0d", fails);
-	$display("-- T6 mount pulse with a new size invalidates slot 1; same size keeps it");
+	$display("-- T6 mount pulse with a new size invalidates slot 1; same size drops clean data, keeps dirty (SGI rule)");
 	ewrite(1, 9, 5);
 	settle;
 	m0 = stat_misses;
-	mount(1, 128);                                   // same size: replay, keep
-	eread(1, 9, 2);                                  // must be a hit: still cached
-	chk("T6 same-size mount kept the window", stat_misses - m0, 0);
+	mount(1, 128);                                   // same size: the clean sector is re-read
+	eread(1, 9, 2);
+	chk("T6 same-size mount: clean=miss", stat_misses - m0, 1);
+	// a dirty sector survives the same-size pulse, still flushes, still hits
+	dev_lat = 3000;                                  // slow device: the write is still dirty at the pulse
+	ewrite(1, 11, 6);
+	chk("T6 dirty before same-size mount", dut.dirty[1][11 - (dut.win_base[1] % 128)] ? 1 : 0, 1);
+	mount(1, 128);
+	m0 = stat_misses;
+	eread(1, 11, 2);
+	chk("T6 dirty survives, is a hit", stat_misses - m0, 0);
+	dev_lat = 40;
+	settle;
+	dcheck(1, 11, 6);
+	// the CD: two discs of one size - the second must not be served from the first
+	if (`CACHE_CD_TB) begin
+		mread(2, 3);
+		m0 = stat_misses;
+		mount(2, 128);                               // same size, "another disc"
+		mread(2, 3);
+		chk("T6 CD same-size swap re-reads", stat_misses - m0, 1);
+	end
 	mount(1, 64);                                    // different size: drop
 	chk("T6 new-size mount invalidated", dut.win_ok[1] ? 1 : 0, 0);
 	mount(1, 128);

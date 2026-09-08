@@ -1,0 +1,4 @@
+[17:11:02] launching 28e1b0c662efe8ef9df8eef89d9cf10c, cache on
+[17:16:40] before: scsi: hps xact rd=12144 wr=6723 busy=24.3s | target wait=9.6s | bus busy=35.3s data=30.1s 40.29MB (1.34 MB/s) | cache hits=69279 misses=2260 writes=9404
+[17:19:25] after:  scsi: hps xact rd=28896 wr=7861 busy=42.1s | target wait=17.7s | bus busy=78.9s data=71.7s 109.30MB (1.53 MB/s) | cache hits=202680 misses=4416 writes=10801
+cdread 64 MB cache on: DATA 69.01 MB in 41.6 s of DATA phase (1.66 MB/s on the bus); wall ~143 s (0.48 MB/s to the guest, polled at 5 s); hps_io rd=16752 wr=1138, HPS busy 17.8 s; target wait 8.1 s; bus busy 43.6 s; cache hits=133401 misses=2156

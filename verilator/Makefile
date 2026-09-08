@@ -163,8 +163,18 @@ tb_scsi_cache:
 	   tb_scsi_cache.sv $(RTL)/scsi/scsi_cache.sv
 	./obj_dir_tbc/tb_scsi_cache
 
-# The same bench in the shape sgi_scsi.sv instantiates: the CD slot passes
-# through and has no store (CACHE_CD = 0, SECT2 = 0).
+# The bench in the shape sgi_scsi.sv instantiates since build 27: the CD slot
+# cached with a 64-sector window and multi-block on (CACHE_CD = 1, SECT2 = 64,
+# MB_CD = 1).
+tb_scsi_cache_sgi:
+	$V --binary --timing $(TBC_W) +define+SIMULATION=1 +define+VERILATOR=1 +incdir+$(RTL)/scsi \
+	   +define+CACHE_CD_TB=1 +define+CACHE_S2_TB=64 +define+MB_CD_TB=1 \
+	   --top-module tb_scsi_cache --Mdir ./obj_dir_tbc_sgi -o tb_scsi_cache_sgi \
+	   tb_scsi_cache.sv $(RTL)/scsi/scsi_cache.sv
+	./obj_dir_tbc_sgi/tb_scsi_cache_sgi
+
+# The build 26 shape: the CD slot passes through and has no store (CACHE_CD = 0,
+# SECT2 = 0).
 tb_scsi_cache_nocd:
 	$V --binary --timing $(TBC_W) +define+SIMULATION=1 +define+VERILATOR=1 +incdir+$(RTL)/scsi 	   +define+CACHE_CD_TB=0 +define+CACHE_S2_TB=0 	   --top-module tb_scsi_cache --Mdir ./obj_dir_tbc_nocd -o tb_scsi_cache_nocd 	   tb_scsi_cache.sv $(RTL)/scsi/scsi_cache.sv
 	./obj_dir_tbc_nocd/tb_scsi_cache_nocd

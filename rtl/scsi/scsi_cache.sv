@@ -370,6 +370,15 @@ always @(posedge clk) begin
 	else if (idle_ctr != 13'd4095) idle_ctr <= idle_ctr + 1'b1;
 
 	//------------------------------------------------ mounts
+	// SGI: a mount pulse with the SAME size keeps only the dirty sectors.
+	// The Mac keeps everything, for its top level's post-reset replay of the
+	// mounts (a guest restart must not lose the last writes). Here nothing
+	// replays a mount: a same-size pulse is a real swap - two ISOs of one
+	// size in the CD slot, which is read-only and holds no dirt, and whose
+	// clean lines would otherwise be served from the previous disc. Dirty
+	// sectors belong to the image that was mounted when they were written,
+	// which by size is the one still there, and they flush as before; the
+	// clean ones are re-read.
 	for (i = 0; i < NS; i = i + 1)
 		if (img_mounted[i]) begin
 			if (img_blocks != size_r[i]) begin       // a different image: forget everything
@@ -378,6 +387,7 @@ always @(posedge clk) begin
 				win_ok[i] <= 1'b0;
 				size_r[i] <= img_blocks;
 			end
+			else valid[i] <= dirty[i];               // SGI: the same size: keep only what is still to be written
 		end
 
 	//------------------------------------------------ platform channel

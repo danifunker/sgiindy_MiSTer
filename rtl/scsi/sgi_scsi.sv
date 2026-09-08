@@ -64,15 +64,17 @@ module sgi_scsi #(
     parameter logic [6:0] TARGET_EN = 7'b100_0110,
 
     // Cache geometry, in 512-byte sectors per slot: two disks and the CD-ROM.
-    // 64 + 64 + 16 sectors = 72 KB of M10K if the CD slot is cached; with
-    // CACHE_CD = 0 (the default: the CD reads through scsi.v's own 32-sector
-    // ring and passes straight through the cache) the CD slot has no store
-    // and it is 64 KB, 64 M10Ks. Fits after build 25's 379/553. The bench
-    // runs this exact shape as `make -C verilator tb_scsi_cache_nocd`.
+    // 64 + 64 + 64 sectors = 96 KB of M10K, 96 blocks (build 27); the CD
+    // slot has the same window as a disk because an install reads the disc
+    // sequentially through scsi.v's 32-sector ring, and a 16-sector window
+    // (the Mac's) re-bases every 8 KB with a demand miss each time. With
+    // CACHE_CD = 0 the CD slot has no store and passes straight through
+    // (build 26: 64 KB, 64 M10Ks). The bench runs both shapes:
+    // `make -C verilator tb_scsi_cache_sgi` and `tb_scsi_cache_nocd`.
     parameter int CACHE_SECT0 = 64,
     parameter int CACHE_SECT1 = 64,
-    parameter int CACHE_SECT2 = 16,
-    parameter int CACHE_CD    = 0
+    parameter int CACHE_SECT2 = 64,
+    parameter int CACHE_CD    = 1
 )(
     input  logic        clk,
     input  logic        reset,
@@ -258,11 +260,13 @@ module sgi_scsi #(
         .SECT2   (CACHE_CD ? CACHE_SECT2 : 0),
         .PF_DEPTH(8),
         .CACHE_CD(CACHE_CD),
-        // The CD's multi-block path over there needs the Mac's Main fork; the
-        // CD slot here passes through anyway (CACHE_CD = 0), so this only
-        // matters if that is ever turned on - and then stock Main serves a
-        // flat ISO in 8-sector runs like any other image.
-        .MB_CD   (0)
+        // The Mac needs its Main fork for multi-block CD reads because its
+        // CD slot serves CD-DA frames and a TOC blob at special block sizes;
+        // this core's CD is a flat ISO read as 512-byte blocks through the
+        // same generic path as a disk, which stock Main serves in 8-sector
+        // runs (user_io.cpp: blks = ((c >> 9) & 0x3F) + 1). So the CD slot
+        // works in groups like the disks.
+        .MB_CD   (1)
     ) u_cache (
         .clk        (clk),
         .nreset     (~reset),
