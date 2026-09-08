@@ -50,7 +50,10 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   39x `mouseMove:7,10` lands in the Console, `root`+Enter, and at +35 s -
   before Software Manager maps - `hinv > /hinv.txt` then `init 0`; read the
   file with `efsread.py IMAGE cat /hinv.txt` after the halt).
-* **The black HDMI picture is HOST-SIDE, not either bitstream.** A/B on the
+* **The black HDMI picture is not either bitstream** (CORRECTION, see docs/46:
+  the MiSTer OSD is visible over the black, so the HDMI transmitter, scaler
+  output and monitor are fine and it is the core's video INTO the scaler
+  that is absent - on build 22 as much as 24). A/B on the
   board: build 22 and build 24, at the PROM screen, fsck, "coming up", the X
   chooser and the halt screen - `scripts/grab.sh` (the MiSTer's screenshot
   API) returned "STALE: no new frame" at EVERY stage of BOTH builds, while
