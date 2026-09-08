@@ -24,9 +24,12 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   physically indexed since docs/40, was fine. Fix (commit `52b3a09`,
   UPSTREAM.md "The instruction cache"): the I-cache is now 8 KB direct-mapped,
   index 12:5, with the N64 base's full 20-bit tag - one R4600 way. cpuonly
-  728/0, cpu-tests 2161/3; the IRIX sim boot on it is `~/kicpu/irix5`; the
-  build-24 fit (SEED=2) was queued via `scripts/fit_when_free.sh b24` at 20:48
-  behind the other session's Quartus. Follow-up: 16 KB as two 8 KB ways with
+  728/0, cpu-tests 2161/3; **IRIX sim boot on it PASSES** (`~/kicpu/irix5`:
+  no PANIC to 230M, the same 24-entry device table, last new peripheral
+  HPC3-PBUS-PIO at 182.12M vs 181.46M with the 16 KB I-cache - the 8 KB
+  cache costs ~0.4 % of cycles through the boot); the build-24 fit (SEED=2)
+  was queued via `scripts/fit_when_free.sh b24` at 20:48 behind the other
+  session's back-to-back Quartus runs. Follow-up: 16 KB as two 8 KB ways with
   the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
   board attempt fell into (it is for the diskless PROM prompt, not an IRIX
   boot) is a separate trap: launch once and wait for the desktop.
