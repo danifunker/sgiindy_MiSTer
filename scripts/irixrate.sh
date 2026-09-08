@@ -81,7 +81,8 @@ for f in tools/misterdeploy/ddr3_peek.py tools/misterdeploy/fb_poke.py \
 mkdir -p tests/out/hw
 LOG="tests/out/hw/irixrate-$TAG.log"
 RBFMD5=$(rsh "md5sum /media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE" | cut -c1-32)
-echo "=== $(date '+%F %T') $TAG: $N launches, deadline ${WAIT}s, rbf md5 $RBFMD5, image ${FRESH:+restored from $FRESH before each launch}${FRESH:-as left by the previous boot} ===" | tee -a "$LOG"
+IMGDESC="as left by the previous boot"; [ -n "$FRESH" ] && IMGDESC="restored from $FRESH before each launch"
+echo "=== $(date '+%F %T') $TAG: $N launches, deadline ${WAIT}s, rbf md5 $RBFMD5, image $IMGDESC ===" | tee -a "$LOG"
 declare -A TALLY
 for i in $(seq 1 "$N"); do
     if [ -n "$FRESH" ]; then
