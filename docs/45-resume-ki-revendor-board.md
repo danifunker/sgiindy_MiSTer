@@ -34,8 +34,43 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   (rbfs are not tracked - `output_files/` is gitignored). CORE clock setup
   slack **+1.697 ns** (build 23 +2.904, build 22 +2.459): the full 20-bit tag
   compare is on the fetch path KI's FetchIndex work shortened, and it costs
-  about a nanosecond; still comfortably met. A second Opus board session was
-  sent at 06:50 on 2026-09-08 to bench build 24 and boot IRIX on it. Follow-up: 16 KB as two 8 KB ways with
+  about a nanosecond; still comfortably met.
+* **BUILD 24 PASSES ON THE BOARD (Opus session, 2026-09-08 06:50-08:41).**
+  Hardware cpu-tests 2165/3 (PRId/FIR 0x2020, Config 0x0006e4b0, only
+  `fpu/vec_cvt_from_l`), every bench number identical to build 23's
+  (`i_cached` 500 ticks/kinstr - the 8 KB I-cache costs nothing measurable
+  on the bench; `ld_miss` 114,437 ticks / 8192 loads). **IRIX 5.3 booted
+  twice, cleanly, to the full desktop: fsck, "The system is coming up", X,
+  the login chooser, root login, desktop - with ZERO "Bus error /
+  Segmentation fault / Illegal instruction / core dumped" messages and no X
+  restarts.** Build 23's failure mode is gone. IRIX noticed the new CPU
+  ("Your system hardware configuration has changed since you last installed
+  software"). `hinv` on build 24 was not captured (desktop pointer targeting;
+  the session's recipe: at a FRESH chooser, 30x `mouseMove:-60,-60` then
+  39x `mouseMove:7,10` lands in the Console, `root`+Enter, and at +35 s -
+  before Software Manager maps - `hinv > /hinv.txt` then `init 0`; read the
+  file with `efsread.py IMAGE cat /hinv.txt` after the halt).
+* **The black HDMI picture is HOST-SIDE, not either bitstream.** A/B on the
+  board: build 22 and build 24, at the PROM screen, fsck, "coming up", the X
+  chooser and the halt screen - `scripts/grab.sh` (the MiSTer's screenshot
+  API) returned "STALE: no new frame" at EVERY stage of BOTH builds, while
+  the core's display engine was healthy throughout (`did_en=1 walk=RUN`,
+  `rgb_miss=0 aux_miss=0` - zero is the good reading - `aux_skips` ~28.0k/s
+  on both) and the frame buffer read back perfect. The MiSTer has produced
+  no capturable frame since 21:03 on 2026-09-07 (build 22's desktop was
+  captured fine at 21:01), `echo screenshot > /dev/MiSTer_cmd` yields
+  nothing, and the fault survived the MiSTer's own Linux reboot at ~07:00.
+  Next step is a MiSTer power cycle / HDMI cable / monitor-input check (the
+  user's), not RTL. `MiSTer.ini` is untouched since 2026-08-30; its
+  `[SGIIndy] video_mode=8 vscale_mode=1` is deliberate (the comment there:
+  this monitor does not take a 5:4 1280x1024 mode; 1080p shows the 1024
+  lines 1:1 with bars).
+* **Board final state (08:41): build 22 in `_Unstable` (md5
+  bd342f18e6be032fee53bfdc07fae3aa), the real PROM as boot.rom,
+  `SGIIndy53.img` in slot 1 cleanly unmounted, guest halted at "Okay to
+  power off".** Build 24 (`output_files/sgiindy-b24-seed2.rbf`, md5
+  ab3ae66db0604ccfa466224785e2cdf5) is the verified core; deploy it with
+  `scripts/deploy.sh --rbf output_files/sgiindy-b24-seed2.rbf` when wanted. Follow-up: 16 KB as two 8 KB ways with
   the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
   board attempt fell into (it is for the diskless PROM prompt, not an IRIX
   boot) is a separate trap: launch once and wait for the desktop.
