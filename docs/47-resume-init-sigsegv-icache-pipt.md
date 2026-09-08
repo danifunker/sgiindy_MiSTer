@@ -146,6 +146,53 @@ compare. Only bit 12 matters now (index 12:5):
   `scripts/irixrate.sh N --tag bNN` launches N times (memclear + fb mark +
   `launch_unstable_core.py`, saved SCSI slot re-attaches the image), polls
   every 20 s to 420 s, tallies, logs to `tests/out/hw/irixrate-<tag>.log`.
+* **BOARD RESULT, build 25: PANIC 3 of 3** (`irixrate-b25.log`, 10:38-10:46):
+  every boot `init died (why = 2, what = 0xb)` at 80-83 s after the launch
+  command (i.e. within a minute of the core starting - before any fsck
+  output is on the panel). Not build 24's one-in-three: DETERMINISTIC. So
+  either the PIPT build regressed init (the sim says no - clean to 230M),
+  or the IMAGE STATE confounds the measurement (root FS dirty from the
+  09:17 panic and the dump on swap; every boot since has been a hard reset
+  on top of that). The run was stopped after 3 and the CONTROL launched:
+  build 24 (`ab3ae66d...`) through the same script on the same image,
+  `irixrate.sh 5 --tag b24` (`b24board.console`, `irixrate-b24.log`).
+  If build 24 also panics every time: refresh the image from
+  `C:\Temp\mistercore\iris\SGIIndy53-master.img` and re-measure both. If
+  build 24 boots: the PIPT change regressed on the board only (the
+  remaining board-only differences are timing/DDR3-latency shaped: fill
+  data arrival vs the fill_done readout, the clk1x/clk93 fill logic).
+  The free discriminator after that is `scripts/setopt.sh cache=off`
+  (status[11] disables BOTH caches): a panic with the caches off is not a
+  cache bug at all.
+* **CONTROL: build 24 PANICS TOO, 2 of 2 at 80-82 s** (`irixrate-b24.log`,
+  10:44-10:48; stopped there). So the deterministic panic is the IMAGE, not
+  the build - and it is NOT damage to what init executes: `/etc/init`,
+  `/lib/rld`, `/lib/libc.so.1`, `/sbin/sh`, `/etc/inittab`, `/etc/bcheckrc`
+  and `/unix` are md5-identical between the board's image and the pristine
+  master (efsread.py on both; the board's `/unix` == the worktree's
+  `unix.ecoff`; reading the MASTER's `/unix` with efsread.py on the host
+  shows an 83 KB run of zeros in .text at file offset 0x4C00 - a reader
+  artefact of that image's extent layout, the sim boots that image fine,
+  don't chase it). **What differs is init's own state files:
+  `/etc/ioctl.syscon` 0 bytes (73 on the master), `/var/adm/utmp` 0 (252),
+  `/var/adm/utmpx` 0 (2604)** - plus the debris of build 23's storm:
+  `/dev/core` 513 KB, `/var/adm/core` 173 KB, bigger SYSLOG/wtmp (the full
+  listing diff is `tests/out/hw/irixrate-state-diff.txt`). init truncates
+  those three at start and rewrites them only if it lives, so one `init
+  died` leaves the next init to die on empty files: a self-perpetuating
+  crash loop. The 09:17 panic seeded it; everything measured after it -
+  both runs today - measured the loop. Whether the 09:17 panic itself was
+  the I-cache alias or this same state (the MiSTer `reboot` at 09:15 cut
+  off whatever was running) is not knowable from here.
+* **The protocol is therefore a PRISTINE IMAGE PER BOOT.** The master was
+  copied to the board as
+  `/media/fat/games/SGIIndy/SGIIndy53-pristine.img` (2 GB scp, ~11:00) and
+  `scripts/irixrate.sh` grew `--fresh /media/fat/games/SGIIndy/
+  SGIIndy53-pristine.img` (device-side `cp` + `mv` over the attached image
+  before EVERY launch; the copy takes a few minutes each). Run: `bash
+  scripts/irixrate.sh N --tag b25 --fresh ...` then the same for build 24
+  (the number PIPT must beat) and build 22 (the instrument control).
+  Expect ~8-9 minutes per boot; 5 boots per build is the first honest cut.
 * **Next, in order:** irix6 result -> fit result (core slack; if the clock
   fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
   output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag

@@ -27,6 +27,22 @@
 #
 #   bash scripts/irixrate.sh 10 --tag b25
 #
+# --fresh PRISTINE.img (ON THE DEVICE, absolute path) copies that image over
+# the attached one before EVERY launch (copy to a temp name, then rename over
+# it, so the core still holding the old file keeps its old inode). THIS IS
+# NOT OPTIONAL FOR A RATE. An `init died` panic leaves /etc/ioctl.syscon,
+# /var/adm/utmp and /var/adm/utmpx ZERO bytes long - init truncates them at
+# start and rewrites them only if it lives - and the next init dies on them,
+# every time, on every build: build 25 panicked 3/3 and build 24 2/2 at the
+# same 80 s on the image left behind by the 09:17 panic, while the seven
+# files init executes (/etc/init, rld, libc, sh, inittab, bcheckrc, /unix)
+# were byte-identical to the pristine image (docs/47). Without --fresh the
+# tally after the first panic measures that loop, not the core.
+# The copy is 2 GB on the SD card (a few minutes); the deadline clock starts
+# after it.
+#
+#   bash scripts/irixrate.sh 10 --tag b25 --fresh /media/fat/games/SGIIndy/SGIIndy53-pristine.img
+#
 # Output: one line per boot and a tally, also appended to
 # tests/out/hw/irixrate-<tag>.log.
 set -u
@@ -37,11 +53,14 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 : "${MISTER_HTTP_PORT:=8182}"
 
-N=10; WAIT=420; TAG="run"
+N=10; WAIT=420; TAG="run"; FRESH=""
+IMG="/media/fat/games/${MISTER_GAMES_DIR:-SGIIndy}/SGIIndy53.img"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --wait) WAIT="$2"; shift ;;
-        --tag)  TAG="$2"; shift ;;
+        --wait)  WAIT="$2"; shift ;;
+        --tag)   TAG="$2"; shift ;;
+        --fresh) FRESH="$2"; shift ;;
+        --img)   IMG="$2"; shift ;;
         [0-9]*) N="$1" ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -62,9 +81,16 @@ for f in tools/misterdeploy/ddr3_peek.py tools/misterdeploy/fb_poke.py \
 mkdir -p tests/out/hw
 LOG="tests/out/hw/irixrate-$TAG.log"
 RBFMD5=$(rsh "md5sum /media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE" | cut -c1-32)
-echo "=== $(date '+%F %T') $TAG: $N launches, deadline ${WAIT}s, rbf md5 $RBFMD5 ===" | tee -a "$LOG"
+echo "=== $(date '+%F %T') $TAG: $N launches, deadline ${WAIT}s, rbf md5 $RBFMD5, image ${FRESH:+restored from $FRESH before each launch}${FRESH:-as left by the previous boot} ===" | tee -a "$LOG"
 declare -A TALLY
 for i in $(seq 1 "$N"); do
+    if [ -n "$FRESH" ]; then
+        # Rename over the attached file: the core still holding the old one
+        # keeps its inode, the next launch opens the fresh copy.
+        TC=$(date +%s)
+        rsh "cp '$FRESH' '$IMG.tmp' && mv '$IMG.tmp' '$IMG' && sync" || { echo "image restore failed" | tee -a "$LOG"; exit 1; }
+        printf "  %2d/%-2d  image restored in %ds\n" "$i" "$N" "$(( $(date +%s) - TC ))" | tee -a "$LOG"
+    fi
     rsh "python3 $DBG/fb_poke.py fill 0xE7" >/dev/null 2>&1
     rsh "python3 $DBG/memclear.py" >/dev/null 2>&1
     T0=$(date +%s)
