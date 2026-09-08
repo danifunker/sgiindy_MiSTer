@@ -11,6 +11,26 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
 
 ## STATE AT HANDOFF (read this first)
 
+* **BUILD 23 FAILED ON THE BOARD, AND THE CAUSE IS FOUND AND FIXED IN THE
+  TREE (build 24 pending).** On hardware, IRIX booted into bus errors,
+  segmentation faults and illegal instructions (the simulator boot was clean;
+  the hardware cpu-tests were 2165/3 with PRId/FIR 0x2020). The kernel's own
+  data names it: IRIX sets `cachecolormask` from PRId - 3 as an R4400, **1 as
+  an R4600** (only bit 12, because a real R4600's ways are 8 KB) - read at
+  `0x881B9680` in `~/kicpu/irix3/ram.bin` (R4600) and
+  `~/br16k/run_16k/ram.bin` (R4400). KI's I-cache is 16 KB VIRTUALLY indexed on
+  bits 13:5 with an 18-bit tag (31:14), so under the R4600 identity half of all
+  user text pages alias on bit 13 and can hit the wrong page. The data cache,
+  physically indexed since docs/40, was fine. Fix (commit `52b3a09`,
+  UPSTREAM.md "The instruction cache"): the I-cache is now 8 KB direct-mapped,
+  index 12:5, with the N64 base's full 20-bit tag - one R4600 way. cpuonly
+  728/0, cpu-tests 2161/3; the IRIX sim boot on it is `~/kicpu/irix5`; the
+  build-24 fit (SEED=2) was queued via `scripts/fit_when_free.sh b24` at 20:48
+  behind the other session's Quartus. Follow-up: 16 KB as two 8 KB ways with
+  the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
+  board attempt fell into (it is for the diskless PROM prompt, not an IRIX
+  boot) is a separate trap: launch once and wait for the desktop.
+
 * **Branch `claude/ki-revendor`** in the worktree
   `.claude/worktrees/modest-robinson-cad59e`. `main` is still the N64-base
   build 22 (`08d13e6`) and its rbf `output_files/sgiindy-b22-seed2.rbf`

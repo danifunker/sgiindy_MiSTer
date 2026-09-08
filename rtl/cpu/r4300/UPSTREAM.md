@@ -21,7 +21,7 @@ flatten to drift out of sync.
 | `cpu_cop0.vhd` | CP0, exceptions, TLB registers |
 | `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | the two TLB lookup engines |
 | `cpu_FPU.vhd`, `cpu_FPU_sqrt.vhd` | the FPU |
-| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 16 KB / 32-byte lines each |
+| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 32-byte lines: the D-cache 16 KB physically indexed, the I-cache 8 KB (one R4600 way - see "The instruction cache") |
 | `divider.vhd` | integer divider |
 | `functions.vhd`, `export.vhd` | `pFunctions` / `pexport` packages |
 | `SyncFifoFallThroughMLAB.vhd` | the CPU's write FIFO (KI's, with its accept handshake) |
@@ -202,6 +202,32 @@ livelock at ~192.6M is a pre-existing sim-only issue, not a cache regression).
 port value rather than a source change but belongs with them: with KSEG0 cached
 and mapped pages not, the two views of one physical page disagree, and
 `tlb/translation_works` writes through KSEG0 and reads back through a mapping.
+
+### The instruction cache — one R4600 way, not KI's 16 KB
+
+Build 23 put KI's I-cache on the board unchanged: 16 KB direct-mapped,
+**virtually** indexed on bits 13:5, tag compared on bits 31:14 only (KI
+narrowed the N64 base's 31:12 compare for timing). IRIX booted into a storm of
+bus errors, segmentation faults and illegal instructions, while the same boot
+was clean in the simulator. The kernel's own data explains it: IRIX sets
+`cachecolormask` from `PRId` — 3 as an R4400 (virtual and physical bits 13:12
+kept equal, which is what made a virtually indexed 16 KB cache survive on
+builds 21-22), **1 as an R4600** (only bit 12, because a real R4600's ways are
+8 KB). Read at `0x881B9680` in the RAM dumps of both simulator boots (docs/45).
+So under the R4600 identity half of all user text pages have virtual bit 13 ≠
+physical bit 13: a fetch could hit another 4 KB page's line, and the kernel's
+invalidates by physical address looked in the wrong set. The data cache was
+fine because it is physically indexed.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_instrcache.vhd` | 256 lines of 32 bytes (8 KB), index bits 12:5, tag bits 31:12 (20 bits + valid, the N64 base's width) | The one virtual index bit is the one IRIX colours for an R4600 — the same exposure a real R4600 way has, which IRIX is built to handle — and the full tag makes a wrong hit impossible for any mapping |
+| `cpu_cop0.vhd` | `Config` still reports a 16 KB I-cache | What an R4600 reports; an index flush sized from it walks ours twice, the safe direction. IRIX sizes its flushes from `PRId` regardless |
+
+The proper follow-up is 16 KB as two 8 KB ways with the way selected by
+physical bit 13 (no replacement policy needed, no alias possible); it costs a
+second data-RAM read and a mux on the fetch data path, which is exactly the
+path KI's `FetchIndex` work shortened.
 
 ### The memory path — no clock-domain crossing
 
