@@ -43,6 +43,13 @@
 #
 #   bash scripts/irixrate.sh 10 --tag b25 --fresh /media/fat/games/SGIIndy/SGIIndy53-pristine.img
 #
+# --stats (build 26 and later, docs/49) reads the SCSI disk-time counters out
+# of the DDR3 beacon at every 20 s poll (bcnread.py --stats) and logs them
+# with the verdict: HPS transactions, HPS-busy and target-wait seconds, bus
+# and DATA-phase seconds, bytes, the block cache's hits/misses/writes. The
+# counters start at core launch, so the line at X-UP is the boot's disk
+# time. Run it with scripts/setopt.sh scsicache=on and =off for the pair.
+#
 # Output: one line per boot and a tally, also appended to
 # tests/out/hw/irixrate-<tag>.log.
 set -u
@@ -53,7 +60,7 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${MISTER_CORE_FOLDER:=_Unstable}"; : "${RBF_REMOTE:=SGIIndy.rbf}"
 : "${MISTER_HTTP_PORT:=8182}"
 
-N=10; WAIT=420; TAG="run"; FRESH=""
+N=10; WAIT=420; TAG="run"; FRESH=""; STATS=0
 IMG="/media/fat/games/${MISTER_GAMES_DIR:-SGIIndy}/SGIIndy53.img"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -61,6 +68,7 @@ while [ $# -gt 0 ]; do
         --tag)   TAG="$2"; shift ;;
         --fresh) FRESH="$2"; shift ;;
         --img)   IMG="$2"; shift ;;
+        --stats) STATS=1 ;;
         [0-9]*) N="$1" ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -76,7 +84,8 @@ push() { scp -q -o StrictHostKeyChecking=no -i "$MISTER_SSH_KEY" \
 
 rsh "mkdir -p $DBG"
 for f in tools/misterdeploy/ddr3_peek.py tools/misterdeploy/fb_poke.py \
-         tools/misterdeploy/memclear.py tools/misterdeploy/irixstate.py; do push "$f"; done
+         tools/misterdeploy/memclear.py tools/misterdeploy/irixstate.py \
+         tools/misterdeploy/bcnread.py; do push "$f"; done
 
 mkdir -p tests/out/hw
 LOG="tests/out/hw/irixrate-$TAG.log"
@@ -105,6 +114,10 @@ for i in $(seq 1 "$N"); do
         # by some harnesses, and the ssh call has to be made anyway
         LINE=$(rsh "sleep 20; python3 $DBG/irixstate.py" 2>&1 | tail -1)
         K=$(echo "$LINE" | awk '{print $1}')
+        if [ "$STATS" = 1 ]; then
+            ST=$(rsh "python3 $DBG/bcnread.py --stats" 2>&1 | tail -1)
+            printf "         %4ds  %s | %s\n" "$(( $(date +%s) - T0 ))" "$K" "$ST" | tee -a "$LOG"
+        fi
         [ "$K" = PANIC ] || [ "$K" = X-UP ] && break
         [ $(( $(date +%s) - T0 )) -ge "$WAIT" ] && break
     done

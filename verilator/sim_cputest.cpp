@@ -182,6 +182,9 @@ struct Options {
     // board; the serial-console regressions turn it off, because the PROM
     // moves its console to the graphics head as soon as it finds one.
     bool        gfx = true;
+    // The SCSI block cache (docs/49); --scsi-nocache clears it and every
+    // block request becomes one HPS transaction, the pre-build-26 path.
+    bool        scsi_cache = true;
     // Which cpu_error bits abort the run. See kErrorNames: only the two that
     // mean the core itself is wedged are fatal by default.
     uint32_t fatal_errors = (1u << 1) | (1u << 4);   // stall, fifo
@@ -296,6 +299,8 @@ static void usage()
         "                    names a wedge that has stopped touching the bus\n"
         "  --pc-from N       start the PC trace at cycle N (implies --pc)\n"
         "  --pc-count N      how many PCs to print (default 2000)\n"
+        "  --scsi-nocache    bypass the SCSI block cache (docs/49): every block\n"
+        "                    request is one HPS transaction, as before build 26\n"
         "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
         "                    console on the serial port\n"
         "  --key-at N STR    press STR at the keyboard once cycle N is reached.\n"
@@ -379,6 +384,7 @@ int main(int argc, char **argv)
                                         opt.pc_from = strtoull(next("--pc-from"), nullptr, 0); }
         else if (a == "--pc-count")   opt.pc_count = strtoull(next("--pc-count"), nullptr, 0);
         else if (a == "--no-gfx")     opt.gfx = false;
+        else if (a == "--scsi-nocache") opt.scsi_cache = false;
         else if (a == "--watch")       opt.watch.push_back(
                  static_cast<uint32_t>(strtoul(next("--watch"), nullptr, 16)) & ~7u);
         else if (a == "--uart")        opt.uart = true;
@@ -498,6 +504,7 @@ int main(int argc, char **argv)
     top->gfx_present = opt.gfx ? 1 : 0;
     top->icache_en   = opt.icache ? 1 : 0;
     top->dcache_en   = opt.dcache ? 1 : 0;
+    top->scsi_cache_bypass = opt.scsi_cache ? 0 : 1;
     top->rxdb        = 1;                 // idle mark; nothing types at the console here
     top->ps2_key     = 0;
     top->ps2_mouse   = 0;

@@ -71,16 +71,22 @@ module sgi_indy #(
 
     // ---- SCSI block device ----------------------------------------------
     // One hps_io slot per target. On hardware these come from the HPS; in
-    // simulation from sim_blkdevice.
+    // simulation from sim_blkdevice. Since docs/49 the block cache in
+    // sgi_scsi sits behind these: a transaction can be up to eight sectors
+    // (scsi_sd_blk_cnt = blocks - 1) streamed through the 13-bit address.
     input  logic  [6:0] scsi_img_mounted,
     input  logic [31:0] scsi_img_blocks,
     output logic [31:0] scsi_sd_lba [7],
+    output logic  [5:0] scsi_sd_blk_cnt,
     output logic  [6:0] scsi_sd_rd,
     output logic  [6:0] scsi_sd_wr,
     input  logic  [6:0] scsi_sd_ack,
-    input  logic  [7:0] scsi_sd_buff_addr,
+    input  logic [12:0] scsi_sd_buff_addr,
     input  logic [15:0] scsi_sd_buff_dout,
     output logic [15:0] scsi_sd_buff_din [7],
+    // The OSD's "SCSI cache: Off" - every block request passes through the
+    // cache untouched, one sector per HPS transaction.
+    input  logic        scsi_cache_bypass,
 
     // Megabytes of DRAM actually fitted. Drives the MC's bank decode; on
     // hardware this is a constant and folds away.
@@ -228,6 +234,8 @@ module sgi_indy #(
     // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
     // the top's beacon writer. Pure observation.
     output logic [63:0] dbg_scsi_bcn [7],
+    // SGI: the disk-time counters (docs/49), five words from sgi_scsi.
+    output logic [63:0] dbg_scsi_stat [5],
     // The HPC3 SCSI0 DMA channel's live state (docs/29), a separate beacon
     // word - the engine lives in sgi_hpc3, not sgi_scsi.
     output logic [63:0] dbg_hpc3_dma,
@@ -802,6 +810,7 @@ module sgi_indy #(
         .img_mounted  (scsi_img_mounted),
         .img_blocks   (scsi_img_blocks),
         .sd_lba       (scsi_sd_lba),
+        .sd_blk_cnt   (scsi_sd_blk_cnt),
         .sd_rd        (scsi_sd_rd),
         .sd_wr        (scsi_sd_wr),
         .sd_ack       (scsi_sd_ack),
@@ -809,7 +818,9 @@ module sgi_indy #(
         .sd_buff_dout (scsi_sd_buff_dout),
         .sd_buff_din  (scsi_sd_buff_din),
         .sd_buff_wr   (scsi_sd_buff_wr),
-        .dbg_bcn      (dbg_scsi_bcn)
+        .cache_bypass (scsi_cache_bypass),
+        .dbg_bcn      (dbg_scsi_bcn),
+        .dbg_stat     (dbg_scsi_stat)
     );
 
     // The rest of the IOC window: panel, SYS_ID, reset/LED, and the INT2

@@ -30,6 +30,9 @@ module sim_top
     // command line rather than by rebuilding. Both on for a normal run.
     input  wire        icache_en,
     input  wire        dcache_en,
+    // The SCSI block cache's OSD bypass (docs/49): --scsi-nocache sets it,
+    // and a run with it on is the pre-build-26 block path, sector by sector.
+    input  wire        scsi_cache_bypass,
 
     // Serial receive for the console channel. Idle mark is 1; the GUI harness
     // shifts typed characters out on it so the Command Monitor can be driven.
@@ -52,10 +55,13 @@ module sim_top
     // the layout is chosen so the C++ stays natural: [32*k +: 32] of the LBA
     // is word k of the VlWide, so top->scsi_sd_lba[i] still reads target i.
     output wire [7*32-1:0] scsi_sd_lba,
+    // Blocks per transaction minus one: the harness streams (n+1)*256 words
+    // through the 13-bit address, as hps_io does on hardware.
+    output wire  [5:0] scsi_sd_blk_cnt,
     output wire  [6:0] scsi_sd_rd,
     output wire  [6:0] scsi_sd_wr,
     input  wire  [6:0] scsi_sd_ack,
-    input  wire  [7:0] scsi_sd_buff_addr,
+    input  wire [12:0] scsi_sd_buff_addr,
     input  wire [15:0] scsi_sd_buff_dout,
     output wire [7*16-1:0] scsi_sd_buff_din,
     input  wire [31:0] mem_mb,
@@ -165,6 +171,7 @@ module sim_top
         .boot_pc       (boot_pc),
         .icache_en     (icache_en),
         .dcache_en     (dcache_en),
+        .scsi_cache_bypass(scsi_cache_bypass),
 
         .ps2_key       (ps2_key),
         .ps2_mouse     (ps2_mouse),
@@ -172,6 +179,7 @@ module sim_top
         .scsi_img_mounted (scsi_img_mounted),
         .scsi_img_blocks  (scsi_img_blocks),
         .scsi_sd_lba      (scsi_sd_lba_arr),
+        .scsi_sd_blk_cnt  (scsi_sd_blk_cnt),
         .scsi_sd_rd       (scsi_sd_rd),
         .scsi_sd_wr       (scsi_sd_wr),
         .scsi_sd_ack      (scsi_sd_ack),
@@ -270,6 +278,7 @@ module sim_top
         .dbg_rpc       (dbg_rpc),
         .dbg_retire    (dbg_retire),
         .dbg_scsi_bcn  (),
+        .dbg_scsi_stat (),
         .dbg_hpc3_dma  (),
         .dbg_int_bcn   (),
         .dbg_vdma_bcn  (),

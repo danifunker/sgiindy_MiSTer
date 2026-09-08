@@ -129,6 +129,11 @@ localparam CONF_STR = {
 	// the HPS UART working at all. This puts a transmitter of the core's own
 	// on the pin, in one clock domain or the other.
 	"O[16:15],UART debug,Off,0x55 from clk_sys,0x55 from sclk;",
+	// THE SCSI BLOCK CACHE (docs/49; rtl/scsi/scsi_cache.sv). Off makes every
+	// block request a single-sector HPS transaction again, as before build
+	// 26 - the control for measuring the cache on one bitstream, and the
+	// way out if it ever misbehaves. scripts/setopt.sh knows it as scsicache.
+	"O[17],SCSI cache,On,Off;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
@@ -164,6 +169,7 @@ wire        img_readonly;
 wire [63:0] img_size;
 
 wire [31:0] sd_lba[VDNUM];
+wire  [5:0] sd_blk_cnt[VDNUM];
 wire  [3:0] sd_rd, sd_wr, sd_ack;
 wire [12:0] sd_buff_addr;
 wire [15:0] sd_buff_dout;
@@ -178,11 +184,20 @@ wire        sd_buff_wr;
 wire [31:0] scsi_sd_lba      [7];
 wire [15:0] scsi_sd_buff_din [7];
 wire  [6:0] scsi_sd_rd, scsi_sd_wr, scsi_sd_ack, scsi_img_mounted;
+wire  [5:0] scsi_sd_blk_cnt;
 
 assign sd_lba[0] = 0;
 assign sd_lba[1] = scsi_sd_lba[1];
 assign sd_lba[2] = scsi_sd_lba[2];
 assign sd_lba[3] = scsi_sd_lba[6];
+// Blocks per transaction, minus one. The block cache issues one transaction
+// at a time and says how long it is; hps_io reads the entry for the slot it
+// is servicing, so every slot carries the same value (docs/49). Up to 8
+// sectors here; hps_io's own ceiling is 16 KB.
+assign sd_blk_cnt[0] = 6'd0;
+assign sd_blk_cnt[1] = scsi_sd_blk_cnt;
+assign sd_blk_cnt[2] = scsi_sd_blk_cnt;
+assign sd_blk_cnt[3] = scsi_sd_blk_cnt;
 assign sd_buff_din[0] = 0;
 assign sd_buff_din[1] = scsi_sd_buff_din[1];
 assign sd_buff_din[2] = scsi_sd_buff_din[2];
@@ -221,6 +236,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(VDNUM)) hps_io
 	.img_size(img_size),
 
 	.sd_lba(sd_lba),
+	.sd_blk_cnt(sd_blk_cnt),
 	.sd_rd(sd_rd),
 	.sd_wr(sd_wr),
 	.sd_ack(sd_ack),
@@ -456,6 +472,7 @@ wire        txda, txdb;
 
 // SCSI debug beacon words out of the core (docs/28), to the writer below.
 wire [63:0] scsi_bcn [7];
+wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
@@ -549,15 +566,18 @@ sgi_indy u_core
 	.scsi_img_mounted (scsi_img_mounted),
 	.scsi_img_blocks  (img_size[40:9]),
 	.scsi_sd_lba      (scsi_sd_lba),
+	.scsi_sd_blk_cnt  (scsi_sd_blk_cnt),
 	.scsi_sd_rd       (scsi_sd_rd),
 	.scsi_sd_wr       (scsi_sd_wr),
 	.scsi_sd_ack      (scsi_sd_ack),
-	.scsi_sd_buff_addr(sd_buff_addr[7:0]),
+	.scsi_sd_buff_addr(sd_buff_addr),
 	.scsi_sd_buff_dout(sd_buff_dout),
 	.scsi_sd_buff_din (scsi_sd_buff_din),
 	.scsi_sd_buff_wr  (sd_buff_wr),
+	.scsi_cache_bypass(status[17]),
 
 	.dbg_scsi_bcn     (scsi_bcn),
+	.dbg_scsi_stat    (scsi_stat),
 	.dbg_hpc3_dma     (hpc3_dma_bcn),
 	.dbg_int_bcn      (int_bcn),
 	.dbg_vdma_bcn     (vdma_bcn),
@@ -784,7 +804,12 @@ ddr3_mux u_mem
 // adds word 15: the two display line caches - drawing-plane misses, auxiliary
 // misses, and lines the auxiliary cache published as zeros without a fetch
 // (docs/36) - which is how the PIX_DIV=1 bandwidth budget is checked live.
-localparam int BCN_WORDS = 16;
+// ver=9 (build 26) adds words 16-20: the SCSI disk-time counters - HPS
+// transactions by direction, HPS-busy and target-wait time, the block
+// cache's hits/misses/writes, bytes across the bus in DATA phases and bus
+// busy time, and DATA-phase time (docs/49). bcnread.py --stats turns two
+// readings into the boot's disk seconds.
+localparam int BCN_WORDS = 21;
 
 reg [15:0] lc_miss_cnt, la_miss_cnt;
 always @(posedge clk_sys) begin
@@ -797,14 +822,14 @@ always @(posedge clk_sys) begin
 	end
 end
 reg  [5:0]  bcn_div;
-reg  [3:0]  bcn_idx;
+reg  [4:0]  bcn_idx;
 reg  [31:0] bcn_beat;
 reg         bcn_req;
 reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h08, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h09, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -820,11 +845,16 @@ assign bcn_src[12] = vdma_bcn[1];
 assign bcn_src[13] = vdma_bcn[2];
 assign bcn_src[14] = vdma_bcn[3];
 assign bcn_src[15] = { lc_miss_cnt, la_miss_cnt, la_skips };
+assign bcn_src[16] = scsi_stat[0];
+assign bcn_src[17] = scsi_stat[1];
+assign bcn_src[18] = scsi_stat[2];
+assign bcn_src[19] = scsi_stat[3];
+assign bcn_src[20] = scsi_stat[4];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
 		bcn_div   <= 6'd0;
-		bcn_idx   <= 4'd0;
+		bcn_idx   <= 5'd0;
 		bcn_beat  <= 32'd0;
 		bcn_req   <= 1'b0;
 		bcn_addr  <= 32'h0;
@@ -834,13 +864,13 @@ always @(posedge clk_sys) begin
 		bcn_div <= bcn_div + 6'd1;
 		if (bcn_div == 6'd63) begin
 			bcn_req   <= 1'b1;
-			bcn_addr  <= 32'h0580_0000 + {25'd0, bcn_idx, 3'b000};
+			bcn_addr  <= 32'h0580_0000 + {24'd0, bcn_idx, 3'b000};
 			bcn_wdata <= bcn_src[bcn_idx];
 			if (bcn_idx == BCN_WORDS-1) begin
-				bcn_idx  <= 4'd0;
+				bcn_idx  <= 5'd0;
 				bcn_beat <= bcn_beat + 32'd1;
 			end else begin
-				bcn_idx  <= bcn_idx + 4'd1;
+				bcn_idx  <= bcn_idx + 5'd1;
 			end
 		end
 	end

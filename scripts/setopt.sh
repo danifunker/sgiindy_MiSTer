@@ -19,6 +19,8 @@
 #   mem=48|32|64         O[13:12]  memory size
 #   viddbg=off|raw       O[14]     show the frame buffer index, no palette
 #   uartdbg=off|sys|ser  O[16:15]  0x55 test pattern from clk_sys or sclk
+#   scsicache=on|off     O[17]     the SCSI block cache (docs/49); off = every
+#                                  block request one HPS transaction, as before
 #
 # Usage: bash scripts/setopt.sh gfx=none uartdbg=ser
 #        bash scripts/setopt.sh            # all defaults
@@ -40,6 +42,7 @@ FIELDS = {                       # name: (low bit, width, {value: code})
     "mem":     (12, 2, {"48": 0, "32": 1, "64": 2}),
     "viddbg":  (14, 1, {"off": 0, "raw": 1}),
     "uartdbg": (15, 2, {"off": 0, "sys": 1, "ser": 2}),
+    "scsicache": (17, 1, {"on": 0, "off": 1}),
 }
 st = 0
 for arg in sys.argv[1:]:

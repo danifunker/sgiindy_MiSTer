@@ -68,6 +68,51 @@ than latched at mount, because the block size can change after a medium is in),
 the READ CAPACITY block-length byte, the MODE SENSE block-length byte on the
 three CD pages, and the LBA/transfer-length scale at command latch.
 
+## The block cache (`scsi_cache.sv`)
+
+Between the targets and hps_io since build 26 (docs/49), and ported nearly
+verbatim from MacQuadra800_MiSTer's `rtl/scsi_cache.sv` - that core's
+`docs/scsi-block-cache.md` is the design note, and `verilator/tb_scsi_cache.sv`
+here is its bench. The targets did not change: the cache offers `scsi.v`
+exactly the `io_rd`/`io_wr`/`io_ack`/`sd_buff_*` contract hps_io did, and
+`sgi_scsi.sv` wires its three slots to IDs 1, 2 and 6.
+
+What it does, per slot: one contiguous window of 64 sectors (16 for a CD, or
+none - the CD slot passes straight through by default, `CACHE_CD = 0`) with
+`valid` and `dirty` bitmaps. A read that hits is served from block RAM in
+768 clocks; a miss fetches its aligned 8-sector group in ONE hps_io
+transaction (`sd_blk_cnt = 7`, 4 KB through the 13-bit `sd_buff_addr`) and
+the prefetcher brings the next two groups while the channel is idle. A write
+is accepted into block RAM in 768 clocks and flushed behind the guest's back:
+a wholly dirty group as one 8-block write at once, a partly dirty one sector
+by sector after ~82 us of engine quiet. Every hps_io transaction costs a
+Main_MiSTer main-loop pass, which is the real per-sector price, and writes
+wait for the SD card (images are opened O_SYNC); this turns eight of each
+into one.
+
+The rules that keep it honest are the Mac's (a read of a dirty sector is a
+hit; a window re-base flushes first; same-sector hazards are decided from
+registered state on both sides; a mount with a different size invalidates
+the slot, a same-size mount is the post-reset replay and keeps everything;
+tags and the flusher survive a core reset) plus one of ours: **the OSD's
+"SCSI cache: Off"** (`status[17]`, `scripts/setopt.sh scsicache=off`) makes
+every request a passthrough - dirt is flushed before the first bypassed
+request on a slot, the slot's window is dropped so a write made past the
+cache can never be served stale once it is back on, and nothing speculative
+touches the channel. One bitstream therefore measures the cache against no
+cache on the same image, and a user has a way out if it ever misbehaves.
+
+`sgi_scsi.sv` also counts, for the DDR3 beacon (`bcnread.py --stats`):
+hps_io transactions by direction, cycles with one outstanding, cycles a
+target spent waiting on its block port, cycles the SCSI bus was busy and in
+a DATA phase, bytes across it, and the cache's hits, misses and writes. Two
+readings a boot apart are the boot's disk time.
+
+The unit gates are `make -C verilator tb_scsi_cache` (the Mac's shape) and
+`tb_scsi_cache_nocd` (ours); the harness `sim_scsi.h` honours `sd_blk_cnt`
+the way Main does (`user_io.cpp`: `blks = ((c >> 9) & 0x3F) + 1`), and
+`--scsi-nocache` on the sim is the OSD switch.
+
 ## Provenance
 
 `scsi.v` and `scsi_vendor.vh` are taken from the MacLC MiSTer core, which

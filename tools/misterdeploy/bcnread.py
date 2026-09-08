@@ -17,6 +17,10 @@ of each field - the bit maps live next to the assemblies):
   w5  target 6 live A   w6  target 6 live B
   w7  target 1 sticky first-stall snapshot (reason 1 = REQ suppressed,
       reason 2 = REQ up but never answered), latched until core reload
+  w16..w20 (ver >= 9, build 26, docs/49): the SCSI disk-time counters -
+      w16 {hps transactions rd, wr}  w17 {hps busy, target wait} (x64 cycles)
+      w18 {cache hits, misses}       w19 {DATA-phase bytes, bus busy (x64)}
+      w20 {DATA-phase time (x64), sectors written into the cache}
 
 The heartbeat moving proves the writer is alive; the counters moving tell
 which recovery events actually happen during the 60 s retry loop; the sticky
@@ -25,7 +29,11 @@ word names the first parked state outright.
 Usage (on the MiSTer):
     bcnread.py                one decoded sample
     bcnread.py --loop 30 --interval 2      sample for a minute
-    bcnread.py --raw          just the eight hex words
+    bcnread.py --raw          just the hex words
+    bcnread.py --stats        one line: the disk-time counters as seconds
+                              (the difference of two of these over a boot is
+                              the boot's disk time; scripts/irixrate.sh
+                              --stats logs one per poll)
 """
 import argparse
 import importlib.util
@@ -37,7 +45,8 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 16
+NWORDS = 21
+CLK_HZ = 50_000_000          # clk_sys; the x64 counters are in units of 64 cycles
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
            "RUN", "MEM_RD", "MEM_RD_W", "MEM_WR", "MEM_WR_W", "ADVANCE",
@@ -199,6 +208,8 @@ def dec(ws):
         w15 = ws[15]
         out.append("lcache: rgb_miss=%d aux_miss=%d aux_skips=%d"
                    % (bits(w15, 63, 48), bits(w15, 47, 32), bits(w15, 31, 0)))
+    if len(ws) > 20 and bits(w0, 47, 40) >= 9:
+        out.append(stats_line(ws))
     reason = bits(w7, 63, 62)
     if reason:
         why = {1: "REQ-SUPPRESSED (io_busy/dpc class)",
@@ -214,16 +225,39 @@ def dec(ws):
     return out
 
 
+def stats_line(ws):
+    """The docs/49 counters as one line of seconds and counts."""
+    w16, w17, w18, w19, w20 = ws[16:21]
+    sec = lambda x64: x64 * 64.0 / CLK_HZ
+    xact_rd, xact_wr = bits(w16, 63, 32), bits(w16, 31, 0)
+    hps_s, wait_s = sec(bits(w17, 63, 32)), sec(bits(w17, 31, 0))
+    hits, misses = bits(w18, 63, 32), bits(w18, 31, 0)
+    data_b, bsy_s = bits(w19, 63, 32), sec(bits(w19, 31, 0))
+    data_s, writes = sec(bits(w20, 63, 32)), bits(w20, 31, 0)
+    rate = (data_b / data_s / 1e6) if data_s > 0 else 0.0
+    return ("scsi: hps xact rd=%d wr=%d busy=%.1fs | target wait=%.1fs | "
+            "bus busy=%.1fs data=%.1fs %.2fMB (%.2f MB/s) | "
+            "cache hits=%d misses=%d writes=%d"
+            % (xact_rd, xact_wr, hps_s, wait_s, bsy_s, data_s,
+               data_b / 1e6, rate, hits, misses, writes))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--loop", type=int, default=1)
     ap.add_argument("--interval", type=float, default=2.0)
     ap.add_argument("--raw", action="store_true")
+    ap.add_argument("--stats", action="store_true")
     a = ap.parse_args()
     for i in range(a.loop):
         ws = rdwords()
         if a.raw:
             print(" ".join("%016x" % w for w in ws))
+        elif a.stats:
+            if bits(ws[0], 63, 48) != 0xBEC0 or bits(ws[0], 47, 40) < 9:
+                print("scsi: no stats (beacon ver %d, need 9)" % bits(ws[0], 47, 40))
+            else:
+                print(stats_line(ws))
         else:
             stamp = time.strftime("%H:%M:%S")
             print("---- %s" % stamp)

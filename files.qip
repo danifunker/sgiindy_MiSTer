@@ -31,6 +31,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sgi/z8530_scc.sv
 # search path.
 set_global_assignment -name SEARCH_PATH rtl/scsi
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/sgi_scsi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/scsi_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/wd33c93.sv
 set_global_assignment -name VERILOG_FILE      rtl/scsi/scsi.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsi/cd_audio.sv
