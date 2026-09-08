@@ -213,6 +213,19 @@ compare. Only bit 12 matters now (index 12:5):
   by screenshot). Zero panics. The build 24 control (`b24f`, same protocol,
   5 boots) started automatically at ~11:51 - its panic count is what says
   whether PIPT fixed a real one-in-three or the 09:17 panic was state.
+* **Build 24 control: 2 of 2 clean** (X-UP at 271 s both; `irixrate-b24f.log`),
+  then the user stopped the run at 12:12 ("no need to make a gazillion
+  boots"). So the control is INCONCLUSIVE: build 24 has now booted 4 of 5
+  times cleanly (2 this morning, 2 on pristine images) and panicked once,
+  at 09:17, after a MiSTer `reboot` cut off the previous run - the one
+  panic that cannot be separated from state. What IS established: build 25
+  (PIPT I-cache) is 5 of 5 clean on pristine images, its core clock slack
+  is better than build 24's, the sim boot and every unit gate pass, and the
+  cache can no longer alias by construction. **Released as
+  `releases/SGIIndy_20260907.rbf`** (md5 647091e8..., docs/20-releases.md).
+  If the one-in-three ever shows again on a PRISTINE image, docs/47 §5
+  (instrument the beacon: last user-mode exception EPC/BadVAddr/Cause)
+  is the next step, not another cache change.
 * **Next, in order:** irix6 result -> fit result (core slack; if the clock
   fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
   output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag

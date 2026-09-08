@@ -1,0 +1,5 @@
+=== 2026-09-08 11:51:47 b24f: 5 launches, deadline 420s, rbf md5 ab3ae66db0604ccfa466224785e2cdf5, image restored from /media/fat/games/SGIIndy/SGIIndy53-pristine.img before each launch ===
+   1/5   image restored in 270s
+   1/5    271s  X-UP       panicstr=0x00000000 panel9  0.0% idx16 22.2% indices   9 marker  0.0% 
+   2/5   image restored in 268s
+   2/5    271s  X-UP       panicstr=0x00000000 panel9  0.0% idx16 34.8% indices   2 marker  0.0% 

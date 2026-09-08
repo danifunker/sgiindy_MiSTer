@@ -31,6 +31,61 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260907 — IRIX 5.3 to the desktop on the R4600 core
+
+`releases/SGIIndy_20260907.rbf`, md5 `647091e8250543f64f04d42d96278bce`
+(build 25, SEED=2; 34,637 ALMs, 42,804 registers, core clock setup slack
++1.981 ns). Pair it with the same `releases/boot.rom` as before.
+
+### What it is
+
+The CPU is now the Killer Instinct R4600 base (`rtl/cpu/r4300/UPSTREAM.md`
+is the authority on every change from that base): PRId 0x2020, 48 TLB
+entries, 16 KB physically indexed data cache with 32-byte lines and burst
+fills, and an 8 KB **physically indexed** instruction cache with a full
+20-bit tag. The system boots IRIX 5.3 from the SCSI disk image to the X
+login chooser and the 4Dwm desktop, with a working keyboard and mouse.
+
+### What was fixed since 20260901
+
+* The instruction cache. Three failures in a row, each a different bit of
+  it: IRIX colours user pages for the part the PRId names — bits 13:12 as an
+  R4400, bit 12 only as an R4600 — so KI's 16 KB virtually indexed cache
+  with an 18-bit tag executed the wrong 4 KB page under the R4600 identity
+  (bus errors, SIGSEGVs and SIGILLs all through rc2); an 8 KB one-way cache
+  with the full tag stopped the wrong hits but still indexed on virtual bit
+  12, which an uncoloured mapping can leave stale where the kernel's
+  invalidate by physical address never looks; the released cache takes bit
+  12 from the instruction mini-TLB, fills by physical address and
+  translates `Hit_Invalidate_I`, so a line lives in exactly one set for
+  every mapping (docs/45, docs/47).
+* `Config.EC` = 0 under the R4600 identity: the IP24 PROM divides by a
+  per-family clock-ratio table and EC = 7 is a `break 7` on the R4600 path
+  (docs/44).
+* The memory path no longer crosses clock domains (KI's clk93/clk1x mailbox
+  is gone; this core has one clock), which is where the slack came from.
+
+### How it was tested
+
+`make -C verilator cpuonly` 728/0; the cpu-tests suite 2161/3 (only
+`fpu/vec_cvt_from_l`, unchanged since the N64 base); the whole-machine
+Verilator IRIX boot clean to 230M cycles with the exit device table
+identical to the previous build's; on the DE10-Nano, **five IRIX boots out
+of five to the login chooser**, each from a pristine disk image
+(`scripts/irixrate.sh --fresh`). The hardware cpu-tests (2165/3) were last
+run on build 24, which differs from this one only in the cache index; they
+were not re-run on this bitstream.
+
+### Known
+
+* An `init died` panic — from any cause — leaves `/etc/ioctl.syscon`,
+  `/var/adm/utmp` and `/var/adm/utmpx` empty, and IRIX's init then dies on
+  them at every following boot. That is a property of the disk image, not
+  of this core: restore a clean image (docs/47).
+* The simulator never reaches "The system is coming up" (a sim-only device
+  wait); the board does.
+* `hinv` has not been captured on this build; it should report an R4600.
+
 ## SGIIndy_20260829 — the first build that draws
 
 **The machine draws its own boot screen on a DE10-Nano**, and goes on to the
