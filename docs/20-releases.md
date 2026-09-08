@@ -31,6 +31,75 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260908 — the SCSI block cache
+
+`releases/SGIIndy_20260908.rbf`, md5 `4e1cd4ea4d37ae42da9b0b17fb02ebe2`
+(build 26, SEED=2; 36,296 ALMs, 44,117 registers, 443 / 553 M10K, core
+clock setup slack +2.875 ns, every domain met). Pair it with the same
+`releases/boot.rom` as before.
+
+### What it is
+
+Build 25 plus a per-target read-ahead / write-behind block cache between
+the SCSI targets and the MiSTer block channel (`rtl/scsi/scsi_cache.sv`,
+ported from MacQuadra800_MiSTer; docs/49). Each disk owns a 64-sector
+window in block RAM: a sector read that hits is served from RAM, a miss
+fetches its aligned 8-sector group in one HPS transaction and the next two
+groups are prefetched behind it, and a write is accepted into RAM at once
+and flushed in the background, a whole group at a time. IRIX no longer
+waits for the SD card on every sector it writes, nor for a Main_MiSTer
+round trip on every sector it reads. The CD-ROM reads as before.
+
+A new OSD entry, **SCSI cache: On / Off**. Off turns the cache into a
+plain passthrough (one HPS transaction per sector, the 20260907 behaviour)
+on the same bitstream; it is how the numbers below were taken, and the way
+out if the cache ever misbehaves with an image. Switching it while IRIX is
+running is safe: dirty data is flushed before the first bypassed request.
+
+### What it measures
+
+The core now counts its own disk time (five beacon words, `bcnread.py
+--stats`; `scripts/irixrate.sh --stats` logs them every poll). One IRIX 5.3
+boot from a pristine image each way, on the DE10-Nano (build A of this
+source, identical on the board):
+
+| | cache ON | cache OFF |
+|---|---|---|
+| time the guest waited on its disk | **8.6 s** | **21.3 s** |
+| HPS transactions, read + write | 8,313 + 4,691 | 45,312 + 7,055 |
+| cache hits / misses | 45,144 / 1,606 | - |
+| SCSI bus busy | 26.1 s | 34.8 s |
+| DATA phases: bytes, rate | 26.6 MB at 1.21 MB/s | 26.8 MB at 0.93 MB/s |
+| to the X login screen | 258 s | 259 s |
+
+The disk wait falls by 60 %. The boot does not get measurably shorter:
+disk was 8 % of a 259 s boot, and the 22 s poll that classifies the boot
+cannot resolve a 13 s change. The remaining disk cost is the SCSI byte
+path itself - the DATA phases move 26 MB at 1.2 MB/s, 22 s of the boot -
+which is the next thing to instrument (docs/49 §4).
+
+### How it was tested
+
+`verilator/tb_scsi_cache.sv` (the Mac's bench with a bypass test and a
+stricter device model) 285,472 checks / 0 failures in both configurations;
+`tests/run-scsi.sh`, `run-scsiwr.sh` (five write/read phases through the
+cache), `run-cdrom.sh`, and `run-scsi` with the cache bypassed, all PASS;
+the whole-machine Verilator IRIX boot to 230M cycles with the console and
+the exit device table identical to build 25's; on the board, this
+bitstream booted IRIX 5.3 from a pristine image to the X login screen with
+the cache on (257 s, no panic; disk wait 9.2 s, 45,649 hits / 1,644
+misses) and again with it off (258 s, no panic; disk wait 20.2 s).
+
+### Known
+
+* Everything in the 20260907 entry still applies (the crash-looped image
+  after an `init died`, the sim's device wait, the `hinv` stubs).
+* The cache holds up to 64 KB of the guest's writes for a few milliseconds
+  after it acknowledges them. IRIX's own shutdown syncs long before the
+  power goes; pulling the card mid-write was never safe.
+* The CD-ROM slot is not cached (`CACHE_CD = 0`): an install from CD still
+  costs one HPS transaction per 512-byte sector.
+
 ## SGIIndy_20260907 — IRIX 5.3 to the desktop on the R4600 core
 
 `releases/SGIIndy_20260907.rbf`, md5 `647091e8250543f64f04d42d96278bce`
