@@ -207,6 +207,12 @@ compare. Only bit 12 matters now (index 12:5):
   to 15 % in `irixstate.py`, pushed to the device for boots 4-5). **Build
   25: 3 of 3 clean on pristine images.** The CPU at the login screen idles
   at pc 0x88012b58 (kernel), EXL 0.
+* **BUILD 25 FINAL: 5 of 5 clean boots to the login chooser on pristine
+  images** (`irixrate-b25f.log`, 11:02-11:50; boots 4 and 5 X-UP at 270 s
+  and 272 s with the fixed cut; tally 4 X-UP + 1 UNKNOWN = boot 3, verified
+  by screenshot). Zero panics. The build 24 control (`b24f`, same protocol,
+  5 boots) started automatically at ~11:51 - its panic count is what says
+  whether PIPT fixed a real one-in-three or the 09:17 panic was state.
 * **Next, in order:** irix6 result -> fit result (core slack; if the clock
   fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
   output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag
