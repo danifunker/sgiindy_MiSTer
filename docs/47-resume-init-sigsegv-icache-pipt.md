@@ -127,9 +127,16 @@ compare. Only bit 12 matters now (index 12:5):
   `--stop-on PANIC`): no PANIC, console byte-identical to irix5 (IRIX banner,
   the three clock warnings), exit device table IDENTICAL to irix5's,
   22,259,397 bus transactions vs 22,258,981.
-  **Fit b25** queued: `SEED=2 scripts/fit_when_free.sh b25` in the
-  worktree (`b25.status`/`b25.log`/`b25.console`), waiting behind the other
-  session's MacQuadra800 `quartus_sh --flow compile` that started 09:53.
+  **Build 25 FITTED** (SEED=2, 10:14-10:37 after the other session's
+  MacQuadra800 compile freed Quartus): `output_files/sgiindy-b25-seed2.rbf`
+  md5 `647091e8250543f64f04d42d96278bce`, 34,637 ALMs (83 %), 42,804
+  registers, 2.92 Mbit block memory, **core clock setup slack +1.981 ns**
+  (build 24: +1.697, build 23: +2.904) - the physical index bit cost
+  nothing, as the mini_physical-register argument predicted. Timing met on
+  every clock (worst is the framework's HDMI PLL at +0.276, as always).
+  Deployed to the board 10:40 (`deploy.sh --no-launch`), then
+  `scripts/irixrate.sh 10 --tag b25` detached (`b25board.console`,
+  `tests/out/hw/irixrate-b25.log`).
 * **The boot-rate instrument exists**: `tools/misterdeploy/irixstate.py`
   (on the device) reads the kernel's `panicstr` (unix.ecoff 0x881bd184;
   the message is printed) and the frame buffer's index histogram (boot
