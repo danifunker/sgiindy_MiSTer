@@ -1,0 +1,19 @@
+# /etc /var/adm /tmp /dev listings (name size): < pristine master  > board image after the 09:17 panic + 5 crash-loop boots (2026-09-08 10:55)
+> /dev/core 513116
+< /etc/ioctl.syscon 73
+> /etc/ioctl.syscon 0
+< /etc/mtab 62
+> /etc/mtab 88
+< /tmp/.ps_data 57472
+< /var/adm/SYSLOG 26923
+> /var/adm/.syserr.data 174
+> /var/adm/SYSLOG 69725
+> /var/adm/core 173148
+< /var/adm/utmp 252
+< /var/adm/utmpx 2604
+< /var/adm/wtmp 6552
+< /var/adm/wtmpx 66216
+> /var/adm/utmp 0
+> /var/adm/utmpx 0
+> /var/adm/wtmp 9720
+> /var/adm/wtmpx 98952

@@ -1,0 +1,4 @@
+=== 2026-09-08 10:38:22 b25: 10 launches, deadline 420s, rbf md5 647091e8250543f64f04d42d96278bce ===
+   1/10    82s  PANIC      panicstr=0x881f4df0 panel9 12.3% idx16  0.0% indices 168 marker  0.1% <0>PANIC: init died (why = 2, what = 0xb)
+   2/10    83s  PANIC      panicstr=0x881f4df0 panel9 12.3% idx16  0.0% indices 168 marker  0.1% <0>PANIC: init died (why = 2, what = 0xb)
+   3/10    80s  PANIC      panicstr=0x881f4df0 panel9 12.3% idx16  0.0% indices 168 marker  0.1% <0>PANIC: init died (why = 2, what = 0xb)
