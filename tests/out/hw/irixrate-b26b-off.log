@@ -1,0 +1,15 @@
+=== 2026-09-08 14:33:46 b26b-off: 1 launches, deadline 420s, rbf md5 4e1cd4ea4d37ae42da9b0b17fb02ebe2, image restored from /media/fat/games/SGIIndy/SGIIndy53-pristine.img before each launch ===
+   1/1   image restored in 271s
+           60s  BOOTING | scsi: hps xact rd=7559 wr=41 busy=1.2s | target wait=1.2s | bus busy=2.6s data=2.4s 3.89MB (1.60 MB/s) | cache hits=0 misses=0 writes=0
+           82s  UNKNOWN | scsi: hps xact rd=16287 wr=2106 busy=7.3s | target wait=7.3s | bus busy=11.2s data=9.6s 9.42MB (0.98 MB/s) | cache hits=0 misses=0 writes=0
+          104s  BOOTING | scsi: hps xact rd=22225 wr=2966 busy=11.2s | target wait=11.2s | bus busy=16.9s data=14.2s 12.90MB (0.91 MB/s) | cache hits=0 misses=0 writes=0
+          126s  BOOTING | scsi: hps xact rd=24412 wr=3890 busy=13.1s | target wait=13.1s | bus busy=19.9s data=16.5s 14.49MB (0.88 MB/s) | cache hits=0 misses=0 writes=0
+          148s  BOOTING | scsi: hps xact rd=26904 wr=4570 busy=14.6s | target wait=14.6s | bus busy=22.5s data=18.6s 16.12MB (0.87 MB/s) | cache hits=0 misses=0 writes=0
+          170s  BOOTING | scsi: hps xact rd=28034 wr=4916 busy=15.3s | target wait=15.4s | bus busy=23.7s data=19.5s 16.87MB (0.86 MB/s) | cache hits=0 misses=0 writes=0
+          192s  BOOTING | scsi: hps xact rd=28066 wr=5158 busy=15.7s | target wait=15.7s | bus busy=24.1s data=19.9s 17.01MB (0.86 MB/s) | cache hits=0 misses=0 writes=0
+          214s  BOOTING | scsi: hps xact rd=28638 wr=5351 busy=16.1s | target wait=16.1s | bus busy=24.7s data=20.4s 17.40MB (0.85 MB/s) | cache hits=0 misses=0 writes=0
+          236s  BOOTING | scsi: hps xact rd=33391 wr=5686 busy=17.4s | target wait=17.4s | bus busy=27.5s data=22.7s 20.01MB (0.88 MB/s) | cache hits=0 misses=0 writes=0
+          258s  X-UP | scsi: hps xact rd=41302 wr=6665 busy=20.2s | target wait=20.2s | bus busy=32.6s data=27.2s 24.56MB (0.90 MB/s) | cache hits=0 misses=0 writes=0
+   1/1    258s  X-UP       panicstr=0x00000000 panel9  0.0% idx16 34.8% indices   2 marker  0.0% 
+=== tally over 1 launches (b26b-off) ===
+  X-UP        1

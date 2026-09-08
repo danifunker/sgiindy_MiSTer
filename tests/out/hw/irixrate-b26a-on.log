@@ -1,0 +1,15 @@
+=== 2026-09-08 13:56:58 b26a-on: 1 launches, deadline 420s, rbf md5 7b0beaf166e6f994ea541bc87f2c2d39, image restored from /media/fat/games/SGIIndy/SGIIndy53-pristine.img before each launch ===
+   1/1   image restored in 267s
+           61s  BOOTING | scsi: hps xact rd=1127 wr=20 busy=1.2s | target wait=0.7s | bus busy=2.6s data=2.4s 3.89MB (1.64 MB/s) | cache hits=7560 misses=183 writes=41
+           83s  UNKNOWN | scsi: hps xact rd=3333 wr=1111 busy=5.7s | target wait=2.6s | bus busy=8.2s data=6.7s 9.97MB (1.49 MB/s) | cache hits=17326 misses=664 writes=2148
+          105s  BOOTING | scsi: hps xact rd=4438 wr=1900 busy=8.2s | target wait=3.4s | bus busy=11.5s data=9.4s 13.47MB (1.43 MB/s) | cache hits=23078 misses=881 writes=3224
+          127s  BOOTING | scsi: hps xact rd=4790 wr=2565 busy=9.7s | target wait=3.7s | bus busy=12.9s data=10.4s 14.59MB (1.40 MB/s) | cache hits=24495 misses=958 writes=4008
+          148s  BOOTING | scsi: hps xact rd=5256 wr=3026 busy=13.6s | target wait=6.3s | bus busy=16.7s data=13.7s 16.11MB (1.18 MB/s) | cache hits=26868 misses=1053 writes=4595
+          170s  BOOTING | scsi: hps xact rd=5412 wr=3349 busy=14.3s | target wait=6.5s | bus busy=17.4s data=14.3s 16.86MB (1.18 MB/s) | cache hits=27998 misses=1075 writes=4925
+          192s  BOOTING | scsi: hps xact rd=5418 wr=3579 busy=14.7s | target wait=6.5s | bus busy=17.6s data=14.5s 17.00MB (1.17 MB/s) | cache hits=28030 misses=1076 writes=5176
+          214s  BOOTING | scsi: hps xact rd=5538 wr=3734 busy=15.1s | target wait=6.6s | bus busy=18.0s data=14.8s 17.40MB (1.18 MB/s) | cache hits=28640 misses=1100 writes=5352
+          236s  BOOTING | scsi: hps xact rd=6513 wr=3972 busy=16.4s | target wait=7.2s | bus busy=20.7s data=17.2s 20.42MB (1.19 MB/s) | cache hits=34224 misses=1284 writes=5660
+          258s  X-UP | scsi: hps xact rd=8313 wr=4691 busy=19.6s | target wait=8.6s | bus busy=26.1s data=21.9s 26.55MB (1.21 MB/s) | cache hits=45144 misses=1606 writes=6701
+   1/1    258s  X-UP       panicstr=0x00000000 panel9  0.0% idx16 34.8% indices   2 marker  0.0% 
+=== tally over 1 launches (b26a-on) ===
+  X-UP        1
