@@ -27,9 +27,15 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   728/0, cpu-tests 2161/3; **IRIX sim boot on it PASSES** (`~/kicpu/irix5`:
   no PANIC to 230M, the same 24-entry device table, last new peripheral
   HPC3-PBUS-PIO at 182.12M vs 181.46M with the 16 KB I-cache - the 8 KB
-  cache costs ~0.4 % of cycles through the boot); the build-24 fit (SEED=2)
-  was queued via `scripts/fit_when_free.sh b24` at 20:48 behind the other
-  session's back-to-back Quartus runs. Follow-up: 16 KB as two 8 KB ways with
+  cache costs ~0.4 % of cycles through the boot). **Build 24 is fitted**
+  (SEED=2, launched 22:22 when the other session's Quartus finally paused,
+  OK at 22:45): 34,634 ALMs (83 %), 42,810 registers, block memory 52 %,
+  `output_files/sgiindy-b24-seed2.rbf` md5 `ab3ae66db0604ccfa466224785e2cdf5`
+  (rbfs are not tracked - `output_files/` is gitignored). CORE clock setup
+  slack **+1.697 ns** (build 23 +2.904, build 22 +2.459): the full 20-bit tag
+  compare is on the fetch path KI's FetchIndex work shortened, and it costs
+  about a nanosecond; still comfortably met. A second Opus board session was
+  sent at 06:50 on 2026-09-08 to bench build 24 and boot IRIX on it. Follow-up: 16 KB as two 8 KB ways with
   the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
   board attempt fell into (it is for the diskless PROM prompt, not an IRIX
   boot) is a separate trap: launch once and wait for the desktop.
