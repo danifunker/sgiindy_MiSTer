@@ -11,6 +11,88 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
 
 ## STATE AT HANDOFF (read this first)
 
+* **BUILD 23 FAILED ON THE BOARD, AND THE CAUSE IS FOUND AND FIXED IN THE
+  TREE (build 24 pending).** On hardware, IRIX booted into bus errors,
+  segmentation faults and illegal instructions (the simulator boot was clean;
+  the hardware cpu-tests were 2165/3 with PRId/FIR 0x2020). The kernel's own
+  data names it: IRIX sets `cachecolormask` from PRId - 3 as an R4400, **1 as
+  an R4600** (only bit 12, because a real R4600's ways are 8 KB) - read at
+  `0x881B9680` in `~/kicpu/irix3/ram.bin` (R4600) and
+  `~/br16k/run_16k/ram.bin` (R4400). KI's I-cache is 16 KB VIRTUALLY indexed on
+  bits 13:5 with an 18-bit tag (31:14), so under the R4600 identity half of all
+  user text pages alias on bit 13 and can hit the wrong page. The data cache,
+  physically indexed since docs/40, was fine. Fix (commit `52b3a09`,
+  UPSTREAM.md "The instruction cache"): the I-cache is now 8 KB direct-mapped,
+  index 12:5, with the N64 base's full 20-bit tag - one R4600 way. cpuonly
+  728/0, cpu-tests 2161/3; **IRIX sim boot on it PASSES** (`~/kicpu/irix5`:
+  no PANIC to 230M, the same 24-entry device table, last new peripheral
+  HPC3-PBUS-PIO at 182.12M vs 181.46M with the 16 KB I-cache - the 8 KB
+  cache costs ~0.4 % of cycles through the boot). **Build 24 is fitted**
+  (SEED=2, launched 22:22 when the other session's Quartus finally paused,
+  OK at 22:45): 34,634 ALMs (83 %), 42,810 registers, block memory 52 %,
+  `output_files/sgiindy-b24-seed2.rbf` md5 `ab3ae66db0604ccfa466224785e2cdf5`
+  (rbfs are not tracked - `output_files/` is gitignored). CORE clock setup
+  slack **+1.697 ns** (build 23 +2.904, build 22 +2.459): the full 20-bit tag
+  compare is on the fetch path KI's FetchIndex work shortened, and it costs
+  about a nanosecond; still comfortably met.
+* **BUILD 24 PASSES ON THE BOARD (Opus session, 2026-09-08 06:50-08:41).**
+  Hardware cpu-tests 2165/3 (PRId/FIR 0x2020, Config 0x0006e4b0, only
+  `fpu/vec_cvt_from_l`), every bench number identical to build 23's
+  (`i_cached` 500 ticks/kinstr - the 8 KB I-cache costs nothing measurable
+  on the bench; `ld_miss` 114,437 ticks / 8192 loads). **IRIX 5.3 booted
+  twice, cleanly, to the full desktop: fsck, "The system is coming up", X,
+  the login chooser, root login, desktop - with ZERO "Bus error /
+  Segmentation fault / Illegal instruction / core dumped" messages and no X
+  restarts.** Build 23's failure mode is gone. IRIX noticed the new CPU
+  ("Your system hardware configuration has changed since you last installed
+  software"). `hinv` on build 24 was not captured (desktop pointer targeting;
+  the session's recipe: at a FRESH chooser, 30x `mouseMove:-60,-60` then
+  39x `mouseMove:7,10` lands in the Console, `root`+Enter, and at +35 s -
+  before Software Manager maps - `hinv > /hinv.txt` then `init 0`; read the
+  file with `efsread.py IMAGE cat /hinv.txt` after the halt).
+* **The black HDMI picture is HOST-SIDE, not either bitstream.** A/B on the
+  board: build 22 and build 24, at the PROM screen, fsck, "coming up", the X
+  chooser and the halt screen - `scripts/grab.sh` (the MiSTer's screenshot
+  API) returned "STALE: no new frame" at EVERY stage of BOTH builds, while
+  the core's display engine was healthy throughout (`did_en=1 walk=RUN`,
+  `rgb_miss=0 aux_miss=0` - zero is the good reading - `aux_skips` ~28.0k/s
+  on both) and the frame buffer read back perfect. The MiSTer has produced
+  no capturable frame since 21:03 on 2026-09-07 (build 22's desktop was
+  captured fine at 21:01), `echo screenshot > /dev/MiSTer_cmd` yields
+  nothing, and the fault survived the MiSTer's own Linux reboot at ~07:00.
+  Next step is a MiSTer power cycle / HDMI cable / monitor-input check (the
+  user's), not RTL. `MiSTer.ini` is untouched since 2026-08-30; its
+  `[SGIIndy] video_mode=8 vscale_mode=1` is deliberate (the comment there:
+  this monitor does not take a 5:4 1280x1024 mode; 1080p shows the 1024
+  lines 1:1 with bars).
+* **Board final state (08:41): build 22 in `_Unstable` (md5
+  bd342f18e6be032fee53bfdc07fae3aa), the real PROM as boot.rom,
+  `SGIIndy53.img` in slot 1 cleanly unmounted, guest halted at "Okay to
+  power off".** Build 24 (`output_files/sgiindy-b24-seed2.rbf`, md5
+  ab3ae66db0604ccfa466224785e2cdf5) is the verified core; deploy it with
+  `scripts/deploy.sh --rbf output_files/sgiindy-b24-seed2.rbf` when wanted. Follow-up: 16 KB as two 8 KB ways with
+  the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
+  board attempt fell into (it is for the diskless PROM prompt, not an IRIX
+  boot) is a separate trap: launch once and wait for the desktop.
+* **What the board showed (Opus session, 20:20-21:03 on 2026-09-07):**
+  hardware cpu-tests build 22 = 2166/3 (PRId 0x0440), build 23 = 2165/3
+  (PRId/FIR 0x2020, Config 0x0006e4b0), only `fpu/vec_cvt_from_l` failing;
+  every bench identical to within a tick except `ld_miss`, 114,418 vs
+  106,790 ticks for 8192 loads (+7.1 %, both round to 13 ticks/load - the
+  32-byte fill is two more beats). Logs `tests/out/hw-cputest/hw-cputest-
+  b22.log` / `-b23.log`. Build 23 IRIX: fsck's six phases fine, then rc2
+  a storm of "Bus error / Segmentation fault / Illegal instruction - core
+  dumped", the X login chooser dead, X restarting every ~30 s, the beacon
+  showing the disk hammered with WRITE_10 (core dumps), no SCSI/DMA fault
+  latched (`tests/out/hw/b23-boot2.png`). **Control: build 22 on the SAME
+  image booted clean to a working desktop** (`b22-boot2.png`, `hinv.png`:
+  "50 MHZ IP22 Processor", R4400 4.0, 48 MB). The two MiSTer HPS reboots seen
+  were the harness's own (`launch_unstable_core.py` POSTs a reboot; the
+  hardware cpu-tests script uses it), not a MiSTer main death. **Board final
+  state: build 22 in `_Unstable`, the PROM as boot.rom, `SGIIndy53.img` in
+  slot 1 cleanly unmounted by `init 0`, guest halted at "Okay to power off"
+  (21:03).**
+
 * **Branch `claude/ki-revendor`** in the worktree
   `.claude/worktrees/modest-robinson-cad59e`. `main` is still the N64-base
   build 22 (`08d13e6`) and its rbf `output_files/sgiindy-b22-seed2.rbf`
@@ -50,14 +132,16 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   the fitter (build 22: 40,548), 8 "uninferred RAM" notices of which the two
   new ones (the I-cache data slices) are bypass logic - the arrays themselves
   are altsyncram in the map report. `b23.log`/`b23.console` have the detail.
-* **The Indy board is `192.168.99.94`** (`scripts/local.env`), and it is NOT
-  shared: the other Claude session's ssh traffic goes to `192.168.99.143`, a
-  different MiSTer (MacQuadra800). **At 20:05 on 2026-09-07 the Indy board
-  was OFF THE NETWORK** - no ARP entry, ping unreachable, ssh timed out for
-  five minutes - i.e. powered off or unplugged, not a crashed core (a
-  MiSTer's Ethernet lives on the HPS and stays up while the board has
-  power). The Opus board session could not deploy; nothing on the board was
-  touched. It DID rebuild the hardware suite's boot ROM for the R4600
+* **The Indy board is now `192.168.99.92`** (`scripts/local.env`, gitignored
+  - it was `.94` until 2026-09-07; DHCP moved it), and it is NOT shared: the
+  other Claude session's ssh traffic goes to `192.168.99.143`, a different
+  MiSTer (MacQuadra800). At 20:05 on 2026-09-07 the first Opus board session
+  found `.94` off the network and could not deploy; at 20:18 the user gave
+  the new address and the board answered (uptime 2 days, a test core named
+  DiskIOTest running, build 21's rbf in `_Unstable`, `SGIIndy53.img` on the
+  card), and a second Opus session was sent to bench build 22 then build 23
+  and boot IRIX on build 23. The first session touched nothing on the board
+  but DID rebuild the hardware suite's boot ROM for the R4600
   identity: `tests/out/hw-cputest/boot.rom` (md5
   `964d3ce593631c526d8ac4d3f2536d91`, from the patched `~/cputests`; the
   one on disk was build-21-era and would have refused PRId 0x2020). Note

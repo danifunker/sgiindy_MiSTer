@@ -636,7 +636,7 @@ begin
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
             if (PRESENT_AS_R4600) then
-               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines (R4600; both caches really are)
+               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines, what an R4600 reports. The I-cache is really 8 KB (one R4600 way, cpu_instrcache.vhd); over-reporting is the safe direction, an index flush sized from this walks it twice. IRIX never reads it anyway
             else
                readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
             end if;

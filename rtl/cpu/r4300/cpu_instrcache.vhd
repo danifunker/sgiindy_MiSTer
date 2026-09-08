@@ -63,14 +63,38 @@ end entity;
 
 architecture arch of cpu_instrcache is
 
+   -- SGI: 8 KB, NOT KI's 16 KB - ONE WAY OF AN R4600, and the full 20-bit tag.
+   --
+   -- IRIX colours user pages for the cache the CPU's PRId implies. For an
+   -- R4400 (16 KB direct-mapped) it keeps virtual and physical address bits
+   -- 13:12 equal (cachecolormask = 3); for an R4600 (16 KB, two 8 KB ways) it
+   -- keeps only bit 12 equal (cachecolormask = 1 - read out of the kernel's
+   -- own data at 0x881B9680 in the simulator's RAM dumps for both identities,
+   -- docs/45). KI's cache indexes on VIRTUAL bits 13:5 and compares only tag
+   -- bits 31:14, which was fine for its identity-mapped games and for us as
+   -- an R4400, and is wrong for us as an R4600: half of all user text pages
+   -- have virtual bit 13 /= physical bit 13, so a fetch can HIT another 4 KB
+   -- page's line (the tag no longer sees bits 13:12) and the kernel's
+   -- invalidates by physical address look in the wrong set. Build 23 on the
+   -- board: bus errors, segmentation faults and illegal instructions all
+   -- through the IRIX boot, while the data cache - physically indexed since
+   -- docs/40 - was fine.
+   --
+   -- So the index is bits 12:5 (256 lines of 32 bytes), the one virtual bit
+   -- being the one IRIX colours - the same exposure a real R4600 way has,
+   -- and one IRIX is built to handle - and the tag holds bits 31:12 so a
+   -- wrong hit is impossible even for an uncoloured mapping. The kernel's
+   -- 16 KB index flush loops simply cover it twice. The 16 KB two-way cache
+   -- with the way selected by physical bit 13 is the follow-up (docs/45).
+
    -- tags
-   signal tag_address_a    : std_logic_vector(8 downto 0) := (others => '0');
-   signal tag_data_a       : std_logic_vector(18 downto 0) := (others => '0');
+   signal tag_address_a    : std_logic_vector(7 downto 0) := (others => '0');   -- SGI: 256 lines
+   signal tag_data_a       : std_logic_vector(20 downto 0) := (others => '0');  -- SGI: 20-bit tag + valid
    signal tag_wren_a       : std_logic := '0';
-   signal tag_address_b1   : std_logic_vector(8 downto 0);
-   signal tag_address_b2   : std_logic_vector(8 downto 0);
-   signal tag_q_b1         : std_logic_vector(18 downto 0);
-   signal tag_q_b2         : std_logic_vector(18 downto 0);
+   signal tag_address_b1   : std_logic_vector(7 downto 0);   -- SGI
+   signal tag_address_b2   : std_logic_vector(7 downto 0);   -- SGI
+   signal tag_q_b1         : std_logic_vector(20 downto 0);  -- SGI
+   signal tag_q_b2         : std_logic_vector(20 downto 0);  -- SGI
    signal fill_addrTag_sav : unsigned(13 downto 0) := (others => '0');
 
    signal read_hit1        : std_logic;
@@ -79,12 +103,12 @@ architecture arch of cpu_instrcache is
    -- data
    signal fill_grant       : std_logic;
    signal fill_active_2x   : std_logic := '0';
-   signal fill_line_2x     : unsigned(8 downto 0) := (others => '0');
+   signal fill_line_2x     : unsigned(7 downto 0) := (others => '0');   -- SGI
    signal fill_beat_2x     : unsigned(1 downto 0) := (others => '0');
-   signal cache_ram_addr_a : std_logic_vector(10 downto 0);
+   signal cache_ram_addr_a : std_logic_vector(9 downto 0);   -- SGI: 256 x 4 doublewords
    signal cache_wr_a       : std_logic;
    
-   signal cache_address_b  : std_logic_vector(11 downto 0);
+   signal cache_address_b  : std_logic_vector(10 downto 0);  -- SGI: 2048 words
    signal cache_q_b        : std_logic_vector(31 downto 0);
    
    -- state machine
@@ -136,8 +160,8 @@ begin
    itagram1 : entity mem.RamMLAB
    generic map
    (
-      width      => 19, -- 18 bits(31..14) of address + 1 bit valid
-      widthad    => 9
+      width      => 21, -- SGI: 20 bits(31..12) of address + 1 bit valid
+      widthad    => 8   -- SGI: 256 lines
    )
    port map
    (
@@ -149,14 +173,14 @@ begin
       q          => tag_q_b1
    );
    
-   tag_address_b1 <= std_logic_vector(read_index1(13 downto 5));
-   read_hit1      <= '1' when (unsigned(tag_q_b1(17 downto 0)) = read_addrCompare1(31 downto 14) and tag_q_b1(18) = '1') else '0';
+   tag_address_b1 <= std_logic_vector(read_index1(12 downto 5));   -- SGI
+   read_hit1      <= '1' when (unsigned(tag_q_b1(19 downto 0)) = read_addrCompare1(31 downto 12) and tag_q_b1(20) = '1') else '0';   -- SGI
    
    itagram2 : entity mem.RamMLAB
    generic map
    (
-      width      => 19, -- 18 bits(31..14) of address + 1 bit valid
-      widthad    => 9
+      width      => 21, -- SGI: 20 bits(31..12) of address + 1 bit valid
+      widthad    => 8   -- SGI: 256 lines
    )
    port map
    (
@@ -168,8 +192,8 @@ begin
       q          => tag_q_b2
    );
    
-   tag_address_b2 <= std_logic_vector(read_index2(13 downto 5));
-   read_hit2      <= '1' when (unsigned(tag_q_b2(17 downto 0)) = read_addrCompare2(31 downto 14) and tag_q_b2(18) = '1') else '0';
+   tag_address_b2 <= std_logic_vector(read_index2(12 downto 5));   -- SGI
+   read_hit2      <= '1' when (unsigned(tag_q_b2(19 downto 0)) = read_addrCompare2(31 downto 12) and tag_q_b2(20) = '1') else '0';   -- SGI
 
    --------- data
    
@@ -185,7 +209,7 @@ begin
             fill_beat_2x   <= (others => '0');
          elsif (fill_grant = '1') then
             fill_active_2x <= '1';
-            fill_line_2x   <= fill_addrTag_sav(13 downto 5);
+            fill_line_2x   <= fill_addrTag_sav(12 downto 5);   -- SGI
             fill_beat_2x   <= (others => '0');
             if (ddr3_DOUT_READY = '1') then
                fill_beat_2x <= 2x"1";
@@ -204,7 +228,7 @@ begin
       end if;
    end process;
 
-   cache_ram_addr_a <= std_logic_vector(fill_addrTag_sav(13 downto 5) & "00")
+   cache_ram_addr_a <= std_logic_vector(fill_addrTag_sav(12 downto 5) & "00")   -- SGI
                        when (fill_grant = '1') else
                        std_logic_vector(fill_line_2x & fill_beat_2x);
    cache_wr_a       <= (fill_active_2x or fill_grant) and ddr3_DOUT_READY and ram_active;
@@ -212,9 +236,9 @@ begin
    icache: entity work.dpram_dif
    generic map 
    ( 
-      addr_width_a  => 11,
+      addr_width_a  => 10,   -- SGI: 8 KB
       data_width_a  => 64,
-      addr_width_b  => 12,
+      addr_width_b  => 11,   -- SGI
       data_width_b  => 32
    )
    port map
@@ -232,9 +256,9 @@ begin
       q_b         => cache_q_b
    );
    
-   cache_address_b <= std_logic_vector(fill_addrTag_sav(13 downto 2))  when (state /= IDLE) else
-                      std_logic_vector(read_index2(13 downto 2)) when (read_select = '1') else
-                      std_logic_vector(read_index1(13 downto 2));
+   cache_address_b <= std_logic_vector(fill_addrTag_sav(12 downto 2))  when (state /= IDLE) else   -- SGI: 12:2
+                      std_logic_vector(read_index2(12 downto 2)) when (read_select = '1') else
+                      std_logic_vector(read_index1(12 downto 2));
    
    read_data       <= cache_q_b when LITTLE_ENDIAN else byteswap32(cache_q_b);
    
@@ -279,12 +303,12 @@ begin
                      -- todo: should only clear if tag matches
                      tag_wren_a     <= '1';
                      tag_data_a     <= (others => '0');
-                     tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));
+                     tag_address_a  <= std_logic_vector(cmd_addr_eff(12 downto 5));   -- SGI
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1' and cmd_code_eff = 5x"08") then
                      tag_wren_a     <= '1';
-                     tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 2));
-                     tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));
+                     tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 0));   -- SGI: full tag
+                     tag_address_a  <= std_logic_vector(cmd_addr_eff(12 downto 5));   -- SGI
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1') then
                      cmd_pending    <= '0';   -- SGI: a code this cache ignores
@@ -296,7 +320,7 @@ begin
                   
                when CLEARCACHE =>
                   tag_wren_a     <= '1';
-                  if (tag_address_a /= 9x"1FF") then
+                  if (tag_address_a /= 8x"FF") then   -- SGI: 256 lines
                      tag_address_a <= std_logic_vector(unsigned(tag_address_a) + 1);
                   else
                      state          <= IDLE;
@@ -306,8 +330,8 @@ begin
                   if (ram_done = '1') then
                      state          <= IDLE;
                      tag_wren_a     <= '1';
-                     tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 14));
-                     tag_address_a  <= std_logic_vector(fill_addrTag_sav(13 downto 5));
+                     tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 12));   -- SGI: full tag
+                     tag_address_a  <= std_logic_vector(fill_addrTag_sav(12 downto 5));   -- SGI
                      fill_done      <= '1'; 
                   end if;
                   
