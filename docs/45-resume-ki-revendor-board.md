@@ -30,6 +30,24 @@ STATE), the board, and the merge to `main`. Written 2026-09-07.
   the way picked by physical bit 13. The `bootok.sh` relaunch loop the first
   board attempt fell into (it is for the diskless PROM prompt, not an IRIX
   boot) is a separate trap: launch once and wait for the desktop.
+* **What the board showed (Opus session, 20:20-21:03 on 2026-09-07):**
+  hardware cpu-tests build 22 = 2166/3 (PRId 0x0440), build 23 = 2165/3
+  (PRId/FIR 0x2020, Config 0x0006e4b0), only `fpu/vec_cvt_from_l` failing;
+  every bench identical to within a tick except `ld_miss`, 114,418 vs
+  106,790 ticks for 8192 loads (+7.1 %, both round to 13 ticks/load - the
+  32-byte fill is two more beats). Logs `tests/out/hw-cputest/hw-cputest-
+  b22.log` / `-b23.log`. Build 23 IRIX: fsck's six phases fine, then rc2
+  a storm of "Bus error / Segmentation fault / Illegal instruction - core
+  dumped", the X login chooser dead, X restarting every ~30 s, the beacon
+  showing the disk hammered with WRITE_10 (core dumps), no SCSI/DMA fault
+  latched (`tests/out/hw/b23-boot2.png`). **Control: build 22 on the SAME
+  image booted clean to a working desktop** (`b22-boot2.png`, `hinv.png`:
+  "50 MHZ IP22 Processor", R4400 4.0, 48 MB). The two MiSTer HPS reboots seen
+  were the harness's own (`launch_unstable_core.py` POSTs a reboot; the
+  hardware cpu-tests script uses it), not a MiSTer main death. **Board final
+  state: build 22 in `_Unstable`, the PROM as boot.rom, `SGIIndy53.img` in
+  slot 1 cleanly unmounted by `init 0`, guest halted at "Okay to power off"
+  (21:03).**
 
 * **Branch `claude/ki-revendor`** in the worktree
   `.claude/worktrees/modest-robinson-cad59e`. `main` is still the N64-base
