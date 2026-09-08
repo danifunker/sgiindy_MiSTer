@@ -7,14 +7,23 @@ library mem;
 use work.pFunctions.all;
 
 entity cpu_instrcache is
+   generic
+   (
+      LITTLE_ENDIAN : boolean := false
+   );
    port 
    (
       clk1x             : in  std_logic;
       clk93             : in  std_logic;
       clk2x             : in  std_logic;
+      -- One reset per domain. The fill path below runs on clk1x, so it must be
+      -- released by a clk1x-synchronised reset: reset_93 crosses domains
+      -- unsynchronised, and once clk93 and clk1x are declared asynchronous
+      -- nothing constrains its recovery/removal any more.
+      reset_1x          : in  std_logic;
       reset_93          : in  std_logic;
       ce_93             : in  std_logic;
-      
+
       ram_request       : out std_logic := '0';
       ram_active        : in  std_logic := '0';
       ram_grant         : in  std_logic := '0';
@@ -23,8 +32,14 @@ entity cpu_instrcache is
       ddr3_DOUT_READY   : in  std_logic;
       
       read_select       : in  std_logic;
-      read_addr1        : in  unsigned(31 downto 0);
-      read_addr2        : in  unsigned(31 downto 0);
+      -- RAM index for the tag and data lookups: bits 13 downto 2 of the fetch
+      -- address, but produced by ONE flattened mux in cpu.vhd rather than by
+      -- the forwarding mux feeding the fetch mux feeding here. See FetchIndex1
+      -- there for why the shorter path matters. The tag COMPARE still uses
+      -- read_addrCompare1/2, so a wrong index can only miss and refill - it
+      -- cannot return wrong data.
+      read_index1       : in  unsigned(13 downto 2);
+      read_index2       : in  unsigned(13 downto 2);
       read_addrCompare1 : in  unsigned(31 downto 0);
       read_addrCompare2 : in  unsigned(31 downto 0);
       read_hit          : out std_logic;
@@ -50,22 +65,23 @@ architecture arch of cpu_instrcache is
 
    -- tags
    signal tag_address_a    : std_logic_vector(8 downto 0) := (others => '0');
-   signal tag_data_a       : std_logic_vector(20 downto 0) := (others => '0');
+   signal tag_data_a       : std_logic_vector(18 downto 0) := (others => '0');
    signal tag_wren_a       : std_logic := '0';
    signal tag_address_b1   : std_logic_vector(8 downto 0);
    signal tag_address_b2   : std_logic_vector(8 downto 0);
-   signal tag_q_b1         : std_logic_vector(20 downto 0);
-   signal tag_q_b2         : std_logic_vector(20 downto 0);
+   signal tag_q_b1         : std_logic_vector(18 downto 0);
+   signal tag_q_b2         : std_logic_vector(18 downto 0);
    signal fill_addrTag_sav : unsigned(13 downto 0) := (others => '0');
 
    signal read_hit1        : std_logic;
    signal read_hit2        : std_logic;
 
    -- data
-   signal fill_addrTag_1x  : unsigned(8 downto 0) := (others => '0');
-   signal fill_addrTag_2x  : unsigned(8 downto 0) := (others => '0');
-   signal ram_grant_2x     : std_logic := '0';
-   signal cache_addr_a     : unsigned(10 downto 0) := (others => '0');
+   signal fill_grant       : std_logic;
+   signal fill_active_2x   : std_logic := '0';
+   signal fill_line_2x     : unsigned(8 downto 0) := (others => '0');
+   signal fill_beat_2x     : unsigned(1 downto 0) := (others => '0');
+   signal cache_ram_addr_a : std_logic_vector(10 downto 0);
    signal cache_wr_a       : std_logic;
    
    signal cache_address_b  : std_logic_vector(11 downto 0);
@@ -81,7 +97,7 @@ architecture arch of cpu_instrcache is
    signal state : tstate := IDLE;
    
    signal fill_latched : std_logic := '0';
-   
+
    -- SGI: A CACHE COMMAND THAT ARRIVES WHILE THIS CACHE IS FILLING USED TO BE
    -- DROPPED. The command was only looked at in the IDLE arm of the state
    -- machine below, `cache_commandEnableI` in cpu.vhd is a one-clock pulse,
@@ -105,11 +121,12 @@ architecture arch of cpu_instrcache is
 
 begin 
 
+   fill_grant <= ram_grant and ram_active;
+
    -- A live command takes priority over the latched one; see cmd_pending.
    cmd_ena_eff  <= CacheCommandEna or cmd_pending;
    cmd_code_eff <= CacheCommand     when (CacheCommandEna = '1') else cmd_code;
    cmd_addr_eff <= CacheCommandAddr when (CacheCommandEna = '1') else cmd_addr;
-
 
    -- use two tag rams, so different fetch paths can be calculated in parallel to improve timing
 
@@ -119,7 +136,7 @@ begin
    itagram1 : entity mem.RamMLAB
    generic map
    (
-      width      => 21, -- 20 bits(31..12) of address + 1 bit valid
+      width      => 19, -- 18 bits(31..14) of address + 1 bit valid
       widthad    => 9
    )
    port map
@@ -132,13 +149,13 @@ begin
       q          => tag_q_b1
    );
    
-   tag_address_b1 <= std_logic_vector(read_addr1(13 downto 5));
-   read_hit1      <= '1' when (unsigned(tag_q_b1(19 downto 0)) = read_addrCompare1(31 downto 12) and tag_q_b1(20) = '1') else '0';
+   tag_address_b1 <= std_logic_vector(read_index1(13 downto 5));
+   read_hit1      <= '1' when (unsigned(tag_q_b1(17 downto 0)) = read_addrCompare1(31 downto 14) and tag_q_b1(18) = '1') else '0';
    
    itagram2 : entity mem.RamMLAB
    generic map
    (
-      width      => 21, -- 20 bits(31..12) of address + 1 bit valid
+      width      => 19, -- 18 bits(31..14) of address + 1 bit valid
       widthad    => 9
    )
    port map
@@ -151,59 +168,46 @@ begin
       q          => tag_q_b2
    );
    
-   tag_address_b2 <= std_logic_vector(read_addr2(13 downto 5));
-   read_hit2      <= '1' when (unsigned(tag_q_b2(19 downto 0)) = read_addrCompare2(31 downto 12) and tag_q_b2(20) = '1') else '0';
+   tag_address_b2 <= std_logic_vector(read_index2(13 downto 5));
+   read_hit2      <= '1' when (unsigned(tag_q_b2(17 downto 0)) = read_addrCompare2(31 downto 14) and tag_q_b2(18) = '1') else '0';
 
    --------- data
    
+   -- The KI bridge returns cache-fill beats in the 50 MHz clk1x domain.
+   -- Consume each ready pulse once in that same domain before crossing the
+   -- completed line into the 75 MHz CPU/tag domain.
    process (clk1x)
    begin
       if rising_edge(clk1x) then
-         fill_addrTag_1x <= fill_addrTag_sav(13 downto 5);
-      end if;
-   end process;
-   
-   process (clk2x)
-   begin
-      if rising_edge(clk2x) then
-      
-         fill_addrTag_2x <= fill_addrTag_1x;
-      
-         if (ram_grant = '1'and ram_active = '1') then
-            ram_grant_2x <= '1';
-         end if;
-         
-         if (ram_grant = '1') then
-            -- SGI: fill_addrTag_sav, NOT the fill_addrTag_1x/2x pipeline.
-            --
-            -- A LINE'S TAG AND ITS DATA HAVE TO GO TO THE SAME INDEX. The FILL
-            -- arm below writes the tag at fill_addrTag_sav(13:5); this wrote
-            -- the data at fill_addrTag_2x, the same value delayed through two
-            -- registers, one clocked on clk1x and one on clk2x. Upstream those
-            -- are different clocks and the delay is a fraction of a cycle;
-            -- rtl/cpu/r4300_wrap.vhd ties clk1x, clk2x and clk93 all to the one
-            -- system clock, which turns it into two whole cycles of skew
-            -- against a `ram_grant` that r4300_bus.sv raises in the cycle it
-            -- accepts the request.
-            --
-            -- IN PRACTICE THE TWO AGREE TODAY - making this change moved no
-            -- measurement, so it is a hazard removed and not a bug fixed, and
-            -- it is recorded that way on purpose. fill_addrTag_sav stops
-            -- changing when the state machine leaves IDLE, so the pipelined
-            -- copy catches up before the first beat as long as the bus takes
-            -- its time. Correctness should not rest on the bus being slow.
-            cache_addr_a <= fill_addrTag_sav(13 downto 5) & "00";
-         elsif (ddr3_DOUT_READY = '1') then
-            cache_addr_a <= cache_addr_a + 1;
-            if (ram_grant_2x = '1' and cache_addr_a(1 downto 0) = "11") then
-               ram_grant_2x <= '0';
+         if (reset_1x = '1') then
+            fill_active_2x <= '0';
+            fill_line_2x   <= (others => '0');
+            fill_beat_2x   <= (others => '0');
+         elsif (fill_grant = '1') then
+            fill_active_2x <= '1';
+            fill_line_2x   <= fill_addrTag_sav(13 downto 5);
+            fill_beat_2x   <= (others => '0');
+            if (ddr3_DOUT_READY = '1') then
+               fill_beat_2x <= 2x"1";
+            end if;
+         elsif (ram_active = '0') then
+            -- The transaction this window belongs to is over. See the note on
+            -- cache_wr_a below.
+            fill_active_2x <= '0';
+         elsif (fill_active_2x = '1' and ddr3_DOUT_READY = '1') then
+            if (fill_beat_2x = 2x"3") then
+               fill_active_2x <= '0';
+            else
+               fill_beat_2x <= fill_beat_2x + 1;
             end if;
          end if;
-         
       end if;
    end process;
 
-   cache_wr_a    <= ram_grant_2x and ddr3_DOUT_READY;
+   cache_ram_addr_a <= std_logic_vector(fill_addrTag_sav(13 downto 5) & "00")
+                       when (fill_grant = '1') else
+                       std_logic_vector(fill_line_2x & fill_beat_2x);
+   cache_wr_a       <= (fill_active_2x or fill_grant) and ddr3_DOUT_READY and ram_active;
 
    icache: entity work.dpram_dif
    generic map 
@@ -215,8 +219,8 @@ begin
    )
    port map
    (
-      clock_a     => clk2x,
-      address_a   => std_logic_vector(cache_addr_a),
+      clock_a     => clk1x,
+      address_a   => cache_ram_addr_a,
       data_a      => ddr3_DOUT,
       wren_a      => cache_wr_a,
       
@@ -229,10 +233,10 @@ begin
    );
    
    cache_address_b <= std_logic_vector(fill_addrTag_sav(13 downto 2))  when (state /= IDLE) else
-                      std_logic_vector(read_addr2(13 downto 2)) when (read_select = '1') else
-                      std_logic_vector(read_addr1(13 downto 2));
+                      std_logic_vector(read_index2(13 downto 2)) when (read_select = '1') else
+                      std_logic_vector(read_index1(13 downto 2));
    
-   read_data       <= byteswap32(cache_q_b);
+   read_data       <= cache_q_b when LITTLE_ENDIAN else byteswap32(cache_q_b);
    
    process (clk93)
    begin
@@ -279,7 +283,7 @@ begin
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1' and cmd_code_eff = 5x"08") then
                      tag_wren_a     <= '1';
-                     tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 0));
+                     tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 2));
                      tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1') then
@@ -302,7 +306,7 @@ begin
                   if (ram_done = '1') then
                      state          <= IDLE;
                      tag_wren_a     <= '1';
-                     tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 12));
+                     tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 14));
                      tag_address_a  <= std_logic_vector(fill_addrTag_sav(13 downto 5));
                      fill_done      <= '1'; 
                   end if;
