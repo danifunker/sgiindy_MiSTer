@@ -123,8 +123,10 @@ compare. Only bit 12 matters now (index 12:5):
   **2161/3** (only `fpu/vec_cvt_from_l`; `cache/icache_coherency` and
   `cache/hit_inv_discards` pass with the translated op) - both on the
   regenerated `~/kicpu` model (r4300_wrap.v 09:52, Vsim_top 09:54).
-  **IRIX sim boot running**: `~/kicpu/irix6` (started 09:56, 230M cycles,
-  `--stop-on PANIC`; pass = no PANIC, device table like irix5's).
+  **IRIX sim boot PASSED**: `~/kicpu/irix6` (09:56-10:25, 230M cycles,
+  `--stop-on PANIC`): no PANIC, console byte-identical to irix5 (IRIX banner,
+  the three clock warnings), exit device table IDENTICAL to irix5's,
+  22,259,397 bus transactions vs 22,258,981.
   **Fit b25** queued: `SEED=2 scripts/fit_when_free.sh b25` in the
   worktree (`b25.status`/`b25.log`/`b25.console`), waiting behind the other
   session's MacQuadra800 `quartus_sh --flow compile` that started 09:53.
