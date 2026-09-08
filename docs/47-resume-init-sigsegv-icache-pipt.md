@@ -193,6 +193,13 @@ compare. Only bit 12 matters now (index 12:5):
   scripts/irixrate.sh N --tag b25 --fresh ...` then the same for build 24
   (the number PIPT must beat) and build 22 (the instrument control).
   Expect ~8-9 minutes per boot; 5 boots per build is the first honest cut.
+* **Build 25 on a pristine image, boot 1: X-UP at 271 s** (`irixrate-b25f.log`,
+  run started 11:02; the restore takes 266 s per boot). panicstr 0, and
+  `tests/out/hw/b25f-boot1.png` shows the IRIX login chooser (root,
+  EZsetup, demos, guest, 4Dgifts, user / "Login name:") - the instrument's
+  X-UP is real. The crash-loop diagnosis stands: same build, same board,
+  pristine files -> clean boot. Boots 2-5 follow, then build 24 the same
+  way (that is the number PIPT has to beat), then build 22.
 * **Next, in order:** irix6 result -> fit result (core slack; if the clock
   fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
   output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag
