@@ -32,20 +32,25 @@ entity cpu_instrcache is
       ddr3_DOUT_READY   : in  std_logic;
       
       read_select       : in  std_logic;
-      -- RAM index for the tag and data lookups: bits 13 downto 2 of the fetch
-      -- address, but produced by ONE flattened mux in cpu.vhd rather than by
-      -- the forwarding mux feeding the fetch mux feeding here. See FetchIndex1
-      -- there for why the shorter path matters. The tag COMPARE still uses
-      -- read_addrCompare1/2, so a wrong index can only miss and refill - it
-      -- cannot return wrong data.
-      read_index1       : in  unsigned(13 downto 2);
-      read_index2       : in  unsigned(13 downto 2);
+      -- RAM index for the tag and data lookups: bits 12 downto 2 of the
+      -- PHYSICAL fetch address (SGI, docs/47: bit 12 is the translated one
+      -- from cpu.vhd's FetchIndexPhys1; bits 11:2 are page offset and come
+      -- from KI's ONE flattened mux there rather than the forwarding mux
+      -- feeding the fetch mux - see FetchIndex1 for why the shorter path
+      -- matters). The tag COMPARE still uses read_addrCompare1/2, so a wrong
+      -- index can only miss and refill - it cannot return wrong data.
+      read_index1       : in  unsigned(12 downto 2);
+      read_index2       : in  unsigned(12 downto 2);
       read_addrCompare1 : in  unsigned(31 downto 0);
       read_addrCompare2 : in  unsigned(31 downto 0);
       read_hit          : out std_logic;
       read_data         : out std_logic_vector(31 downto 0) := (others => '0');
       
       fill_request      : in  std_logic;
+      -- SGI: both are the PHYSICAL address of the line now (cpu.vhd drives
+      -- both from mem1_addrCompare): fill_addrData(31:12) becomes the tag and
+      -- fill_addrTag(12:5) the line index. Upstream the index came from the
+      -- virtual address, which is what made the cache virtually indexed.
       fill_addrData     : in  unsigned(31 downto 0);
       fill_addrTag      : in  unsigned(31 downto 0);
       fill_done         : out std_logic := '0';
@@ -80,12 +85,24 @@ architecture arch of cpu_instrcache is
    -- through the IRIX boot, while the data cache - physically indexed since
    -- docs/40 - was fine.
    --
-   -- So the index is bits 12:5 (256 lines of 32 bytes), the one virtual bit
-   -- being the one IRIX colours - the same exposure a real R4600 way has,
-   -- and one IRIX is built to handle - and the tag holds bits 31:12 so a
-   -- wrong hit is impossible even for an uncoloured mapping. The kernel's
-   -- 16 KB index flush loops simply cover it twice. The 16 KB two-way cache
-   -- with the way selected by physical bit 13 is the follow-up (docs/45).
+   -- So the index is bits 12:5 (256 lines of 32 bytes) and the tag holds
+   -- bits 31:12, so a wrong hit is impossible even for an uncoloured mapping.
+   -- The kernel's 16 KB index flush loops simply cover it twice.
+   --
+   -- AND THE INDEX IS PHYSICAL (docs/47). Build 24 indexed on VIRTUAL bit 12
+   -- - "the one bit IRIX colours, the exposure a real R4600 way has" - and
+   -- still lost init to SIGSEGV about one boot in three: IRIX does not colour
+   -- every mapping, a page mapped with virtual bit 12 /= physical bit 12 left
+   -- its lines in set(V), and the kernel's Hit_Invalidate_I by the page's K0
+   -- address looked in set(P). A real R4600's hit ops search both ways of a
+   -- set; this cache has one. So cpu.vhd now hands this cache the physical
+   -- bit 12 on the fetch side (FetchIndexPhys1/2, from the instruction
+   -- mini-TLB) and the physical address on the fill side (fill_addrTag =
+   -- mem1_addrCompare), and translates cache op 0x10 - every line lives in
+   -- exactly one set for every mapping. Index ops 0x00/0x08 take their index
+   -- from the operand untranslated, as before (IRIX issues them by K0
+   -- address). The 16 KB two-way cache with the way selected by physical bit
+   -- 13 is the follow-up (docs/45).
 
    -- tags
    signal tag_address_a    : std_logic_vector(7 downto 0) := (others => '0');   -- SGI: 256 lines

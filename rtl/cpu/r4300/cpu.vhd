@@ -616,17 +616,42 @@ architecture arch of cpu is
    -- mux and removes an entire level plus one long hop. The tag COMPARE still
    -- uses FetchAddrTLBMuxed1, so a wrong index cannot be mistaken for a hit;
    -- it would miss and fill, not return the wrong line.
+   -- (Bit 12 of what the cache sees no longer comes from here but from the
+   -- translated address - FetchIndexPhys1 below; bits 11:2 still do.)
    signal FetchIndex1                  : unsigned(13 downto 2) := (others => '0');
    signal FetchIndex2                  : unsigned(13 downto 2) := (others => '0');
    signal FetchAddrTLBMuxed1           : unsigned(31 downto 0) := (others => '0'); 
-   signal FetchAddrTLBMuxed2           : unsigned(31 downto 0) := (others => '0'); 
+   signal FetchAddrTLBMuxed2           : unsigned(31 downto 0) := (others => '0');
+   -- SGI: THE INSTRUCTION CACHE IS PHYSICALLY INDEXED (docs/47). Its index is
+   -- bits 12:5 and bit 12 is the one bit a 4 KB page does not fix, so it is
+   -- taken from FetchAddrTLBMuxed - the instruction mini-TLB's translation
+   -- when the fetch is mapped, the (equal) virtual bit when it is not. The
+   -- mini-TLB's physical bits 31:12 are a plain register (mini_physical), so
+   -- this costs one 2:1 mux on TLB_instrMapped, not a TLB compare. Bits 11:2
+   -- stay on KI's flattened FetchIndex mux.
+   --
+   -- Why: as an R4600 IRIX colours user pages on bit 12 only, and not on
+   -- every path. A page mapped with virtual bit 12 /= physical bit 12 left
+   -- its lines in set(V); the kernel's Hit_Invalidate_I by the page's K0
+   -- address looked in set(P) and never found them, so the next program
+   -- mapped over that page executed the previous one's code - init died
+   -- with SIGSEGV about one boot in three (build 24 on the board). A real
+   -- R4600's hit ops search both ways of a set; this cache has one. With
+   -- the index physical on both the fetch and the fill side, a line lives in
+   -- exactly one set for every mapping and the invalidate always finds it.
+   --
+   -- On a mini-TLB miss FetchAddrTLBMuxed carries a stale translation: that
+   -- fetch stalls on TLB_instrStall and is re-issued as a FILL after the
+   -- walk (below), so a wrong index there is a harmless false miss, and the
+   -- full tag compare makes a false hit impossible.
+   signal FetchIndexPhys1              : unsigned(12 downto 2);
+   signal FetchIndexPhys2              : unsigned(12 downto 2);
    signal FetchAddrSelect              : std_logic;
    signal fetchCache1                  : std_logic;
    signal fetchCache2                  : std_logic;
    signal fetchCache                   : std_logic;
    signal useCached_data               : std_logic := '0';
    
-   signal fill_addrTag                 : unsigned(31 downto 0) := (others => '0'); 
    signal instrcache_request           : std_logic;
    signal instrcache_active            : std_logic := '0';
    signal instrcache_hit               : std_logic;
@@ -2105,8 +2130,8 @@ begin
       ddr3_DOUT_READY   => ddr3_DOUT_READY,
       
       read_select       => FetchAddrSelect,
-      read_index1       => FetchIndex1,
-      read_index2       => FetchIndex2,
+      read_index1       => FetchIndexPhys1,   -- SGI: bit 12 physical, see its declaration
+      read_index2       => FetchIndexPhys2,
       read_addrCompare1 => FetchAddrTLBMuxed1,
       read_addrCompare2 => FetchAddrTLBMuxed2,
       read_hit          => instrcache_hit,
@@ -2114,7 +2139,7 @@ begin
       
       fill_request      => instrcache_fill,
       fill_addrData     => mem1_addrCompare,   -- SGI: not mem1_address; see its declaration
-      fill_addrTag      => fill_addrTag,
+      fill_addrTag      => mem1_addrCompare,   -- SGI: the fill INDEX is physical too (PIPT), see FetchIndexPhys1
       fill_done         => instrcache_fill_done,
       
       CacheCommandEna   => cache_commandEnableI,
@@ -2145,6 +2170,10 @@ begin
    
    FetchAddrTLBMuxed1 <= TLB_instrAddrOutFound when (TLB_instrMapped1 = '1') else FetchAddr1(31 downto 0);
    FetchAddrTLBMuxed2 <= TLB_instrAddrOutFound when (TLB_instrMapped2 = '1') else FetchAddr2(31 downto 0);
+
+   -- SGI: physical index bit 12 for the I-cache; see FetchIndexPhys1.
+   FetchIndexPhys1 <= FetchAddrTLBMuxed1(12) & FetchIndex1(11 downto 2);
+   FetchIndexPhys2 <= FetchAddrTLBMuxed2(12) & FetchIndex2(11 downto 2);
 
    -- running from 64 bit sections currently not fully supported to not screw up FPGA route timing
    -- kusegUnmapped is Status.ERL: while it is set, region < 4 is unmapped and the
@@ -2188,12 +2217,10 @@ begin
             if (ss_in(16)(3) = '1') then
                mem1_address     <= "000" & unsigned(ss_in(5)(28 downto 0)); -- last was branch -> should be patched in the savestate already
                mem1_addrCompare <= unsigned(ss_in(5)(31 downto 0));         -- SGI
-               fill_addrTag     <= unsigned(ss_in(5)(31 downto 0));
                PC               <= unsigned(ss_in(5)); 
             else
                mem1_address     <= "000" & unsigned(ss_in(0)(28 downto 0)); -- x"FFFFFFFFBFC00000";    
                mem1_addrCompare <= unsigned(ss_in(0)(31 downto 0));         -- SGI
-               fill_addrTag     <= unsigned(ss_in(0)(31 downto 0));
                PC               <= unsigned(ss_in(0)); -- x"FFFFFFFFBFC00000";                    
             end if;
             stall1         <= '1';
@@ -2258,7 +2285,6 @@ begin
                if (TLB_instrMapped = '1') then
                   mem1_address     <= TLB_instrAddrOutFound;
                   mem1_addrCompare <= TLB_instrAddrOutFound;    -- SGI
-                  fill_addrTag     <= FetchAddr(31 downto 0);
                else
                   -- SGI: the kseg0/kseg1 strip moved here from the write FIFO
                   -- below. It is only correct for an UNMAPPED fetch - taking
@@ -2267,7 +2293,6 @@ begin
                   -- cache tag must NOT be stripped; see mem1_addrCompare.
                   mem1_address     <= "000" & FetchAddr(28 downto 0);
                   mem1_addrCompare <= FetchAddr(31 downto 0);    -- SGI
-                  fill_addrTag     <= FetchAddr(31 downto 0);
                end if;
       
                if (TLB_instrStall = '1') then
@@ -3105,16 +3130,16 @@ begin
                               decodeCacheTLBTranslate <= '1';
                               -- 0x00 and 0x08 are INDEX ops: their operand is
                               -- an index, not an address, so there is nothing
-                              -- to translate. 0x10 is `Hit_Invalidate I` and
-                              -- looks like it should translate - but this
-                              -- instruction cache is VIRTUALLY INDEXED
-                              -- (cpu_instrcache.vhd indexes the tag ram with
-                              -- read_addr(13:5), the virtual fetch address,
-                              -- and compares a physical tag), so the index it
-                              -- needs is the virtual one. Translating it was
-                              -- tried and is wrong.
+                              -- to translate. 0x10 (`Hit_Invalidate I`) DOES
+                              -- translate, like the D-cache's hit ops: the
+                              -- instruction cache is physically indexed
+                              -- (docs/47, FetchIndexPhys1), so the line it
+                              -- names is found by the physical address. It
+                              -- was in this list while the cache was
+                              -- virtually indexed, when translating it put the
+                              -- physical bit 12 into a virtual index.
                               case (to_integer(decSource2)) is
-                                 when 16#00# | 16#08# | 16#10# => decodeCacheTLBTranslate <= '0';
+                                 when 16#00# | 16#08# => decodeCacheTLBTranslate <= '0';
                                  when others => null;
                               end case;
                            when others =>

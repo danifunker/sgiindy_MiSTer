@@ -107,6 +107,43 @@ compare. Only bit 12 matters now (index 12:5):
    last exception code/EPC/BadVAddr (they are on `dbg_exc_*` already) so the
    panic's fault address is readable off the beacon after the dump.
 
+## PROGRESS 2026-09-08 (the Fable session, from ~09:45)
+
+* **The PIPT I-cache is implemented** (`cpu.vhd`, `cpu_instrcache.vhd`;
+  `rtl/cpu/r4300/UPSTREAM.md` has the row): `FetchIndexPhys1/2` =
+  `FetchAddrTLBMuxed1/2(12) & FetchIndex1/2(11 downto 2)` feed
+  `read_index1/2` (port narrowed to 12 downto 2); the fill index port
+  `fill_addrTag` is driven by `mem1_addrCompare` (physical - the same
+  address the tag comes from) and the `fill_addrTag` register is deleted;
+  cache op 0x10 is out of the untranslated list. Timing note that matters:
+  `TLB_instrAddrOutFound(31:12)` is the mini-TLB's `mini_physical`
+  REGISTER, so the physical bit costs one 2:1 mux on `TLB_instrMapped`,
+  not a TLB compare (cpu_TLB_instr.vhd).
+* **Gates so far:** `cpuonly` 728/0 (78 burst fills, as before); cpu-tests
+  **2161/3** (only `fpu/vec_cvt_from_l`; `cache/icache_coherency` and
+  `cache/hit_inv_discards` pass with the translated op) - both on the
+  regenerated `~/kicpu` model (r4300_wrap.v 09:52, Vsim_top 09:54).
+  **IRIX sim boot running**: `~/kicpu/irix6` (started 09:56, 230M cycles,
+  `--stop-on PANIC`; pass = no PANIC, device table like irix5's).
+  **Fit b25** queued: `SEED=2 scripts/fit_when_free.sh b25` in the
+  worktree (`b25.status`/`b25.log`/`b25.console`), waiting behind the other
+  session's MacQuadra800 `quartus_sh --flow compile` that started 09:53.
+* **The boot-rate instrument exists**: `tools/misterdeploy/irixstate.py`
+  (on the device) reads the kernel's `panicstr` (unix.ecoff 0x881bd184;
+  the message is printed) and the frame buffer's index histogram (boot
+  panel = index 9, X = index 16 > 30 %; calibrated on
+  `tests/out/hw/b22-{boot1,login,desk}.raw`) - verified on the board's
+  live panic screen: `PANIC ... <0>PANIC: init died (why = 2, what = 0xb)`.
+  `scripts/irixrate.sh N --tag bNN` launches N times (memclear + fb mark +
+  `launch_unstable_core.py`, saved SCSI slot re-attaches the image), polls
+  every 20 s to 420 s, tallies, logs to `tests/out/hw/irixrate-<tag>.log`.
+* **Next, in order:** irix6 result -> fit result (core slack; if the clock
+  fails, the 4 KB index-11:5 fallback) -> `scripts/deploy.sh --rbf
+  output_files/sgiindy-b25-seed2.rbf` -> `bash scripts/irixrate.sh 10 --tag
+  b25`, then the same 10 with build 22 (`bd342f18...`, the control) - or
+  build 24 (`ab3ae66d...`) if the question is "did PIPT remove the panic".
+  The board is at build 24's panic screen; the image has the dump on swap.
+
 ## Follow-ups (unchanged from docs/46)
 * 16 KB as two 8 KB ways with the way picked by physical bit 13 (needs the
   PIPT bit-12 work above first - then it is the natural extension).
