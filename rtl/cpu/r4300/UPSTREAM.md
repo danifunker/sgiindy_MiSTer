@@ -265,4 +265,9 @@ device table is identical to build 22's, reached ~11M cycles sooner.
 **Build 23** (SEED=2, 2026-09-07, `output_files/sgiindy-b23-seed2.rbf`):
 34,743 ALMs (83 %), 42,770 registers, 2.99 Mbit of block memory — all within
 1 % of build 22 — and the CORE clock's setup slack went from +2.459 ns to
-**+2.904 ns**, which is what the swap was for.
+**+2.904 ns**, which is what the swap was for. On the board its hardware
+cpu-tests were 2165/3 with PRId/FIR 0x2020 and every bench number identical
+to build 22's to within a tick, except `ld_miss`: 114,418 vs 106,790 ticks
+for 8192 missing loads (+7 %, still 13 ticks per load — a 32-byte fill is two
+more DDR3 beats). Its IRIX boot failed in rc2 with the I-cache aliasing
+described above; build 24 carries the 8 KB I-cache.
