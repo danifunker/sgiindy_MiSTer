@@ -65,6 +65,17 @@ Written 2026-09-08.
     framework. Nothing in the beacon says whether HSYNC/VSYNC/DE are being
     emitted - that is the missing instrument.
 
+## RESOLVED 2026-09-08 09:15 - a full `reboot` from the MiSTer's shell brought the
+## video back. The framework's API reboot (`/api/settings/system/reboot`, what
+## `launch_unstable_core.py` and `scripts/deploy.sh` use) had NOT cleared the
+## wedge on its own during the morning's A/B; after the user's shell `reboot`
+## the picture returned, and a subsequent `deploy.sh` (API reboot + launch) of
+## build 24 kept it: `scripts/grab.sh` captured a fresh PROM screen at 09:16.
+## So: black picture with the OSD visible = an HPS/framework video wedge, not
+## the core; the cure is `ssh root@<mister> reboot`. Build 24 is on the board.
+## Everything below is kept as the diagnosis trail and the instrument plan
+## should it recur.
+
 ## The queue
 
 ### 1. First, the free experiments (no fit)
