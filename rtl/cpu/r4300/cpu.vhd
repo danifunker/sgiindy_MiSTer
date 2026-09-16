@@ -151,7 +151,30 @@ entity cpu is
       -- The RETIRING instruction's PC and a one-clock strobe. See dbg_pc2.
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
       dbg_retire            : out std_logic := '0';
-      
+      -- SGI: what the memory side of the pipeline is doing, for the
+      -- performance counters in sgi_indy.sv (docs/50). Bit 0 an instruction
+      -- cache fill requested, 1 a data cache fill requested, 2 a data cache
+      -- writeback beat, 3 an uncached fetch requested (one-clock pulses);
+      -- 4 a bus transaction issued (pulse); 5 a bus transaction in flight,
+      -- 6 an instruction cache fill in flight, 7 a data cache fill in flight
+      -- (levels); 8 an instruction cache fill requested after an instruction
+      -- TLB walk, 9 a fill request the instruction cache answered from a line
+      -- it already held (pulses). Wires only - nothing inside the CPU reads
+      -- them.
+      dbg_perf              : out std_logic_vector(9 downto 0) := (others => '0');
+      -- SGI: the instruction cache's access stream, for the simulator's
+      -- --itrace (docs/50). Bit 32 pulses the clock after a fetch looked in
+      -- the cache (the fetch that found its line, or the one that filled it;
+      -- a fetch held for a mini-TLB walk is counted once, when the walk hands
+      -- it back); bits 31:0 are the physical address it looked up. Wires
+      -- only, unconnected on the board.
+      dbg_ifetch            : out std_logic_vector(32 downto 0) := (others => '0');
+      -- SGI: the data cache's access stream, for the simulator's --dtrace
+      -- (docs/50), one clock late: bit 33 pulses for a load or store that
+      -- went to the data cache, bit 32 says it was a store, bits 31:0 are the
+      -- physical address. Unconnected on the board.
+      dbg_dfetch            : out std_logic_vector(33 downto 0) := (others => '0');
+
       mem_request           : out std_logic := '0';
       mem_rnw               : out std_logic := '0'; 
       mem_address           : buffer unsigned(31 downto 0) := (others => '0'); 
@@ -616,19 +639,19 @@ architecture arch of cpu is
    -- mux and removes an entire level plus one long hop. The tag COMPARE still
    -- uses FetchAddrTLBMuxed1, so a wrong index cannot be mistaken for a hit;
    -- it would miss and fill, not return the wrong line.
-   -- (Bit 12 of what the cache sees no longer comes from here but from the
+   -- (Bits 13:12 of what the cache sees no longer come from here but from the
    -- translated address - FetchIndexPhys1 below; bits 11:2 still do.)
    signal FetchIndex1                  : unsigned(13 downto 2) := (others => '0');
    signal FetchIndex2                  : unsigned(13 downto 2) := (others => '0');
    signal FetchAddrTLBMuxed1           : unsigned(31 downto 0) := (others => '0'); 
    signal FetchAddrTLBMuxed2           : unsigned(31 downto 0) := (others => '0');
    -- SGI: THE INSTRUCTION CACHE IS PHYSICALLY INDEXED (docs/47). Its index is
-   -- bits 12:5 and bit 12 is the one bit a 4 KB page does not fix, so it is
-   -- taken from FetchAddrTLBMuxed - the instruction mini-TLB's translation
-   -- when the fetch is mapped, the (equal) virtual bit when it is not. The
-   -- mini-TLB's physical bits 31:12 are a plain register (mini_physical), so
-   -- this costs one 2:1 mux on TLB_instrMapped, not a TLB compare. Bits 11:2
-   -- stay on KI's flattened FetchIndex mux.
+   -- bits 13:5 (16 KB since docs/50) and bits 13:12 are the ones a 4 KB page
+   -- does not fix, so they are taken from FetchAddrTLBMuxed - the instruction
+   -- mini-TLB's translation when the fetch is mapped, the (equal) virtual
+   -- bits when it is not. The mini-TLB's physical bits 31:12 are a plain
+   -- register (mini_physical), so this costs one 2:1 mux on TLB_instrMapped,
+   -- not a TLB compare. Bits 11:2 stay on KI's flattened FetchIndex mux.
    --
    -- Why: as an R4600 IRIX colours user pages on bit 12 only, and not on
    -- every path. A page mapped with virtual bit 12 /= physical bit 12 left
@@ -644,8 +667,8 @@ architecture arch of cpu is
    -- fetch stalls on TLB_instrStall and is re-issued as a FILL after the
    -- walk (below), so a wrong index there is a harmless false miss, and the
    -- full tag compare makes a false hit impossible.
-   signal FetchIndexPhys1              : unsigned(12 downto 2);
-   signal FetchIndexPhys2              : unsigned(12 downto 2);
+   signal FetchIndexPhys1              : unsigned(13 downto 2);
+   signal FetchIndexPhys2              : unsigned(13 downto 2);
    signal FetchAddrSelect              : std_logic;
    signal fetchCache1                  : std_logic;
    signal fetchCache2                  : std_logic;
@@ -658,6 +681,9 @@ architecture arch of cpu is
    signal instrcache_data              : std_logic_vector(31 downto 0);
    signal instrcache_fill              : std_logic := '0';
    signal instrcache_fill_done         : std_logic;
+   signal dbg_ifetch_v                 : std_logic := '0';   -- SGI: see dbg_ifetch
+   signal dbg_irefill_v                : std_logic := '0';   -- SGI: see dbg_perf(8)
+   signal instrcache_cached            : std_logic;          -- SGI: see dbg_perf(9)
    signal cache_commandEnableI         : std_logic;
    signal cache_commandEnableD         : std_logic;
    
@@ -2130,7 +2156,7 @@ begin
       ddr3_DOUT_READY   => ddr3_DOUT_READY,
       
       read_select       => FetchAddrSelect,
-      read_index1       => FetchIndexPhys1,   -- SGI: bit 12 physical, see its declaration
+      read_index1       => FetchIndexPhys1,   -- SGI: bits 13:12 physical, see its declaration
       read_index2       => FetchIndexPhys2,
       read_addrCompare1 => FetchAddrTLBMuxed1,
       read_addrCompare2 => FetchAddrTLBMuxed2,
@@ -2141,6 +2167,7 @@ begin
       fill_addrData     => mem1_addrCompare,   -- SGI: not mem1_address; see its declaration
       fill_addrTag      => mem1_addrCompare,   -- SGI: the fill INDEX is physical too (PIPT), see FetchIndexPhys1
       fill_done         => instrcache_fill_done,
+      fill_cached       => instrcache_cached,   -- SGI
       
       CacheCommandEna   => cache_commandEnableI,
       CacheCommand      => executeCacheCommand,
@@ -2171,9 +2198,9 @@ begin
    FetchAddrTLBMuxed1 <= TLB_instrAddrOutFound when (TLB_instrMapped1 = '1') else FetchAddr1(31 downto 0);
    FetchAddrTLBMuxed2 <= TLB_instrAddrOutFound when (TLB_instrMapped2 = '1') else FetchAddr2(31 downto 0);
 
-   -- SGI: physical index bit 12 for the I-cache; see FetchIndexPhys1.
-   FetchIndexPhys1 <= FetchAddrTLBMuxed1(12) & FetchIndex1(11 downto 2);
-   FetchIndexPhys2 <= FetchAddrTLBMuxed2(12) & FetchIndex2(11 downto 2);
+   -- SGI: physical index bits 13:12 for the I-cache; see FetchIndexPhys1.
+   FetchIndexPhys1 <= FetchAddrTLBMuxed1(13 downto 12) & FetchIndex1(11 downto 2);
+   FetchIndexPhys2 <= FetchAddrTLBMuxed2(13 downto 12) & FetchIndex2(11 downto 2);
 
    -- running from 64 bit sections currently not fully supported to not screw up FPGA route timing
    -- kusegUnmapped is Status.ERL: while it is set, region < 4 is unmapped and the
@@ -2203,6 +2230,8 @@ begin
          instrcache_fill <= '0';
          mem1_request    <= '0';
          TLB_ss_load     <= '0';
+         dbg_ifetch_v    <= '0';   -- SGI
+         dbg_irefill_v   <= '0';   -- SGI
          
          if (reset_93 = '1') then
 
@@ -2266,6 +2295,8 @@ begin
                      useCached_data   <= TLB_instrUseCache and INSTRCACHEON;
                      if (TLB_instrUseCache = '1' and INSTRCACHEON = '1') then
                         instrcache_fill <= '1';
+                        dbg_ifetch_v    <= '1';   -- SGI
+                        dbg_irefill_v   <= '1';   -- SGI
                      else
                         mem1_request    <= '1';
                      end if;
@@ -2298,6 +2329,7 @@ begin
                if (TLB_instrStall = '1') then
                   stall1          <= '1'; 
                elsif (fetchCache = '1') then
+                  dbg_ifetch_v          <= '1';   -- SGI
                   if (instrcache_hit = '0') then
                      instrcache_fill    <= '1';
                      stall1             <= '1';
@@ -5076,6 +5108,27 @@ begin
    dbg_mode     <= std_logic_vector(privilegeMode) & bit64region & region_TLBmapped;
    dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
    dbg_retire   <= dbg_retire_i;
+   dbg_perf(0)  <= instrcache_request;
+   dbg_perf(1)  <= datacache_request;
+   dbg_perf(2)  <= datacache_wb_ena;
+   dbg_perf(3)  <= mem1_request;
+   dbg_perf(4)  <= mem_request;
+   dbg_perf(5)  <= '1' when (memstate = MEMSTATE_BUSY) else '0';
+   dbg_perf(6)  <= instrcache_active;
+   dbg_perf(7)  <= datacache_active;
+   dbg_perf(8)  <= dbg_irefill_v;
+   dbg_perf(9)  <= instrcache_cached;
+   dbg_ifetch   <= dbg_ifetch_v & std_logic_vector(mem1_addrCompare);
+
+   -- The data cache's enables are combinational (the load/store process
+   -- above), so the trace registers them with the address they go with.
+   process (clk93)
+   begin
+      if rising_edge(clk93) then
+         dbg_dfetch <= (datacache_readena or datacache_writeena) & datacache_writeena &
+                       std_logic_vector(datacache_addr);
+      end if;
+   end process;
    dbg_exc_code <= std_logic_vector(dbg_exc_code_u);
    dbg_exc_epc  <= std_logic_vector(dbg_exc_epc_u);
    dbg_exc_bad  <= std_logic_vector(dbg_exc_bad_u);

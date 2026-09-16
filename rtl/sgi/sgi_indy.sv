@@ -230,6 +230,14 @@ module sgi_indy #(
     output logic [31:0] dbg_exc_bad,
     output logic [31:0] dbg_rpc,
     output logic        dbg_retire,
+    // The CPU performance counters (docs/50), nine beacon words. See the
+    // block that builds them for the layout.
+    output logic [63:0] dbg_perf_bcn [9],
+    // The instruction cache's access stream (simulator --itrace; the board
+    // leaves it unconnected). See cpu.vhd's dbg_ifetch.
+    output logic [32:0] dbg_ifetch,
+    // And the data cache's (--dtrace); see cpu.vhd's dbg_dfetch.
+    output logic [33:0] dbg_dfetch,
 
     // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
     // the top's beacon writer. Pure observation.
@@ -304,6 +312,7 @@ module sgi_indy #(
     logic  [2:0] mem_size;
     logic        fill_grant, fill_data_ready;
     logic [63:0] fill_data;
+    logic  [9:0] cpu_perf;      // the CPU's fill/bus events, for the counters
 
     r4300_wrap u_cpu (
         .clk              (clk),
@@ -331,6 +340,9 @@ module sgi_indy #(
         .dbg_exc_bad      (dbg_exc_bad),
         .dbg_rpc          (dbg_rpc),
         .dbg_retire       (dbg_retire),
+        .dbg_perf         (cpu_perf),
+        .dbg_ifetch       (dbg_ifetch),
+        .dbg_dfetch       (dbg_dfetch),
 
         .mem_request      (mem_request),
         .mem_rnw          (mem_rnw),
@@ -885,6 +897,96 @@ module sgi_indy #(
     assign dbg_int_bcn[0] = { 8'hE2, scsi_irq, scsi_dma_irq, irq_lines[4:0],
                               9'b0, int2_state_o };
     assign dbg_int_bcn[1] = { dbg_pc, dbg_cop0 };
+
+    // ---- CPU performance counters (docs/50) ------------------------------
+    // WHERE THE CLOCKS GO, COUNTED RATHER THAN SAMPLED. tools/misterdeploy/
+    // prof.py samples word 10 and says which code is running and whether the
+    // pipeline was held; these count every clock and every event, which is
+    // what a miss RATE and a cost PER MISS come from. Two readings a workload
+    // apart are the workload (bcnread.py --perf).
+    //
+    //   w0 {instructions retired /64,    clocks with no stall /64}
+    //   w1 {clocks the fetch stage held /64, clocks execute held /64}
+    //   w2 {clocks writeback held /64,   clocks in a TLB walk /64}
+    //   w3 {clocks an I-cache fill was on the bus /64, a D-cache fill /64}
+    //   w4 {I-cache fills,               D-cache fills}
+    //   w5 {D-cache writeback beats,     uncached fetches}
+    //   w6 {instruction TLB walks,       data TLB walks}
+    //   w7 {bus transactions issued,     clocks a transaction was on the bus /64}
+    //   w8 {I-cache fills requested after an instruction TLB walk,
+    //       fill requests the I-cache answered from a line it held}
+    //
+    // "/64" counters are 38 bits wide and report the top 32 (46 minutes at
+    // 50 MHz before they wrap); event counters are plain 32 bits. The stall
+    // vector and the TLB walk states come off dbg_cop0 (cpu_cop0.vhd), the
+    // fill and bus events off the CPU's dbg_perf port.
+    wire        pf_run   = (dbg_cop0[17:13] == 5'd0);
+    wire        pf_st1   = dbg_cop0[13];
+    wire        pf_st3   = dbg_cop0[15];
+    wire        pf_st4   = dbg_cop0[16];
+    wire        pf_tlbd  = dbg_cop0[10];
+    wire        pf_tlbi  = dbg_cop0[11];
+    logic       pf_tlbd_q, pf_tlbi_q;
+    logic [37:0] pc_retired, pc_run, pc_st1, pc_st3, pc_st4, pc_tlb,
+                 pc_ifill_bus, pc_dfill_bus, pc_bus;
+    logic [31:0] pc_ifills, pc_dfills, pc_wbbeats, pc_ufetch, pc_tlbi_walks,
+                 pc_tlbd_walks, pc_memreq, pc_irefills, pc_icached;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            pf_tlbd_q     <= 1'b0;
+            pf_tlbi_q     <= 1'b0;
+            pc_retired    <= '0;
+            pc_run        <= '0;
+            pc_st1        <= '0;
+            pc_st3        <= '0;
+            pc_st4        <= '0;
+            pc_tlb        <= '0;
+            pc_ifill_bus  <= '0;
+            pc_dfill_bus  <= '0;
+            pc_bus        <= '0;
+            pc_ifills     <= '0;
+            pc_dfills     <= '0;
+            pc_wbbeats    <= '0;
+            pc_ufetch     <= '0;
+            pc_tlbi_walks <= '0;
+            pc_tlbd_walks <= '0;
+            pc_memreq     <= '0;
+            pc_irefills   <= '0;
+            pc_icached    <= '0;
+        end else begin
+            pf_tlbd_q <= pf_tlbd;
+            pf_tlbi_q <= pf_tlbi;
+            if (dbg_retire)             pc_retired    <= pc_retired + 38'd1;
+            if (pf_run)                 pc_run        <= pc_run + 38'd1;
+            if (pf_st1)                 pc_st1        <= pc_st1 + 38'd1;
+            if (pf_st3)                 pc_st3        <= pc_st3 + 38'd1;
+            if (pf_st4)                 pc_st4        <= pc_st4 + 38'd1;
+            if (pf_tlbd | pf_tlbi)      pc_tlb        <= pc_tlb + 38'd1;
+            if (cpu_perf[6])            pc_ifill_bus  <= pc_ifill_bus + 38'd1;
+            if (cpu_perf[7])            pc_dfill_bus  <= pc_dfill_bus + 38'd1;
+            if (cpu_perf[5])            pc_bus        <= pc_bus + 38'd1;
+            if (cpu_perf[0])            pc_ifills     <= pc_ifills + 32'd1;
+            if (cpu_perf[1])            pc_dfills     <= pc_dfills + 32'd1;
+            if (cpu_perf[2])            pc_wbbeats    <= pc_wbbeats + 32'd1;
+            if (cpu_perf[3])            pc_ufetch     <= pc_ufetch + 32'd1;
+            if (pf_tlbi && !pf_tlbi_q)  pc_tlbi_walks <= pc_tlbi_walks + 32'd1;
+            if (pf_tlbd && !pf_tlbd_q)  pc_tlbd_walks <= pc_tlbd_walks + 32'd1;
+            if (cpu_perf[4])            pc_memreq     <= pc_memreq + 32'd1;
+            if (cpu_perf[8])            pc_irefills   <= pc_irefills + 32'd1;
+            if (cpu_perf[9])            pc_icached    <= pc_icached + 32'd1;
+        end
+    end
+
+    assign dbg_perf_bcn[0] = { pc_retired[37:6],   pc_run[37:6] };
+    assign dbg_perf_bcn[1] = { pc_st1[37:6],       pc_st3[37:6] };
+    assign dbg_perf_bcn[2] = { pc_st4[37:6],       pc_tlb[37:6] };
+    assign dbg_perf_bcn[3] = { pc_ifill_bus[37:6], pc_dfill_bus[37:6] };
+    assign dbg_perf_bcn[4] = { pc_ifills,          pc_dfills };
+    assign dbg_perf_bcn[5] = { pc_wbbeats,         pc_ufetch };
+    assign dbg_perf_bcn[6] = { pc_tlbi_walks,      pc_tlbd_walks };
+    assign dbg_perf_bcn[7] = { pc_memreq,          pc_bus[37:6] };
+    assign dbg_perf_bcn[8] = { pc_irefills,        pc_icached };
 
     // VDMA beacon words (docs/33): the MC engine, the descriptor, and the
     // Newport's view of what arrived - enough to say from the board which

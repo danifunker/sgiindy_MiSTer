@@ -21,7 +21,7 @@ flatten to drift out of sync.
 | `cpu_cop0.vhd` | CP0, exceptions, TLB registers |
 | `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | the two TLB lookup engines |
 | `cpu_FPU.vhd`, `cpu_FPU_sqrt.vhd` | the FPU |
-| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 32-byte lines: the D-cache 16 KB physically indexed, the I-cache 8 KB (one R4600 way - see "The instruction cache") |
+| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 32-byte lines, both 16 KB direct-mapped and physically indexed (the I-cache was 8 KB from build 24 to 27 - see "The instruction cache" and "Speed") |
 | `divider.vhd` | integer divider |
 | `functions.vhd`, `export.vhd` | `pFunctions` / `pexport` packages |
 | `SyncFifoFallThroughMLAB.vhd` | the CPU's write FIFO (KI's, with its accept handshake) |
@@ -110,7 +110,7 @@ the cache-geometry report; docs/43-44 the move to R4600.
 |---|---|---|
 | `cpu_cop0.vhd` | `PRId` reports KI's `COP0_PRID_R4600` (`0x2020`) under `PRESENT_AS_R4600`, `0x0B22` (the R4300) otherwise | IRIX 5.3 keys its R4600 code paths off imp 0x20 — including a **32-byte data-cache line hard-coded** in `__dcache_inval` / `__dcache_wb_inval` (it never reads `Config.DB`), which is exactly the geometry KI's data cache has. Under an R4400 PRId it hard-codes 16 bytes, so the R4400 presentation and this cache cannot coexist (docs/39) |
 | `cpu_FPU.vhd` | `FIR` reports `0x2020` | imp 0x20, revision 2.0 — matches PRId, and is what `hinv` names the FPU from |
-| `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of KI's 32 | An R4600 has 48. Not optional once `PRId` says so: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search is sequential, so the cost is one address bit and 16 more cycles worst case |
+| `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of KI's 32 | An R4600 has 48. Not optional once `PRId` says so: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search was sequential then, so the cost was one address bit and 16 more cycles worst case; since build 28 all 48 are matched at once (see "Speed") |
 | `cpu_cop0.vhd` | `Config` reports 16 KB / 32-byte lines for both caches | TRUE for both since docs/44 (the N64 base's report was under-reported on purpose; see docs/10) |
 | `cpu.vhd` | COP2 is always unusable, `Cause.CE = 2` | An R4600 has no coprocessor 2; the R4300's data latch made `mfc2` succeed |
 | `cpu.vhd` | MIPS IV COP1 function codes 0x11/0x12/0x13/0x15/0x16 raise Reserved Instruction | They reached the FPU and came back as Unimplemented Operation, which makes an R4600 look like an R5000 to software probing for MIPS IV |
@@ -229,6 +229,20 @@ The proper follow-up is 16 KB as two 8 KB ways with the way selected by
 physical bit 13 (no replacement policy needed, no alias possible); it costs a
 second data-RAM read and a mux on the fetch data path, which is exactly the
 path KI's `FetchIndex` work shortened.
+
+### Speed — the TLB matched in parallel, 16 KB of instruction cache, refills answered from it (docs/50)
+
+Measured on the board with a beacon profiler before any of this was changed:
+the pipeline advanced in about a quarter of the clocks of an IRIX boot, a
+sequential TLB walk held it in 14-19 % of them, and instruction-cache fills in
+about a third.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_cop0.vhd` | The fields a TLB match needs (VPN2, page mask, ASID, region, global) are shadowed in registers beside the entry RAM (`TLBSH_*`), written in the same clock as `TLBMEM`; all 48 entries are compared at once (`TLB_camHit`, `TLB_camIndex`, lowest index wins). A lookup jumps to the matching entry in its first clock and ends in its second, or ends not-found in its first; TLBP answers in one clock | Upstream compared one entry per clock from the one that matched last. The instruction mini-TLB holds one page and the data mini-TLB four, so an IRIX user program walked up to 48 clocks at every crossing, and every refill walked all 48 before its exception. N64 and KI software barely map anything; IRIX maps every user program |
+| `cpu_instrcache.vhd`, `cpu.vhd` | 16 KB: index bits 13:5 (512 lines), `FetchIndexPhys1/2 = FetchAddrTLBMuxed(13 downto 12) & FetchIndex(11 downto 2)`, the fill index physical | The 8 KB cache was the largest single stall on the board. A physically indexed cache has no colour alias to take at any size, and `Config` has always reported 16 KB |
+| `cpu_instrcache.vhd` | A fill request for a line the cache already holds is answered from it: a third copy of the tags in block RAM (`itagramf`, registered read) at the fill's line, states `CHECK` then `CACHED`, `fill_done` three clocks after the request with no bus transaction; a line whose tag was written on the edge the read took is filled rather than trusted (`tag_wr_q`). Block RAM because the first fit's asynchronous MLAB copy cost ~430 ALMs at 97 % of the device | `cpu.vhd` asks for a fill after EVERY instruction TLB walk without a lookup - by then the fetch-path lookup has moved on to the next PC. With a one-page mini-TLB that is a DDR3 line fill for every crossing into another mapped page, 22 per 1000 instructions in a perl loop against 38.7 fills in all (build 28) |
+| `cpu.vhd`, `r4300_wrap.vhd` | `dbg_perf(9 downto 0)` and `dbg_ifetch` ports | Performance-counter events for `sgi_indy.sv` and the simulator's instruction-cache access trace (`--itrace`). Wires only |
 
 ### The memory path — no clock-domain crossing
 

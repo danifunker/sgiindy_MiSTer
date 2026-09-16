@@ -349,6 +349,16 @@ ddr3test:
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vddr3_mux $(RTL)/mister/ddr3_mux.sv tb_ddr3.cpp
 
+# The same bench with the display's bursts split into 3-word reads, so the
+# sub-burst path (docs/50) is exercised - the bench's display bursts are
+# 1-16 words and the shipping FBR_SUB of 16 would never split one.
+ddr3test_sub:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3sub --top-module ddr3_mux \
+	   -GFBR_SUB=3 -GFBR_AHEAD=2 \
+	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) -Wno-LATCH \
+	   --x-assign fast --x-initial fast --noassert \
+	   -o Vddr3_mux $(RTL)/mister/ddr3_mux.sv tb_ddr3.cpp
+
 # --- frame buffer line cache unit test -------------------------------------
 # Driven with the display's REAL access pattern - n1280_r3's 1318 of 1680
 # pixels and 1024 of 1065 lines, blanking included - against a memory that

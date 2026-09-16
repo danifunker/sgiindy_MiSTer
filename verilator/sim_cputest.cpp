@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <deque>
 #include <array>
 #include <vector>
@@ -148,6 +149,26 @@ struct Options {
     // consecutive repeats in both streams before comparing, and treat the
     // result as a lead rather than as proof.
     std::string pcuser;
+    // --prof FILE: a clock-weighted PC profile (docs/50). Every clock, the
+    // decode PC is charged one clock - and one stalled clock if the stall
+    // vector is non-zero - so a function's share is the wall time it held,
+    // stalls included, the way the board's beacon profiler (prof.py) sees
+    // it. --prof-callers HEX[,HEX..] also records, for each listed address,
+    // the decode PC in front of every entry to it: the call site, which the
+    // board cannot see. Written at exit, "pc clocks stalled" per line and
+    // "caller target site count" per edge.
+    std::string prof;
+    std::vector<uint32_t> prof_callers;
+    // --itrace FILE: the instruction cache's access stream (docs/50), for
+    // replaying through other cache geometries offline (tools/icachesim.c).
+    // One little-endian uint32 per access - the physical address >> 5, the
+    // 32-byte line - with consecutive repeats of a line collapsed, which
+    // cannot change any cache's hits or its LRU order.
+    std::string itrace;
+    // --dtrace FILE: the data cache's, the same way (tools/dcachesim.c): one
+    // uint32 per load or store, (physical address >> 3) << 1 | store - the
+    // doubleword and the direction - with exact repeats collapsed.
+    std::string dtrace;
     bool        exc = false;
     uint64_t    exc_count = 200;
     // --epc: one line per CHANGE of COP0 EPC. dbg_exc_epc is driven
@@ -285,6 +306,15 @@ static void usage()
         "                    served a named instruction\n"
         "  --pc-user FILE    write every user-mode PC to FILE, one per line and\n"
         "                    nothing else, for diffing two runs against each other\n"
+        "  --prof FILE       clock-weighted decode-PC profile at exit: 'pc clocks\n"
+        "                    stalled' per line (docs/50)\n"
+        "  --prof-callers H,H  with --prof, the PC in front of every entry to\n"
+        "                    each listed address (the delay slot of the call)\n"
+        "  --itrace FILE     the instruction cache's access stream: physical\n"
+        "                    line addresses (addr >> 5) as uint32, repeats\n"
+        "                    collapsed (docs/50, tools/icachesim.c)\n"
+        "  --dtrace FILE     the data cache's: (addr >> 3) << 1 | store as\n"
+        "                    uint32, exact repeats collapsed (tools/dcachesim.c)\n"
         "  --exc             one line per exception the CPU accepts: ExcCode,\n"
         "                    BadVAddr and EPC (first 200; --exc-count N).\n"
         "                    With --trace-from-pc it starts at the arm, not at\n"
@@ -369,6 +399,19 @@ int main(int argc, char **argv)
             opt.pc_from    = ~0ull;
             opt.trace_from_pc = (uint32_t)strtoul(next("--trace-from-pc"), nullptr, 16); }
         else if (a == "--pc-user")    opt.pcuser = next("--pc-user");
+        else if (a == "--prof")       opt.prof = next("--prof");
+        else if (a == "--itrace")     opt.itrace = next("--itrace");
+        else if (a == "--dtrace")     opt.dtrace = next("--dtrace");
+        else if (a == "--prof-callers") {
+            std::string list = next("--prof-callers");
+            size_t p = 0;
+            while (p < list.size()) {
+                size_t q = list.find(',', p);
+                if (q == std::string::npos) q = list.size();
+                opt.prof_callers.push_back((uint32_t)strtoul(list.substr(p, q - p).c_str(), nullptr, 16));
+                p = q + 1;
+            }
+        }
         else if (a == "--exc")        opt.exc = true;
         else if (a == "--epc")        opt.epcwatch = true;
         else if (a == "--cop0")       opt.cop0watch = true;
@@ -485,6 +528,27 @@ int main(int argc, char **argv)
     // `tail -f` instead of only being readable once it has finished.
     FILE *pcuser_f = nullptr;
     FILE *console_f = nullptr;
+    // --prof: clocks and stalled clocks per decode PC, and call edges.
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> prof_pc;
+    std::map<std::tuple<uint32_t, uint32_t>, uint64_t> prof_edges;
+    uint32_t prof_prev_pc = 0, prof_last_distinct = 0;
+    // --itrace
+    FILE *itrace_f = nullptr;
+    uint32_t itrace_last = ~0u;
+    uint64_t itrace_access = 0, itrace_records = 0;
+    if (!opt.itrace.empty()) {
+        itrace_f = fopen(opt.itrace.c_str(), "wb");
+        if (!itrace_f) fprintf(stderr, "cannot write %s\n", opt.itrace.c_str());
+        else setvbuf(itrace_f, nullptr, _IOFBF, 1 << 20);
+    }
+    FILE *dtrace_f = nullptr;
+    uint32_t dtrace_last = ~0u;
+    uint64_t dtrace_access = 0, dtrace_records = 0;
+    if (!opt.dtrace.empty()) {
+        dtrace_f = fopen(opt.dtrace.c_str(), "wb");
+        if (!dtrace_f) fprintf(stderr, "cannot write %s\n", opt.dtrace.c_str());
+        else setvbuf(dtrace_f, nullptr, _IOFBF, 1 << 20);
+    }
     if (!opt.pcuser.empty()) {
         pcuser_f = fopen(opt.pcuser.c_str(), "wb");
         if (!pcuser_f) fprintf(stderr, "cannot write %s\n", opt.pcuser.c_str());
@@ -823,6 +887,39 @@ int main(int argc, char **argv)
             exc_bad     = top->dbg_exc_bad;
         }
 
+        if (itrace_f && ((top->ifetch >> 32) & 1)) {
+            uint32_t line = static_cast<uint32_t>(top->ifetch & 0xFFFFFFFFull) >> 5;
+            itrace_access++;
+            if (line != itrace_last) {
+                fwrite(&line, 4, 1, itrace_f);
+                itrace_last = line;
+                itrace_records++;
+            }
+        }
+        if (dtrace_f && ((top->dfetch >> 33) & 1)) {
+            uint32_t rec = (static_cast<uint32_t>(top->dfetch & 0xFFFFFFFFull) >> 3) << 1
+                         | static_cast<uint32_t>((top->dfetch >> 32) & 1);
+            dtrace_access++;
+            if (rec != dtrace_last) {
+                fwrite(&rec, 4, 1, dtrace_f);
+                dtrace_last = rec;
+                dtrace_records++;
+            }
+        }
+
+        if (!opt.prof.empty()) {
+            uint32_t pc = top->dbg_pc;
+            auto &e = prof_pc[pc];
+            e.first++;
+            if ((top->dbg_cop0 >> 13) & 0x1F) e.second++;
+            if (pc != prof_prev_pc) {
+                for (uint32_t t : opt.prof_callers)
+                    if (pc == t) prof_edges[{t, prof_prev_pc}]++;
+                prof_last_distinct = prof_prev_pc;
+                prof_prev_pc = pc;
+            }
+        }
+
         // The PC of whatever entered decode this clock. Recorded on every
         // instruction, printed only on exit (or under --pc).
         if (top->dbg_pc_valid) {
@@ -966,6 +1063,31 @@ int main(int argc, char **argv)
     printf("\n--- %s after %llu cycles, %llu bus transactions ---\n",
            stop_reason, static_cast<unsigned long long>(cycle),
            static_cast<unsigned long long>(txns));
+
+    // The performance counters (docs/50, sgi_indy.sv). The simulator's memory
+    // answers in one cycle, so clocks per fill here are the pipeline's own
+    // overhead and nothing of DDR3; the fill and walk COUNTS are the machine's.
+    {
+        auto hi = [](uint64_t w) { return static_cast<unsigned long long>(w >> 32); };
+        auto lo = [](uint64_t w) { return static_cast<unsigned long long>(w & 0xFFFFFFFFull); };
+        unsigned long long instr = hi(top->perf0) * 64ULL;
+        double k = instr ? 1000.0 / static_cast<double>(instr) : 0.0;
+        printf("perf: %llu instructions, clocks: run %llu, fetch held %llu, execute held %llu, "
+               "writeback held %llu, TLB walk %llu (counters are x64)\n",
+               instr, lo(top->perf0) * 64ULL, hi(top->perf1) * 64ULL,
+               lo(top->perf1) * 64ULL, hi(top->perf2) * 64ULL, lo(top->perf2) * 64ULL);
+        printf("perf: I-cache fills %llu (%.2f per 1000 instructions), D-cache fills %llu (%.2f), "
+               "writeback beats %llu, uncached fetches %llu\n",
+               hi(top->perf4), hi(top->perf4) * k, lo(top->perf4), lo(top->perf4) * k,
+               hi(top->perf5), lo(top->perf5));
+        printf("perf: TLB walks instruction %llu (%.2f per 1000), data %llu (%.2f); "
+               "bus transactions %llu; clocks on the bus for I-fills %llu, D-fills %llu\n",
+               hi(top->perf6), hi(top->perf6) * k, lo(top->perf6), lo(top->perf6) * k,
+               hi(top->perf7), hi(top->perf3) * 64ULL, lo(top->perf3) * 64ULL);
+        printf("perf: I-cache refills after an instruction TLB walk %llu, "
+               "fill requests answered from the cache %llu\n",
+               hi(top->perf8), lo(top->perf8));
+    }
 
     if (!g_dev.testdev.out.empty())
         printf("testdev console: %zu bytes\n", g_dev.testdev.out.size());
@@ -1128,6 +1250,37 @@ int main(int argc, char **argv)
             printf("frame buffer written to %s\n", opt.fbdump.c_str());
         else
             printf("could not write %s\n", opt.fbdump.c_str());
+    }
+
+    if (!opt.prof.empty()) {
+        FILE *pf = fopen(opt.prof.c_str(), "wb");
+        if (pf) {
+            for (const auto &kv : prof_pc)
+                fprintf(pf, "%08x %llu %llu\n", kv.first,
+                        static_cast<unsigned long long>(kv.second.first),
+                        static_cast<unsigned long long>(kv.second.second));
+            for (const auto &kv : prof_edges)
+                fprintf(pf, "caller %08x %08x %llu\n", std::get<0>(kv.first),
+                        std::get<1>(kv.first), static_cast<unsigned long long>(kv.second));
+            fclose(pf);
+            printf("prof: %zu PCs, %zu call edges written to %s\n",
+                   prof_pc.size(), prof_edges.size(), opt.prof.c_str());
+        } else {
+            printf("could not write %s\n", opt.prof.c_str());
+        }
+    }
+    (void)prof_last_distinct;
+    if (itrace_f) {
+        fclose(itrace_f);
+        printf("itrace: %llu cache fetches, %llu line changes written to %s\n",
+               static_cast<unsigned long long>(itrace_access),
+               static_cast<unsigned long long>(itrace_records), opt.itrace.c_str());
+    }
+    if (dtrace_f) {
+        fclose(dtrace_f);
+        printf("dtrace: %llu data cache accesses, %llu records written to %s\n",
+               static_cast<unsigned long long>(dtrace_access),
+               static_cast<unsigned long long>(dtrace_records), opt.dtrace.c_str());
     }
 
     if (pcuser_f) fclose(pcuser_f);

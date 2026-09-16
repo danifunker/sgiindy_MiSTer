@@ -1,0 +1,45 @@
+perf-xdpy.bin: 4001 samples over 4.0 s (1000 Hz), 4001 distinct beacon sweeps
+  idle 99.5 %   kernel 0.5 %   user 0.0 %
+  of the busy time: running 27.3 %, fetch-stalled 27.3 %, exec-stalled 40.9 %, writeback-stalled 4.5 %, decode 0.0 %; TLB walk bits set in 0.0 % of all samples
+  busy time by stage and TLB walk (tlbi = instruction walk, tlbd = data walk): fetch-stall/other 27.3 %, exec-stall/other 40.9 %, wb-stall/other 4.5 %, run/other 27.3 %
+
+  top places (share of all samples; how that place spent it)
+   99.5 %  idle   (idle)                             run  82  fetch   0  exec  18  wb   0
+    0.0 %  kernel intr                               run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel exception_ip12                     run   0  fetch  50  exec  50  wb   0
+    0.0 %  kernel efs_dirlookup                      run   0  fetch  50  exec  50  wb   0
+    0.0 %  kernel lcl1_intr                          run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel nonactive_timer_switch             run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel get_r4k_counter                    run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel aspacelock                         run   0  fetch   0  exec   0  wb 100
+    0.0 %  kernel presume                            run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel tfi_restore                        run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel tlbpid_is_usable                   run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel resumeidle                         run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel vfault                             run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel bcopy                              run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel dnlc_search                        run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel getdent                            run 100  fetch   0  exec   0  wb   0
+    0.0 %  user   (user 7fc00000)                    run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel clock                              run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel efs_sync                           run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel get_buf                            run   0  fetch   0  exec 100  wb   0
+
+  VDMA beats into REX3: write 0, read 0;  display line-cache misses: rgb 0, aux 0
+
+  performance counters over the window (beacon ver 10):
+    window 4.0 s wall (200050008 clocks at 50 MHz), beacon beats 89295
+    CPU: 162.64 M instructions, 1.23 clocks/instruction, 40.65 MIPS
+      clocks: advancing 81.3 %, fetch held 0.4 %, execute held 18.3 %, writeback held 0.5 %, in a TLB walk 0.0 %
+      I-cache fills 26605 (0.16 per 1000 instructions), 23.4 clocks each on the bus
+      D-cache fills 18987 (0.12 per 1000), 24.1 clocks each on the bus; writeback beats 39608 (9902.0 lines)
+      TLB walks: instruction 166 (0.00 per 1000), data 563 (0.00 per 1000), 1.8 clocks per walk
+      uncached fetches 6; bus transactions 90781, 15.1 clocks each on the bus
+    DDR3 port: display held it 41.7 %, RAM 0.4 %, rasteriser 0.0 %, others 1.6 %
+      RAM: 87396 transactions, 10.0 clocks held and 1.0 clocks queued per transaction
+      rasteriser: 0 transactions, 0.0 clocks held and 0.0 clocks queued each
+      reads: 4767706, 1.4 clocks from issue to the first word; display bursts 4720343; 0.0 clocks waiting on DDRAM_BUSY per transaction
+  disk over the window: hps xact rd 0 wr 0, target wait 0.00 s, DATA 0.00 s for 0.00 MB, cache hits 0 misses 0
+
+  time series (10 s buckets): idle / kernel / user %, and of busy: run / fetch / exec %
+       0 s  idle  99.5  kern   0.5  user   0.0 | run  27.3  fetch  27.3  exec  40.9
