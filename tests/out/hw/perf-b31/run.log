@@ -1,0 +1,89 @@
+[14:40:40] restoring /media/fat/games/SGIIndy/SGIIndy53.img from /media/fat/games/SGIIndy/SGIIndy53-pristine.img
+[14:45:15] launching 57e0243875dcfa8c4c519edaa284e641 (/tmp/SGIIndy.rbf)
+[14:45:23] core launched; boot profile running
+[14:45:34] +12s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 171 marker  0.2% 
+[14:45:45] +23s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 168 marker  0.2% 
+[14:45:57] +35s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:46:08] +46s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:46:19] +57s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:46:30] +68s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:46:42] +80s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:46:53] +91s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:47:04] +102s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[14:47:16] +114s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices   1 marker  0.0% 
+[14:47:27] +125s X-UP       panicstr=0x00000000 panel9  0.0% idx16 22.2% indices  14 marker  0.0% 
+[14:47:27] X-UP at +125s after the launch returned
+[14:47:42] parking the pointer, logging in as root (login profile until idle)
+prof: 22493 samples in 45.0 s (500 Hz), 36.9 % idle, stopped on idle -> /tmp/perf-login.bin
+[14:48:43] login settled after 47 s
+[14:48:49] quitting Software Manager, pointer into the Console
+prof: 7499 samples in 15.0 s (500 Hz), 96.8 % idle, stopped on time -> /tmp/perf-idle.bin
+[14:50:22] bench fork: for i in $(/usr/tgcware/bin/seq 1 60); do /bin/ls / > /dev/null; done
+prof: 8820 samples in 8.8 s (999 Hz), 40.8 % idle, stopped on idle -> /tmp/perf-fork.bin
+[14:50:53] bench fork idle after 9 s (host clock, includes typing and 4 s of idle)
+[14:50:57] bench perl: /usr/bin/perl -e 'for($i=0;$i<200000;$i++){$s+=$i%7}'
+prof: 16466 samples in 16.5 s (999 Hz), 21.9 % idle, stopped on idle -> /tmp/perf-perl.bin
+[14:51:36] bench perl idle after 17 s (host clock, includes typing and 4 s of idle)
+[14:51:40] bench bzip2: /usr/tgcware/bin/bzip2 -9 -c /unix > /tmp/unix.bz2
+prof: 109905 samples in 110.0 s (999 Hz), 5.4 % idle, stopped on idle -> /tmp/perf-bzip2.bin
+[14:53:49] bench bzip2 idle after 111 s (host clock, includes typing and 4 s of idle)
+[14:53:53] bench rawdisk: /bin/dd if=/dev/rdsk/dks0d1s0 of=/dev/null bs=65536 count=160
+prof: 24981 samples in 25.0 s (999 Hz), 92.4 % idle, stopped on idle -> /tmp/perf-rawdisk.bin
+[14:54:39] bench rawdisk idle after 25 s (host clock, includes typing and 4 s of idle)
+[14:54:43] bench scroll: /bin/ls -lR /usr/lib/X11
+prof: 11828 samples in 11.8 s (1000 Hz), 30.6 % idle, stopped on idle -> /tmp/perf-scroll.bin
+[14:55:10] bench scroll idle after 12 s (host clock, includes typing and 4 s of idle)
+[14:55:15] bench xterm: /usr/bin/X11/xterm -e /bin/true
+prof: 4461 samples in 4.5 s (1000 Hz), 82.6 % idle, stopped on idle -> /tmp/perf-xterm.bin
+[14:55:36] bench xterm idle after 5 s (host clock, includes typing and 4 s of idle)
+[14:55:40] bench xterm2: /usr/bin/X11/xterm -e /bin/true
+prof: 3993 samples in 4.0 s (998 Hz), 97.3 % idle, stopped on idle -> /tmp/perf-xterm2.bin
+[14:56:00] bench xterm2 idle after 4 s (host clock, includes typing and 4 s of idle)
+[14:56:04] bench xdpy: /usr/bin/X11/xdpyinfo > /dev/null
+prof: 4001 samples in 4.0 s (1000 Hz), 99.6 % idle, stopped on idle -> /tmp/perf-xdpy.bin
+[14:56:25] bench xdpy idle after 5 s (host clock, includes typing and 4 s of idle)
+[14:56:45] halting
+[14:58:02] bench.txt:
+== fork
+
+real	0m5.924s
+user	0m1.026s
+sys	0m3.529s
+== perl
+
+real	0m13.605s
+user	0m12.746s
+sys	0m0.351s
+== bzip2
+
+real	1m44.522s
+user	1m20.249s
+sys	0m18.948s
+== rawdisk
+160+0 records in
+160+0 records out
+
+real	0m5.489s
+user	0m0.025s
+sys	0m1.644s
+== scroll
+
+real	0m8.720s
+user	0m1.316s
+sys	0m3.055s
+== xterm
+
+real	0m1.397s
+user	0m0.149s
+sys	0m0.615s
+== xterm2
+
+real	0m0.488s
+user	0m0.141s
+sys	0m0.228s
+== xdpy
+
+real	0m0.200s
+user	0m0.026s
+sys	0m0.095s
+[14:58:15] done -> tests/out/hw/perf-b31

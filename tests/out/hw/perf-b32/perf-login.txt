@@ -1,0 +1,55 @@
+perf-login.bin: 22492 samples over 45.0 s (500 Hz), 22492 distinct beacon sweeps
+  idle 36.3 %   kernel 40.5 %   user 23.2 %
+  of the busy time: running 38.6 %, fetch-stalled 27.7 %, exec-stalled 29.9 %, writeback-stalled 3.8 %, decode 0.0 %; TLB walk bits set in 1.3 % of all samples
+  busy time by stage and TLB walk (tlbi = instruction walk, tlbd = data walk): fetch-stall/tlbi 0.8 %, fetch-stall/other 26.9 %, exec-stall/tlbi 0.0 %, exec-stall/tlbd 1.2 %, exec-stall/other 28.7 %, wb-stall/other 3.8 %, run/other 38.6 %
+
+  top places (share of all samples; how that place spent it)
+   36.3 %  idle   (idle)                             run  81  fetch   0  exec  19  wb   0
+   11.4 %  kernel us_delay                           run  99  fetch   0  exec   1  wb   0
+    3.7 %  user   (user 10000000)                    run  26  fetch  27  exec  40  wb   8
+    3.3 %  user   (user 5ff00000)                    run  37  fetch  28  exec  31  wb   5
+    2.3 %  user   (program text f490000)             run  24  fetch  28  exec  46  wb   3
+    1.9 %  user   (program text f520000)             run  41  fetch  22  exec  35  wb   2
+    1.9 %  kernel vfault                             run  22  fetch  37  exec  38  wb   3
+    1.5 %  user   (program text f540000)             run  33  fetch  21  exec  44  wb   2
+    1.4 %  kernel ?k                                 run  34  fetch  16  exec  48  wb   1
+    1.4 %  user   (program text fb70000)             run  26  fetch  37  exec  36  wb   1
+    1.3 %  kernel exception_ip12                     run  28  fetch  29  exec  35  wb   9
+    1.0 %  user   (program text f950000)             run  23  fetch  31  exec  43  wb   3
+    1.0 %  user   (program text f4a0000)             run  23  fetch  36  exec  40  wb   1
+    0.9 %  kernel mrlock                             run  20  fetch  46  exec  26  wb   8
+    0.8 %  kernel bcopy                              run  15  fetch  14  exec  43  wb  28
+    0.8 %  user   (program text 0410000)             run  46  fetch  22  exec  32  wb   1
+    0.7 %  kernel syscall                            run  16  fetch  32  exec  41  wb  11
+    0.6 %  kernel bzero                              run  11  fetch   4  exec   0  wb  85
+    0.6 %  kernel tlbmiss                            run  24  fetch  50  exec  21  wb   5
+    0.6 %  user   (user 5e800000)                    run  23  fetch  38  exec  38  wb   1
+    0.5 %  kernel mrunlock                           run  22  fetch  54  exec  23  wb   0
+    0.5 %  user   (program text 0420000)             run  40  fetch  15  exec  45  wb   0
+    0.5 %  kernel grab_utlbmiss                      run   7  fetch  93  exec   0  wb   0
+    0.5 %  kernel trapend                            run   9  fetch  48  exec  42  wb   1
+    0.4 %  kernel systrap                            run  33  fetch  34  exec  33  wb   1
+
+  VDMA beats into REX3: write 8400, read 0;  display line-cache misses: rgb 0, aux 0
+
+  performance counters over the window (beacon ver 11):
+    window 45.0 s wall (2250049996 clocks at 50 MHz), beacon beats 976585
+    CPU: 1216.47 M instructions, 1.85 clocks/instruction, 27.03 MIPS
+      clocks: advancing 54.3 %, fetch held 20.7 %, execute held 25.6 %, writeback held 12.8 %, in a TLB walk 1.3 %
+      I-cache fills 13380853 (11.00 per 1000 instructions), 23.7 clocks each on the bus
+      D-cache fills 6330084 (5.20 per 1000), 24.0 clocks each on the bus; writeback beats 10484308 (2621077.0 lines)
+      I-cache fills asked for after an instruction TLB walk 5322876 (4.38 per 1000), answered from a line already held 4674834 (87.8 %) - no DDR3 trip
+      TLB walks: instruction 5594884 (4.60 per 1000), data 9363155 (7.70 per 1000), 1.9 clocks per walk
+      uncached fetches 104684; bus transactions 31396352, 17.7 clocks each on the bus
+    DDR3 port: display held it 42.3 %, RAM 16.4 %, rasteriser 0.2 %, others 1.6 %
+      RAM: 31837051 transactions, 11.6 clocks held and 1.0 clocks queued per transaction
+      rasteriser: 5249834 transactions, 1.0 clocks held and 1.0 clocks queued each
+      reads: 73276535, 2.3 clocks from issue to the first word; display bursts 53086759; 0.0 clocks waiting on DDRAM_BUSY per transaction
+  disk over the window: hps xact rd 2741 wr 281, target wait 2.43 s, DATA 2.95 s for 10.08 MB, cache hits 17950 misses 453
+
+  time series (10 s buckets): idle / kernel / user %, and of busy: run / fetch / exec %
+       0 s  idle   2.9  kern  67.0  user  30.0 | run  42.7  fetch  26.0  exec  27.6
+      10 s  idle   5.0  kern  57.5  user  37.5 | run  40.0  fetch  26.8  exec  29.4
+      20 s  idle  18.7  kern  46.4  user  34.9 | run  31.2  fetch  31.4  exec  33.9
+      30 s  idle  87.5  kern  10.7  user   1.8 | run  46.1  fetch  21.9  exec  25.9
+      40 s  idle  98.1  kern   1.8  user   0.1 | run  29.8  fetch  44.7  exec  25.5
