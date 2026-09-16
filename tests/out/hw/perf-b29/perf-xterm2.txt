@@ -1,0 +1,48 @@
+perf-xterm2.bin: 4001 samples over 4.0 s (1000 Hz), 4001 distinct beacon sweeps
+  idle 98.3 %   kernel 1.7 %   user 0.0 %
+  of the busy time: running 32.4 %, fetch-stalled 19.1 %, exec-stalled 47.1 %, writeback-stalled 1.5 %, decode 0.0 %; TLB walk bits set in 0.0 % of all samples
+  busy time by stage and TLB walk (tlbi = instruction walk, tlbd = data walk): fetch-stall/other 19.1 %, exec-stall/other 47.1 %, wb-stall/other 1.5 %, run/other 32.4 %
+
+  top places (share of all samples; how that place spent it)
+   98.3 %  idle   (idle)                             run  81  fetch   0  exec  18  wb   0
+    0.3 %  kernel tcp_fasttimo                       run  23  fetch   8  exec  69  wb   0
+    0.3 %  kernel getRunq                            run  33  fetch  42  exec  25  wb   0
+    0.2 %  kernel inpcb_rele                         run  29  fetch   0  exec  71  wb   0
+    0.2 %  kernel us_delay                           run 100  fetch   0  exec   0  wb   0
+    0.1 %  kernel tcp_slowtimo                       run  50  fetch   0  exec  50  wb   0
+    0.1 %  kernel spl0                               run   0  fetch  67  exec  33  wb   0
+    0.0 %  kernel resumeidle                         run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel updatepri                          run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel int2kern_timer_return              run   0  fetch  50  exec  50  wb   0
+    0.0 %  kernel spl7                               run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel VEC_int                            run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel exception_ip12                     run   0  fetch   0  exec   0  wb 100
+    0.0 %  kernel if_ecintr                          run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel inttrap_timer_switch               run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel lcl1_intr                          run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel setpriRunq                         run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel dkscstart                          run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel _nfreeswap                         run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel tfi_restore                        run   0  fetch 100  exec   0  wb   0
+    0.0 %  kernel splhi                              run 100  fetch   0  exec   0  wb   0
+    0.0 %  kernel ip24_newportRetrace                run   0  fetch   0  exec 100  wb   0
+    0.0 %  kernel dotimeout                          run 100  fetch   0  exec   0  wb   0
+
+  VDMA beats into REX3: write 0, read 0;  display line-cache misses: rgb 0, aux 0
+
+  performance counters over the window (beacon ver 10):
+    window 4.0 s wall (200000000 clocks at 50 MHz), beacon beats 89294
+    CPU: 162.98 M instructions, 1.23 clocks/instruction, 40.75 MIPS
+      clocks: advancing 81.5 %, fetch held 0.3 %, execute held 18.2 %, writeback held 0.4 %, in a TLB walk 0.0 %
+      I-cache fills 21674 (0.13 per 1000 instructions), 23.4 clocks each on the bus
+      D-cache fills 15357 (0.09 per 1000), 24.1 clocks each on the bus; writeback beats 35076 (8769.0 lines)
+      TLB walks: instruction 0 (0.00 per 1000), data 90 (0.00 per 1000), 1.4 clocks per walk
+      uncached fetches 0; bus transactions 76575, 14.5 clocks each on the bus
+    DDR3 port: display held it 41.7 %, RAM 0.4 %, rasteriser 0.0 %, others 1.6 %
+      RAM: 76209 transactions, 9.9 clocks held and 1.0 clocks queued per transaction
+      rasteriser: 0 transactions, 0.0 clocks held and 0.0 clocks queued each
+      reads: 4759780, 1.4 clocks from issue to the first word; display bursts 4718643; 0.0 clocks waiting on DDRAM_BUSY per transaction
+  disk over the window: hps xact rd 0 wr 8, target wait 0.00 s, DATA 0.00 s for 0.00 MB, cache hits 0 misses 0
+
+  time series (10 s buckets): idle / kernel / user %, and of busy: run / fetch / exec %
+       0 s  idle  98.3  kern   1.7  user   0.0 | run  32.4  fetch  19.1  exec  47.1
