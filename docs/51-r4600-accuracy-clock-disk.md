@@ -12,7 +12,7 @@ this system"), and keep going on speed with IRIS as the yardstick ("Goal 2").
 | the clock IRIX boots with | 1996-02-12 12:00 on every load, then its last shutdown time | the MiSTer's clock |
 | SCSI DATA phases in the boot window | 23.3 s for 42 MB (build 31) | **11.2 s** (build 36, §12) |
 | clocks per instruction, boot / login | 1.67 / 1.89 (build 31) | **1.59 / 1.70** (build 36) |
-| launch to the X login screen | 125 s | **102 s** (build 36, released as SGIIndy_20260916_2) |
+| launch to the X login screen | 125 s | **102 s** (build 36, released as SGIIndy_20260916) |
 
 ## 1. The suite learns the R4600 (`../iris` branch `claude/r4600-cputests`)
 
@@ -440,10 +440,12 @@ Fills still take 20 clocks, not 8. The display now holds the port two thirds
 of the time, and a quarter as many words a command means four times as many
 commands; what remains is the next thing to measure, not to guess.
 
-## 12. Build 36, released as SGIIndy_20260916_2
+## 12. Build 36, released as SGIIndy_20260916
 
 Build 36 = build 35 + the READ-only look-ahead (§10), SEED=2 (SEED=3 had
-missed the HDMI PLL on builds 32 and 35): `releases/SGIIndy_20260916_2.rbf`,
+missed the HDMI PLL on builds 32 and 35): `releases/SGIIndy_20260916.rbf`,
+replacing build 30b, which had been published under that name the same
+morning (md5 `aea29ae92655eb59a8fa88549f2c5f31`); this one is
 md5 `91980dc9a94ab0f1a052f614e6a1cf6f`; 39,090 ALMs (93 %), 47,945 registers,
 483 M10K; core clock +3.063 ns, HDMI PLL +0.182 ns, every domain met. The
 look-ahead costs next to nothing where build 34's export cost 2,249 ALMs.

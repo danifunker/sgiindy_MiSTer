@@ -429,7 +429,8 @@ screen positions (`scripts/build.sh`). **SEED=3 meets everything:** HDMI PLL
 | `xterm -e /bin/true` (cold, then warm) | 2.04 s, 0.49 s | 1.46 s, 0.51 s |
 | `xdpyinfo > /dev/null` | 0.19 s | 0.19 s |
 
-The SEED=3 bitstream (`tests/out/hw/perf-b30b3/`, released as SGIIndy_20260916):
+The SEED=3 bitstream (`tests/out/hw/perf-b30b3/`, first released as SGIIndy_20260916
+and replaced under that name by build 36 the same day - docs/51 §12):
 X login screen 125 s, login ~49 s, 60 x ls 4.89 s, perl 13.46 s, bzip2
 101.94 s, raw disk 5.92 s, scroll 8.77 s, xterm 1.55 s / 0.51 s, xdpyinfo
 0.19 s; no display line-cache misses, no panic.

@@ -31,14 +31,36 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
-## SGIIndy_20260916_2 — a CPU checked against real Indys, the MiSTer's clock, 23 s off the boot
+## SGIIndy_20260916 — twice the speed, a CPU checked against real Indys, the MiSTer's clock
 
-`releases/SGIIndy_20260916_2.rbf`, md5 `91980dc9a94ab0f1a052f614e6a1cf6f`
+`releases/SGIIndy_20260916.rbf`, md5 `91980dc9a94ab0f1a052f614e6a1cf6f`
 (build 36, SEED=2; 39,090 ALMs, 47,945 registers, 483 / 553 M10K, core
 clock setup slack +3.063 ns, HDMI PLL +0.182 ns, every domain met). Same
 `releases/boot.rom`.
 
-Everything below is written up in docs/51.
+**This file was replaced the same day.** It was first published as build
+30b, md5 `aea29ae92655eb59a8fa88549f2c5f31`, which has only the first group
+of changes below. A copy with that md5 is the earlier build; everything in it
+is also in this one.
+
+### The speed work (build 30b, docs/50)
+
+Build 27 profiled on the board said the machine was CPU- and memory-bound
+rather than waiting on anything, and four changes came out of it:
+
+* **The TLB is matched in parallel.** A lookup used to walk the 48 entries one
+  per clock, on every page crossing of every user program, and all 48 before
+  each refill exception. Now two clocks, or one for a miss.
+* **The instruction cache is 16 KB again**, physically indexed.
+* **The DDR3 port is pipelined.** One transaction at a time used to make every
+  CPU cache fill queue behind the display's 128-word line reads; commands now
+  overlap in the bridge and main memory goes first. A fill's time on the bus
+  went from ~40 clocks to 24.
+* **A refill of a line the instruction cache already holds is answered from
+  it.** The CPU asked for a DDR3 fill after every instruction TLB walk,
+  cached or not; 78-98 % of those now need no trip at all.
+
+### Accuracy, the clock, the disk and the pipeline (build 36, docs/51)
 
 * **The CPU against the suite real Indys validated.** The cpu-tests suite
   (`../iris`) was run on an R4400 and an R5000 Indy and turned out to have
@@ -64,87 +86,56 @@ Everything below is written up in docs/51.
   22.4 s -> 11.2 s.
 * **The CPU pipeline.** A load no longer holds execute for a clock when the
   next instruction does not need its value, and the display's DDR3 reads go
-  out in 4-word sub-bursts instead of 16, so a cache line fill waits behind
-  at most 8 of its words (fills 24 -> 20 clocks).
+  out in 4-word sub-bursts instead of build 30b's 16, so a cache line fill
+  waits behind at most 8 of its words (fills 24 -> 20 clocks).
 
-Measured with `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`:
+### Measured
 
-| workload | SGIIndy_20260916 | SGIIndy_20260916_2 |
-|---|---:|---:|
-| launch to the X login screen | 125 s | **102 s** |
-| disk data phases in the boot window | 22.4 s for 42.4 MB | 11.2 s for 42.3 MB |
-| clocks per instruction, boot / login | 1.71 / 1.85 | 1.59 / 1.70 |
-| perl interpreter loop | 13.5 s | 12.2 s |
-| bzip2 -9 of /unix | 101.9 s | 94.4 s |
-| `ls -lR /usr/lib/X11` into the Console | 8.8 s | 8.1 s |
-| 60 x `/bin/ls /` | 4.9 s | 5.0 s |
-| dd 10 MB off the raw disk | 5.9 s | 3.9 s |
-| `xterm -e /bin/true`, cold / warm | 1.55 / 0.51 s | 1.22 / 0.49 s |
+With `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`:
 
-Tested: in the simulator, `make cpuonly` (728 runs, 0 against expectation),
-the R4600 cpu-tests suite 2259 / 0 over 246 tests (iris `5f0c1b2`, including
-new tests for traps and stalling instructions right behind a load), the SCSI
-runs (`run-scsi`, `run-scsiwr`, `run-dma`), tb_ddr3 at sub-burst sizes 16, 8,
-4 and 3, and `tb_ds1386`. On the board, this bitstream: the suite as the PROM
-2264 / 0 over 251 tests; `scripts/diskcheck.sh` (new) PASS - IRIX's own `sum`
-and `sum -r` of 8.9 MB of files match the bytes on the image and a 3.2 MB
-copy it wrote is identical; a full perfprobe run with no display line-cache
-miss in any window; no SCSI notice in either boot's `/var/adm/SYSLOG`. The
-clock was measured on build 31: the date the MiSTer says, and 103 s of IRIX
-time across a 103.24 s host-timed gap.
+| workload | SGIIndy_20260908_2 | build 30b | this file (build 36) |
+|---|---:|---:|---:|
+| launch to the X login screen | 216 s | 125 s | **102 s** |
+| perl interpreter loop | 44.5 s | 13.5 s | 12.2 s |
+| bzip2 -9 of /unix | 215.0 s | 101.9 s | 94.4 s |
+| `ls -lR /usr/lib/X11` into the Console | 16.6 s | 8.8 s | 8.1 s |
+| 60 x `/bin/ls /` | 8.8 s | 4.9 s | 5.0 s |
+| dd 10 MB off the raw disk | 8.1 s | 5.9 s | 3.9 s |
+| `xterm -e /bin/true`, warm | 0.77 s (build 28) | 0.51 s | 0.49 s |
+| disk data phases in the boot window | | 22.4 s for 42.4 MB | 11.2 s for 42.3 MB |
+| clocks per instruction, boot / login | | 1.71 / 1.85 | 1.59 / 1.70 |
 
-The IRIX *simulator* boot of the no-stall load printed one
+The "root login to a settled desktop" row of the build 30b entry (~67 s ->
+~49 s) is gone: perfprobe's login capture cannot stop before 45 s, and
+recomputed from the capture the login settles in ~29 s (docs/51 §6).
+
+### Tested
+
+Build 36: in the simulator, `make cpuonly` (728 runs, 0 against
+expectation), the R4600 cpu-tests suite 2259 / 0 over 246 tests (iris
+`5f0c1b2`, including new tests for traps and stalling instructions right
+behind a load), the SCSI runs (`run-scsi`, `run-scsiwr`, `run-dma`), tb_ddr3
+at sub-burst sizes 16, 8, 4 and 3, and `tb_ds1386`. On the board, this
+bitstream: the suite as the PROM 2264 / 0 over 251 tests;
+`scripts/diskcheck.sh` (new) PASS - IRIX's own `sum` and `sum -r` of 8.9 MB
+of files match the bytes on the image and a 3.2 MB copy it wrote is
+identical; a full perfprobe run with no display line-cache miss in any
+window; no SCSI notice in either boot's `/var/adm/SYSLOG`. The clock was
+measured on build 31: the date the MiSTer says, and 103 s of IRIX time across
+a 103.24 s host-timed gap.
+
+Build 30b: `make cpuonly`, the old cpu-tests suite (2160 / 3, the known
+`fpu/vec_cvt_from_l`), the whole-machine IRIX boot (console identical to
+build 28's and 30's), tb_ddr3 in both sub-burst shapes, tb_ramarb,
+tb_linecache, tb_fetcharb; on the board, full perfprobe runs of builds 29, 30
+and 30b - every one booted, logged in, ran every workload and shut down, with
+no display line-cache miss in any window. The beacon is version 11 (one more
+word, the refill counters); the tools in `tools/misterdeploy/` read both.
+
+The IRIX *simulator* boot of build 36's no-stall load printed one
 `wd93 ... SYNC negotiation error` notice that its control did not; no board
-boot has (docs/51 §9). Perl-like loops still vary from boot to boot with where
-their pages land in the direct-mapped instruction cache.
-
-## SGIIndy_20260916 — twice the speed: the TLB, the memory port, the instruction cache
-
-`releases/SGIIndy_20260916.rbf`, md5 `aea29ae92655eb59a8fa88549f2c5f31`
-(build 30b, SEED=3; 38,846 ALMs, 47,446 registers, 483 / 553 M10K, core
-clock setup slack +3.091 ns, HDMI PLL +0.143 ns, every domain met). Same
-`releases/boot.rom`.
-
-Build 27 profiled on the board said the machine was CPU- and memory-bound
-rather than waiting on anything, and four changes came out of it (docs/50):
-
-* **The TLB is matched in parallel.** A lookup used to walk the 48 entries one
-  per clock, on every page crossing of every user program, and all 48 before
-  each refill exception. Now two clocks, or one for a miss.
-* **The instruction cache is 16 KB again**, physically indexed.
-* **The DDR3 port is pipelined.** One transaction at a time used to make every
-  CPU cache fill queue behind the display's 128-word line reads; commands now
-  overlap in the bridge, the display reads in 16-word sub-bursts, and main
-  memory goes first. A fill's time on the bus went from ~40 clocks to 24.
-* **A refill of a line the instruction cache already holds is answered from
-  it.** The CPU asked for a DDR3 fill after every instruction TLB walk,
-  cached or not; 78-98 % of those now need no trip at all.
-
-Measured with `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`:
-
-| workload | SGIIndy_20260908_2 | SGIIndy_20260916 |
-|---|---:|---:|
-| launch to the X login screen | 216 s | 125 s |
-| root login to a settled desktop | ~67 s | ~49 s |
-| perl interpreter loop | 44.5 s | 13.5 s |
-| bzip2 -9 of /unix | 215.0 s | 101.9 s |
-| `ls -lR /usr/lib/X11` into the Console | 16.6 s | 8.8 s |
-| 60 x `/bin/ls /` | 8.8 s | 4.9 s |
-| dd 10 MB off the raw disk | 8.1 s | 5.9 s |
-| `xterm -e /bin/true`, warm | 0.77 s (build 28) | 0.51 s |
-
-Tested: `make cpuonly` (728 runs, 0 against expectation), the cpu-tests
-suite (2160 / 3, the known `fpu/vec_cvt_from_l`), the whole-machine IRIX boot
-(console identical to build 28's and 30's), tb_ddr3 in both sub-burst
-shapes, tb_ramarb, tb_linecache, tb_fetcharb; on the board, full perfprobe
-runs of builds 29, 30, 30b and this bitstream - every one booted, logged in,
-ran every workload and shut down, with no display line-cache miss in any
-window. The beacon is version 11 now (one more word, the refill counters);
-the tools in `tools/misterdeploy/` read both.
-
-Perl-like interpreter loops vary from boot to boot on this build (13.5-16 s):
-with a direct-mapped cache their speed depends on where their hot pages land
-in physical memory.
+boot has (docs/51 §9). Perl-like interpreter loops still vary from boot to
+boot with where their hot pages land in the direct-mapped instruction cache.
 
 ## SGIIndy_20260908_2 — the CD-ROM cached too
 
