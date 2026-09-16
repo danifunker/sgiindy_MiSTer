@@ -79,6 +79,9 @@ entity r4300_wrap is
       dbg_exc_bad       : out std_logic_vector(31 downto 0);
       dbg_rpc           : out std_logic_vector(31 downto 0);
       dbg_retire        : out std_logic;
+      -- Fill/writeback/bus-transaction events for the performance counters;
+      -- see cpu.vhd's port of the same name.
+      dbg_perf          : out std_logic_vector(7 downto 0);
 
       -- Memory port. See rtl/cpu/r4300_bus.sv for the byte-lane contract;
       -- it is not the obvious one and it differs between read and write.
@@ -289,6 +292,7 @@ begin
       dbg_exc_bad           => dbg_exc_bad,
       dbg_rpc               => dbg_rpc,
       dbg_retire            => dbg_retire,
+      dbg_perf              => dbg_perf,
 
       mem_request           => mem_request,
       mem_rnw               => mem_rnw,

@@ -136,6 +136,15 @@ module ddr3_mux #(
     input  logic [31:0] bcn_addr,
     input  logic [63:0] bcn_wdata,
 
+    // ---- observation only: the performance counters in sgiindy.sv --------
+    // (docs/50). What the port is doing this clock and who is waiting for
+    // it; nothing here feeds back into the scheduling.
+    output logic  [1:0] dbg_tst,      // 0 idle, 1 issuing, 2 waiting for words
+    output logic  [2:0] dbg_cur,      // owner of the transaction in flight
+    output logic  [5:0] dbg_pend,     // requests latched and not yet finished
+    output logic        dbg_first,    // a read is issued, its first word not back
+    output logic        dbg_pick,     // a transaction is being picked this clock
+
     // ---- the DE10-Nano's DDR3 bridge --------------------------------------
     input  logic        DDRAM_BUSY,
     output logic  [7:0] DDRAM_BURSTCNT,
@@ -301,6 +310,12 @@ module ddr3_mux #(
     // at issue, which is the contract this file did not implement. Two tests,
     // one on each side, both passing, and the sides disagreeing.
     logic fbr_taken_q;
+    logic first_q;
+    assign dbg_tst   = tst;
+    assign dbg_cur   = cur;
+    assign dbg_pend  = pend;
+    assign dbg_first = first_q;
+    assign dbg_pick  = (tst == T_IDLE) && any;
     assign fbr_dout       = DDRAM_DOUT;
     assign fbr_dout_valid = DDRAM_DOUT_READY && (tst == T_WAIT) &&
                             (cur == $clog2(NM)'(M_FBR));
@@ -310,6 +325,7 @@ module ddr3_mux #(
         if (reset) begin
             burst_left     <= 9'd0;
             fbr_taken_q    <= 1'b0;
+            first_q        <= 1'b0;
             pend           <= '0;
             rq_seen        <= '0;
             ack_q          <= '0;
@@ -429,7 +445,8 @@ module ddr3_mux #(
                         tst        <= T_IDLE;
                     end else begin
                         if (cur == $clog2(NM)'(M_FBR)) fbr_taken_q <= 1'b1;
-                        tst <= T_WAIT;
+                        tst     <= T_WAIT;
+                        first_q <= 1'b1;
                     end
                 end
 
@@ -438,6 +455,7 @@ module ddr3_mux #(
                 // same counter serves both.
                 default: if (DDRAM_DOUT_READY) begin
                     rdata_q    <= DDRAM_DOUT;
+                    first_q    <= 1'b0;
                     burst_left <= burst_left - 9'd1;
                     // The CPU takes its burst word by word, each with an
                     // ack, the way the display takes its stream: the

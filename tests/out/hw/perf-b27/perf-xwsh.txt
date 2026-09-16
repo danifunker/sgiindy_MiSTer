@@ -1,0 +1,37 @@
+perf-xwsh.bin: 5115 samples over 5.1 s (997 Hz), 5115 distinct beacon sweeps
+  idle 70.7 %   kernel 16.3 %   user 13.1 %
+  of the busy time: running 28.6 %, fetch-stalled 33.6 %, exec-stalled 35.1 %, writeback-stalled 2.7 %, decode 0.0 %; TLB walk bits set in 4.4 % of all samples
+  busy time by stage and TLB walk (tlbi = instruction walk, tlbd = data walk): fetch-stall/tlbi 4.4 %, fetch-stall/other 29.2 %, exec-stall/tlbd 10.5 %, exec-stall/other 24.6 %, wb-stall/other 2.7 %, run/other 28.6 %
+
+  top places (share of all samples; how that place spent it)
+   70.7 %  idle   (idle)                             run  83  fetch   0  exec  17  wb   0
+    6.9 %  user   (user 10000000)                    run  22  fetch  30  exec  47  wb   1
+    3.5 %  kernel us_delay                           run  98  fetch   0  exec   2  wb   0
+    2.2 %  user   (program text f520000)             run  20  fetch  31  exec  48  wb   1
+    2.0 %  user   (user 5ff00000)                    run  27  fetch  34  exec  36  wb   3
+    1.1 %  user   (user 10100000)                    run  18  fetch  39  exec  38  wb   5
+    0.7 %  kernel vfault                             run   8  fetch  49  exec  43  wb   0
+    0.5 %  kernel ?k                                 run  25  fetch   4  exec  71  wb   0
+    0.4 %  kernel exception_ip12                     run  19  fetch  33  exec  48  wb   0
+    0.4 %  kernel bzero                              run  15  fetch   5  exec   0  wb  80
+    0.4 %  kernel grab_utlbmiss                      run   0  fetch 100  exec   0  wb   0
+    0.3 %  kernel syscall                            run  25  fetch  38  exec  38  wb   0
+    0.3 %  kernel systrap                            run   7  fetch  43  exec  36  wb  14
+    0.3 %  kernel bcopy                              run   0  fetch  36  exec  43  wb  21
+    0.3 %  kernel dopoll                             run   8  fetch  31  exec  54  wb   8
+    0.2 %  kernel _read                              run   9  fetch  45  exec  45  wb   0
+    0.2 %  kernel sosend                             run   0  fetch  80  exec  20  wb   0
+    0.2 %  user   (program text f530000)             run  10  fetch  30  exec  60  wb   0
+    0.2 %  user   (program text f8b0000)             run   0  fetch  78  exec  22  wb   0
+    0.2 %  kernel uiomove                            run  25  fetch  62  exec  12  wb   0
+    0.2 %  kernel mrlock                             run  25  fetch  25  exec  50  wb   0
+    0.2 %  kernel dotimeout                          run  12  fetch  25  exec  62  wb   0
+    0.1 %  kernel splxecc                            run  43  fetch   0  exec  57  wb   0
+    0.1 %  kernel trapend                            run   0  fetch  86  exec  14  wb   0
+    0.1 %  kernel swtch                              run  14  fetch  43  exec  43  wb   0
+
+  VDMA beats into REX3: write 0, read 0;  display line-cache misses: rgb 0, aux 0
+  disk over the window: hps xact rd 72 wr 9, target wait 0.03 s, DATA 0.08 s for 0.11 MB, cache hits 203 misses 20
+
+  time series (10 s buckets): idle / kernel / user %, and of busy: run / fetch / exec %
+       0 s  idle  70.7  kern  16.3  user  13.1 | run  28.6  fetch  33.6  exec  35.1

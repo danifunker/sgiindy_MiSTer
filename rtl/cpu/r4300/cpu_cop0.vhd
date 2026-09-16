@@ -229,12 +229,9 @@ architecture arch of cpu_cop0 is
    -- whose identity and TLB size disagree is one no operating system can
    -- drive correctly.
    --
-   -- The cost is small because the TLB is searched sequentially rather than
-   -- associatively (see the TLBPROBE/TLBINSTR/TLBDATA states): one more address
-   -- bit on the entry RAM, and a worst-case search of 48 rather than 32 - and
-   -- the mini-TLB in cpu_TLB_instr/data absorbs most lookups before the search
-   -- runs at all. The entry RAM is addressed with six bits either way -
-   -- allocating 64 and using 32 costs nothing worth splitting.
+   -- The entry RAM is addressed with six bits either way - allocating 64 and
+   -- using 32 costs nothing worth splitting. The search is no longer
+   -- sequential; see TLBSH_* below.
    function tlb_entry_count(as_r4600 : boolean) return natural is
    begin
       if as_r4600 then return 48; else return 32; end if;
@@ -355,6 +352,41 @@ architecture arch of cpu_cop0 is
    
    signal TLB_readAddr                    : unsigned(5 downto 0) := (others => '0');
    signal TLB_compareEnd                  : unsigned(5 downto 0) := (others => '0');
+
+   -- SGI: THE TLB IS MATCHED IN PARALLEL, NOT WALKED (docs/50). Upstream
+   -- compares one entry per clock, starting from the entry that matched last,
+   -- because the entries live in LUT RAM and an N64 game barely uses the TLB.
+   -- IRIX runs every user program through it: a fetch that leaves the
+   -- instruction mini-TLB's one page, or a load or store outside the data
+   -- mini-TLB's four, walked up to 48 clocks, and a TLB refill walked all 48
+   -- to learn the entry was absent before the exception was even taken.
+   -- Measured on the board with the beacon profiler (build 27): the walk
+   -- states were live in 14.5 % of the busy clocks of an IRIX boot and 19 %
+   -- of a desktop login.
+   --
+   -- So the fields a match needs - VPN2, page mask, ASID, region, global -
+   -- are shadowed in registers beside the entry RAM, written by the same
+   -- write that writes the RAM (TLBWI/TLBWR/the init clear), and all 48 are
+   -- compared at once. A lookup then costs one clock to find the entry and
+   -- one for the unchanged compare-and-translate against the RAM read of it,
+   -- whatever the table holds; the probe (TLBP) takes the match directly.
+   -- The RAM stays the source of TLBR and of the translation. Where two
+   -- entries match - which IRIX never creates, and an R4000 answers with a
+   -- machine check - the lowest index wins, which is also what the upstream
+   -- probe walk from entry 0 returned.
+   type tTLBShVPN    is array (0 to 47) of unsigned(26 downto 0);
+   type tTLBShMask   is array (0 to 47) of unsigned(11 downto 0);
+   type tTLBShASID   is array (0 to 47) of unsigned(7 downto 0);
+   type tTLBShRegion is array (0 to 47) of unsigned(1 downto 0);
+   signal TLBSH_vpn                       : tTLBShVPN    := (others => (others => '0'));
+   signal TLBSH_mask                      : tTLBShMask   := (others => (others => '0'));
+   signal TLBSH_asid                      : tTLBShASID   := (others => (others => '0'));
+   signal TLBSH_region                    : tTLBShRegion := (others => (others => '0'));
+   signal TLBSH_global                    : std_logic_vector(47 downto 0) := (others => '0');
+   signal TLB_camVPN                      : unsigned(26 downto 0);
+   signal TLB_camRegion                   : unsigned(1 downto 0);
+   signal TLB_camHit                      : std_logic;
+   signal TLB_camIndex                    : unsigned(5 downto 0);
    
    signal TLBInvalidate                   : std_logic := '0'; 
    
@@ -636,7 +668,7 @@ begin
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
             if (PRESENT_AS_R4600) then
-               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines, what an R4600 reports. The I-cache is really 8 KB (one R4600 way, cpu_instrcache.vhd); over-reporting is the safe direction, an index flush sized from this walks it twice. IRIX never reads it anyway
+               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines, what an R4600 reports - and what both caches are (the I-cache is 16 KB again since docs/50, cpu_instrcache.vhd). IRIX never reads it anyway
             else
                readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
             end if;
@@ -1377,36 +1409,32 @@ begin
                   end if;
                   
                when TLBPROBE =>
-                  -- SGI: explicit wrap, see TLB_ENTRIES.
-                  if (TLB_readAddr = TLB_LAST) then
-                     TLB_readAddr <= (others => '0');
+                  -- SGI: one clock, from the parallel match (see TLBSH_*).
+                  -- The upstream walk from entry 0 returned the lowest
+                  -- matching index, and so does the match.
+                  TLBState                  <= TLBIDLE;
+                  TLBDone                   <= '1';
+                  if (TLB_camHit = '1') then
+                     COP0_0_INDEX_probefailure <= '0';
+                     COP0_0_INDEX_tlbEntry     <= TLB_camIndex;
                   else
-                     TLB_readAddr <= TLB_readAddr + 1;
-                  end if;
-                  if (TLB_readAddr = TLB_LAST) then
-                     TLBState                  <= TLBIDLE;
                      COP0_0_INDEX_probefailure <= '1';
                      COP0_0_INDEX_tlbEntry     <= (others => '0');
-                     TLBDone                   <= '1';
-                  end if;
-                  if ((COP0_10_ENTRYHI_virtualAddress and TLB_checkMask) = (TLBREAD_virtAddr and TLB_checkMask)) then
-                     if (COP0_10_ENTRYHI_region = TLBREAD_region) then
-                        if (TLBREAD_global = '1' or (COP0_10_ENTRYHI_addressSpaceID = TLBREAD_ASID)) then
-                           TLBState                  <= TLBIDLE;
-                           COP0_0_INDEX_probefailure <= '0';
-                           COP0_0_INDEX_tlbEntry     <= TLB_readAddr;   -- SGI
-                           TLBDone                   <= '1';
-                        end if;
-                     end if;
                   end if;
                   
                when TLBDATA | TLBINSTR =>
-                  if (TLB_readAddr = TLB_LAST) then   -- SGI: explicit wrap
-                     TLB_readAddr <= (others => '0');
-                  else
-                     TLB_readAddr <= TLB_readAddr + 1;
+                  -- SGI: no walk (see TLBSH_*). The first clock compares the
+                  -- entry that matched last, exactly as before, and in the
+                  -- same clock the parallel match names the entry that does
+                  -- match; the second clock reads that one and ends the
+                  -- lookup whatever it finds. A clock with no match anywhere
+                  -- ends it at once, not found - the refill case, which used
+                  -- to walk all 48.
+                  if (TLB_camHit = '1') then
+                     TLB_readAddr   <= TLB_camIndex;
+                     TLB_compareEnd <= TLB_camIndex;
                   end if;
-                  if (TLB_readAddr = TLB_compareEnd) then
+                  if (TLB_readAddr = TLB_compareEnd or TLB_camHit = '0') then
                      TLBState           <= TLBIDLE;
                      if (TLBState = TLBINSTR) then
                         TLB_Instr_fetchDone <= '1';
@@ -1590,6 +1618,48 @@ begin
    
    TLBMEM_readAddr <= std_logic_vector(COP0_0_INDEX_tlbEntry) when (TLBState = TLBIDLE) else   -- SGI: 48 entries
                       std_logic_vector(TLB_readAddr);
+
+   -- SGI: the match shadows (see TLBSH_*). Written from exactly what the
+   -- entry RAM is written with, in the same clock, so the two can never
+   -- disagree about an entry. Indexes 48..63 exist in the RAM address space
+   -- and in nothing that is searched.
+   process (clk93)
+      variable idx : integer range 0 to 63;
+   begin
+      if (rising_edge(clk93)) then
+         if (TLBMEM_writeEnable = '1') then
+            idx := to_integer(unsigned(TLBMEM_writeAddr));
+            if (idx < TLB_ENTRIES) then
+               TLBSH_global(idx) <= TLBMEM_writeData(0);
+               TLBSH_mask(idx)   <= unsigned(TLBMEM_writeData(62 downto 51));
+               TLBSH_vpn(idx)    <= unsigned(TLBMEM_writeData(89 downto 63));
+               TLBSH_asid(idx)   <= unsigned(TLBMEM_writeData(97 downto 90));
+               TLBSH_region(idx) <= unsigned(TLBMEM_writeData(99 downto 98));
+            end if;
+         end if;
+      end if;
+   end process;
+
+   -- What is being looked up: EntryHi for a probe, the lookup address
+   -- register otherwise - the same two operands the walk compared, with the
+   -- same ASID.
+   TLB_camVPN    <= COP0_10_ENTRYHI_virtualAddress when (TLBState = TLBPROBE) else TLB_fetchAddrIn(39 downto 13);
+   TLB_camRegion <= COP0_10_ENTRYHI_region         when (TLBState = TLBPROBE) else TLB_fetchAddrIn(63 downto 62);
+
+   process (all)
+   begin
+      TLB_camHit   <= '0';
+      TLB_camIndex <= (others => '0');
+      -- Downward, so the lowest matching index is the last assignment.
+      for i in TLB_ENTRIES - 1 downto 0 loop
+         if ((TLB_camVPN and (15x"7FFF" & (not TLBSH_mask(i)))) = TLBSH_vpn(i) and
+             TLB_camRegion = TLBSH_region(i) and
+             (TLBSH_global(i) = '1' or COP0_10_ENTRYHI_addressSpaceID = TLBSH_asid(i))) then
+            TLB_camHit   <= '1';
+            TLB_camIndex <= to_unsigned(i, 6);
+         end if;
+      end loop;
+   end process;
    
    TLBREAD_global   <= TLBMEM_readData(0);           
    TLBREAD_valid0   <= TLBMEM_readData(1);           

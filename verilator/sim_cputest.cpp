@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <deque>
 #include <array>
 #include <vector>
@@ -148,6 +149,16 @@ struct Options {
     // consecutive repeats in both streams before comparing, and treat the
     // result as a lead rather than as proof.
     std::string pcuser;
+    // --prof FILE: a clock-weighted PC profile (docs/50). Every clock, the
+    // decode PC is charged one clock - and one stalled clock if the stall
+    // vector is non-zero - so a function's share is the wall time it held,
+    // stalls included, the way the board's beacon profiler (prof.py) sees
+    // it. --prof-callers HEX[,HEX..] also records, for each listed address,
+    // the decode PC in front of every entry to it: the call site, which the
+    // board cannot see. Written at exit, "pc clocks stalled" per line and
+    // "caller target site count" per edge.
+    std::string prof;
+    std::vector<uint32_t> prof_callers;
     bool        exc = false;
     uint64_t    exc_count = 200;
     // --epc: one line per CHANGE of COP0 EPC. dbg_exc_epc is driven
@@ -285,6 +296,10 @@ static void usage()
         "                    served a named instruction\n"
         "  --pc-user FILE    write every user-mode PC to FILE, one per line and\n"
         "                    nothing else, for diffing two runs against each other\n"
+        "  --prof FILE       clock-weighted decode-PC profile at exit: 'pc clocks\n"
+        "                    stalled' per line (docs/50)\n"
+        "  --prof-callers H,H  with --prof, the PC in front of every entry to\n"
+        "                    each listed address (the delay slot of the call)\n"
         "  --exc             one line per exception the CPU accepts: ExcCode,\n"
         "                    BadVAddr and EPC (first 200; --exc-count N).\n"
         "                    With --trace-from-pc it starts at the arm, not at\n"
@@ -369,6 +384,17 @@ int main(int argc, char **argv)
             opt.pc_from    = ~0ull;
             opt.trace_from_pc = (uint32_t)strtoul(next("--trace-from-pc"), nullptr, 16); }
         else if (a == "--pc-user")    opt.pcuser = next("--pc-user");
+        else if (a == "--prof")       opt.prof = next("--prof");
+        else if (a == "--prof-callers") {
+            std::string list = next("--prof-callers");
+            size_t p = 0;
+            while (p < list.size()) {
+                size_t q = list.find(',', p);
+                if (q == std::string::npos) q = list.size();
+                opt.prof_callers.push_back((uint32_t)strtoul(list.substr(p, q - p).c_str(), nullptr, 16));
+                p = q + 1;
+            }
+        }
         else if (a == "--exc")        opt.exc = true;
         else if (a == "--epc")        opt.epcwatch = true;
         else if (a == "--cop0")       opt.cop0watch = true;
@@ -485,6 +511,10 @@ int main(int argc, char **argv)
     // `tail -f` instead of only being readable once it has finished.
     FILE *pcuser_f = nullptr;
     FILE *console_f = nullptr;
+    // --prof: clocks and stalled clocks per decode PC, and call edges.
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> prof_pc;
+    std::map<std::tuple<uint32_t, uint32_t>, uint64_t> prof_edges;
+    uint32_t prof_prev_pc = 0, prof_last_distinct = 0;
     if (!opt.pcuser.empty()) {
         pcuser_f = fopen(opt.pcuser.c_str(), "wb");
         if (!pcuser_f) fprintf(stderr, "cannot write %s\n", opt.pcuser.c_str());
@@ -823,6 +853,19 @@ int main(int argc, char **argv)
             exc_bad     = top->dbg_exc_bad;
         }
 
+        if (!opt.prof.empty()) {
+            uint32_t pc = top->dbg_pc;
+            auto &e = prof_pc[pc];
+            e.first++;
+            if ((top->dbg_cop0 >> 13) & 0x1F) e.second++;
+            if (pc != prof_prev_pc) {
+                for (uint32_t t : opt.prof_callers)
+                    if (pc == t) prof_edges[{t, prof_prev_pc}]++;
+                prof_last_distinct = prof_prev_pc;
+                prof_prev_pc = pc;
+            }
+        }
+
         // The PC of whatever entered decode this clock. Recorded on every
         // instruction, printed only on exit (or under --pc).
         if (top->dbg_pc_valid) {
@@ -966,6 +1009,28 @@ int main(int argc, char **argv)
     printf("\n--- %s after %llu cycles, %llu bus transactions ---\n",
            stop_reason, static_cast<unsigned long long>(cycle),
            static_cast<unsigned long long>(txns));
+
+    // The performance counters (docs/50, sgi_indy.sv). The simulator's memory
+    // answers in one cycle, so clocks per fill here are the pipeline's own
+    // overhead and nothing of DDR3; the fill and walk COUNTS are the machine's.
+    {
+        auto hi = [](uint64_t w) { return static_cast<unsigned long long>(w >> 32); };
+        auto lo = [](uint64_t w) { return static_cast<unsigned long long>(w & 0xFFFFFFFFull); };
+        unsigned long long instr = hi(top->perf0) * 64ULL;
+        double k = instr ? 1000.0 / static_cast<double>(instr) : 0.0;
+        printf("perf: %llu instructions, clocks: run %llu, fetch held %llu, execute held %llu, "
+               "writeback held %llu, TLB walk %llu (counters are x64)\n",
+               instr, lo(top->perf0) * 64ULL, hi(top->perf1) * 64ULL,
+               lo(top->perf1) * 64ULL, hi(top->perf2) * 64ULL, lo(top->perf2) * 64ULL);
+        printf("perf: I-cache fills %llu (%.2f per 1000 instructions), D-cache fills %llu (%.2f), "
+               "writeback beats %llu, uncached fetches %llu\n",
+               hi(top->perf4), hi(top->perf4) * k, lo(top->perf4), lo(top->perf4) * k,
+               hi(top->perf5), lo(top->perf5));
+        printf("perf: TLB walks instruction %llu (%.2f per 1000), data %llu (%.2f); "
+               "bus transactions %llu; clocks on the bus for I-fills %llu, D-fills %llu\n",
+               hi(top->perf6), hi(top->perf6) * k, lo(top->perf6), lo(top->perf6) * k,
+               hi(top->perf7), hi(top->perf3) * 64ULL, lo(top->perf3) * 64ULL);
+    }
 
     if (!g_dev.testdev.out.empty())
         printf("testdev console: %zu bytes\n", g_dev.testdev.out.size());
@@ -1129,6 +1194,25 @@ int main(int argc, char **argv)
         else
             printf("could not write %s\n", opt.fbdump.c_str());
     }
+
+    if (!opt.prof.empty()) {
+        FILE *pf = fopen(opt.prof.c_str(), "wb");
+        if (pf) {
+            for (const auto &kv : prof_pc)
+                fprintf(pf, "%08x %llu %llu\n", kv.first,
+                        static_cast<unsigned long long>(kv.second.first),
+                        static_cast<unsigned long long>(kv.second.second));
+            for (const auto &kv : prof_edges)
+                fprintf(pf, "caller %08x %08x %llu\n", std::get<0>(kv.first),
+                        std::get<1>(kv.first), static_cast<unsigned long long>(kv.second));
+            fclose(pf);
+            printf("prof: %zu PCs, %zu call edges written to %s\n",
+                   prof_pc.size(), prof_edges.size(), opt.prof.c_str());
+        } else {
+            printf("could not write %s\n", opt.prof.c_str());
+        }
+    }
+    (void)prof_last_distinct;
 
     if (pcuser_f) fclose(pcuser_f);
     if (console_f) fclose(console_f);

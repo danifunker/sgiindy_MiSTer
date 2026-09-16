@@ -476,6 +476,7 @@ wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
+wire [63:0] perf_bcn [8];   // CPU performance counters (docs/50)
 
 sgi_indy u_core
 (
@@ -581,6 +582,7 @@ sgi_indy u_core
 	.dbg_hpc3_dma     (hpc3_dma_bcn),
 	.dbg_int_bcn      (int_bcn),
 	.dbg_vdma_bcn     (vdma_bcn),
+	.dbg_perf_bcn     (perf_bcn),
 
 	// Debug taps: the console byte tap and the bus mirror. They exist for the
 	// simulation harness and nothing on hardware reads them. (Do not start a
@@ -732,6 +734,12 @@ fb_fetch_arb u_fetch_arb
 	.fbr_dout_valid(lc_valid)
 );
 
+// What the DDR3 port is doing, for the performance counters below (docs/50).
+wire [1:0] mx_tst;
+wire [2:0] mx_cur;
+wire [5:0] mx_pend;
+wire       mx_first, mx_pick;
+
 ddr3_mux u_mem
 (
 	.clk       (clk_sys),
@@ -777,6 +785,12 @@ ddr3_mux u_mem
 	.bcn_addr  (bcn_addr),
 	.bcn_wdata (bcn_wdata),
 
+	.dbg_tst   (mx_tst),
+	.dbg_cur   (mx_cur),
+	.dbg_pend  (mx_pend),
+	.dbg_first (mx_first),
+	.dbg_pick  (mx_pick),
+
 	.DDRAM_BUSY      (DDRAM_BUSY),
 	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
 	.DDRAM_ADDR      (DDRAM_ADDR),
@@ -809,7 +823,60 @@ ddr3_mux u_mem
 // cache's hits/misses/writes, bytes across the bus in DATA phases and bus
 // busy time, and DATA-phase time (docs/49). bcnread.py --stats turns two
 // readings into the boot's disk seconds.
-localparam int BCN_WORDS = 21;
+// ver=10 (docs/50) adds words 21-34, the performance counters: 21-28 the
+// CPU's (sgi_indy.sv - instructions, stall clocks by stage, TLB walks, cache
+// fills and the clocks they spent on the bus), 29-34 the DDR3 port's (below -
+// clocks each master held the port, clocks the CPU and the rasteriser waited
+// for it, transactions, the bridge's latency to a read's first word).
+// bcnread.py --perf turns two readings into a workload's breakdown.
+localparam int BCN_WORDS = 35;
+
+// ---- DDR3 port performance counters (docs/50) ------------------------------
+// WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
+// stores goes through ddr3_mux, one transaction at a time: the display's line
+// fetches (absolute priority), the CPU's cache fills and uncached accesses
+// together with the SCSI and MC DMA engines (the RAM master), and the
+// rasteriser's one-pixel transactions. A cache fill measured at 26 clocks on
+// an idle port (docs/39) costs whatever it waits behind on a busy one, and
+// these say how much that is. "/64" counters are 38 bits reporting the top 32.
+//   w29 {clocks the display held the port /64,    clocks RAM held it /64}
+//   w30 {clocks the rasteriser held it /64,       clocks anyone else did /64}
+//   w31 {clocks a RAM request waited unserved /64, a rasteriser request /64}
+//   w32 {RAM transactions,                         rasteriser transactions}
+//   w33 {clocks from a read's issue to its first word /64, reads issued}
+//   w34 {clocks an issue waited on DDRAM_BUSY /64, display bursts}
+localparam int MX_FBR = 0, MX_RAM = 2, MX_FBW = 4;
+reg [37:0] mx_c_fbr, mx_c_ram, mx_c_fbw, mx_c_oth, mx_q_ram, mx_q_fbw, mx_c_lat, mx_c_bsy;
+reg [31:0] mx_n_ram, mx_n_fbw, mx_n_rd, mx_n_fbr;
+reg  [1:0] mx_tst_q;
+always @(posedge clk_sys) begin
+	if (~pll_locked) begin
+		mx_c_fbr <= 38'd0; mx_c_ram <= 38'd0; mx_c_fbw <= 38'd0; mx_c_oth <= 38'd0;
+		mx_q_ram <= 38'd0; mx_q_fbw <= 38'd0; mx_c_lat <= 38'd0; mx_c_bsy <= 38'd0;
+		mx_n_ram <= 32'd0; mx_n_fbw <= 32'd0; mx_n_rd  <= 32'd0; mx_n_fbr <= 32'd0;
+		mx_tst_q <= 2'd0;
+	end else begin
+		mx_tst_q <= mx_tst;
+		if (mx_tst != 2'd0) begin
+			if      (mx_cur == 3'(MX_FBR)) mx_c_fbr <= mx_c_fbr + 38'd1;
+			else if (mx_cur == 3'(MX_RAM)) mx_c_ram <= mx_c_ram + 38'd1;
+			else if (mx_cur == 3'(MX_FBW)) mx_c_fbw <= mx_c_fbw + 38'd1;
+			else                           mx_c_oth <= mx_c_oth + 38'd1;
+		end
+		if (mx_pend[MX_RAM] && !(mx_tst != 2'd0 && mx_cur == 3'(MX_RAM))) mx_q_ram <= mx_q_ram + 38'd1;
+		if (mx_pend[MX_FBW] && !(mx_tst != 2'd0 && mx_cur == 3'(MX_FBW))) mx_q_fbw <= mx_q_fbw + 38'd1;
+		if (mx_first)                     mx_c_lat <= mx_c_lat + 38'd1;
+		if (mx_tst == 2'd1 && DDRAM_BUSY) mx_c_bsy <= mx_c_bsy + 38'd1;
+		// A transaction begins on the clock the mux leaves T_IDLE; its
+		// owner is `cur` from the next clock on, so count on the entry.
+		if (mx_tst == 2'd1 && mx_tst_q == 2'd0) begin
+			if      (mx_cur == 3'(MX_RAM)) mx_n_ram <= mx_n_ram + 32'd1;
+			else if (mx_cur == 3'(MX_FBW)) mx_n_fbw <= mx_n_fbw + 32'd1;
+			else if (mx_cur == 3'(MX_FBR)) mx_n_fbr <= mx_n_fbr + 32'd1;
+		end
+		if (mx_tst == 2'd2 && mx_tst_q == 2'd1) mx_n_rd <= mx_n_rd + 32'd1;
+	end
+end
 
 reg [15:0] lc_miss_cnt, la_miss_cnt;
 always @(posedge clk_sys) begin
@@ -822,14 +889,14 @@ always @(posedge clk_sys) begin
 	end
 end
 reg  [5:0]  bcn_div;
-reg  [4:0]  bcn_idx;
+reg  [5:0]  bcn_idx;
 reg  [31:0] bcn_beat;
 reg         bcn_req;
 reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h09, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0A, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -850,11 +917,25 @@ assign bcn_src[17] = scsi_stat[1];
 assign bcn_src[18] = scsi_stat[2];
 assign bcn_src[19] = scsi_stat[3];
 assign bcn_src[20] = scsi_stat[4];
+assign bcn_src[21] = perf_bcn[0];
+assign bcn_src[22] = perf_bcn[1];
+assign bcn_src[23] = perf_bcn[2];
+assign bcn_src[24] = perf_bcn[3];
+assign bcn_src[25] = perf_bcn[4];
+assign bcn_src[26] = perf_bcn[5];
+assign bcn_src[27] = perf_bcn[6];
+assign bcn_src[28] = perf_bcn[7];
+assign bcn_src[29] = { mx_c_fbr[37:6], mx_c_ram[37:6] };
+assign bcn_src[30] = { mx_c_fbw[37:6], mx_c_oth[37:6] };
+assign bcn_src[31] = { mx_q_ram[37:6], mx_q_fbw[37:6] };
+assign bcn_src[32] = { mx_n_ram,       mx_n_fbw };
+assign bcn_src[33] = { mx_c_lat[37:6], mx_n_rd };
+assign bcn_src[34] = { mx_c_bsy[37:6], mx_n_fbr };
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
 		bcn_div   <= 6'd0;
-		bcn_idx   <= 5'd0;
+		bcn_idx   <= 6'd0;
 		bcn_beat  <= 32'd0;
 		bcn_req   <= 1'b0;
 		bcn_addr  <= 32'h0;
@@ -864,13 +945,13 @@ always @(posedge clk_sys) begin
 		bcn_div <= bcn_div + 6'd1;
 		if (bcn_div == 6'd63) begin
 			bcn_req   <= 1'b1;
-			bcn_addr  <= 32'h0580_0000 + {24'd0, bcn_idx, 3'b000};
+			bcn_addr  <= 32'h0580_0000 + {23'd0, bcn_idx, 3'b000};
 			bcn_wdata <= bcn_src[bcn_idx];
-			if (bcn_idx == BCN_WORDS-1) begin
-				bcn_idx  <= 5'd0;
+			if (bcn_idx == 6'(BCN_WORDS-1)) begin
+				bcn_idx  <= 6'd0;
 				bcn_beat <= bcn_beat + 32'd1;
 			end else begin
-				bcn_idx  <= bcn_idx + 5'd1;
+				bcn_idx  <= bcn_idx + 6'd1;
 			end
 		end
 	end

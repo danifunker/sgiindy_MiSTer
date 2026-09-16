@@ -32,15 +32,16 @@ entity cpu_instrcache is
       ddr3_DOUT_READY   : in  std_logic;
       
       read_select       : in  std_logic;
-      -- RAM index for the tag and data lookups: bits 12 downto 2 of the
-      -- PHYSICAL fetch address (SGI, docs/47: bit 12 is the translated one
-      -- from cpu.vhd's FetchIndexPhys1; bits 11:2 are page offset and come
-      -- from KI's ONE flattened mux there rather than the forwarding mux
-      -- feeding the fetch mux - see FetchIndex1 for why the shorter path
-      -- matters). The tag COMPARE still uses read_addrCompare1/2, so a wrong
-      -- index can only miss and refill - it cannot return wrong data.
-      read_index1       : in  unsigned(12 downto 2);
-      read_index2       : in  unsigned(12 downto 2);
+      -- RAM index for the tag and data lookups: bits 13 downto 2 of the
+      -- PHYSICAL fetch address (SGI, docs/47 and docs/50: bits 13:12 are the
+      -- translated ones from cpu.vhd's FetchIndexPhys1; bits 11:2 are page
+      -- offset and come from KI's ONE flattened mux there rather than the
+      -- forwarding mux feeding the fetch mux - see FetchIndex1 for why the
+      -- shorter path matters). The tag COMPARE still uses
+      -- read_addrCompare1/2, so a wrong index can only miss and refill - it
+      -- cannot return wrong data.
+      read_index1       : in  unsigned(13 downto 2);
+      read_index2       : in  unsigned(13 downto 2);
       read_addrCompare1 : in  unsigned(31 downto 0);
       read_addrCompare2 : in  unsigned(31 downto 0);
       read_hit          : out std_logic;
@@ -68,7 +69,11 @@ end entity;
 
 architecture arch of cpu_instrcache is
 
-   -- SGI: 8 KB, NOT KI's 16 KB - ONE WAY OF AN R4600, and the full 20-bit tag.
+   -- SGI: 16 KB AGAIN, PHYSICALLY INDEXED, with the full 20-bit tag (docs/50).
+   -- Build 24 went down to 8 KB for the reason below and build 25 made the
+   -- index physical; with a physical index the reason is gone, because no
+   -- mapping can put one line in two sets whatever IRIX colours. The history
+   -- is kept because it is why the index must stay physical:
    --
    -- IRIX colours user pages for the cache the CPU's PRId implies. For an
    -- R4400 (16 KB direct-mapped) it keeps virtual and physical address bits
@@ -85,9 +90,8 @@ architecture arch of cpu_instrcache is
    -- through the IRIX boot, while the data cache - physically indexed since
    -- docs/40 - was fine.
    --
-   -- So the index is bits 12:5 (256 lines of 32 bytes) and the tag holds
+   -- So the index became bits 12:5 (256 lines of 32 bytes) and the tag holds
    -- bits 31:12, so a wrong hit is impossible even for an uncoloured mapping.
-   -- The kernel's 16 KB index flush loops simply cover it twice.
    --
    -- AND THE INDEX IS PHYSICAL (docs/47). Build 24 indexed on VIRTUAL bit 12
    -- - "the one bit IRIX colours, the exposure a real R4600 way has" - and
@@ -96,20 +100,25 @@ architecture arch of cpu_instrcache is
    -- its lines in set(V), and the kernel's Hit_Invalidate_I by the page's K0
    -- address looked in set(P). A real R4600's hit ops search both ways of a
    -- set; this cache has one. So cpu.vhd now hands this cache the physical
-   -- bit 12 on the fetch side (FetchIndexPhys1/2, from the instruction
+   -- bits 13:12 on the fetch side (FetchIndexPhys1/2, from the instruction
    -- mini-TLB) and the physical address on the fill side (fill_addrTag =
    -- mem1_addrCompare), and translates cache op 0x10 - every line lives in
    -- exactly one set for every mapping. Index ops 0x00/0x08 take their index
    -- from the operand untranslated, as before (IRIX issues them by K0
-   -- address). The 16 KB two-way cache with the way selected by physical bit
-   -- 13 is the follow-up (docs/45).
+   -- address, which is physical).
+   --
+   -- 16 KB because the 8 KB cache was the largest single cost the board
+   -- measured (docs/50): the fetch stage waited on instruction-cache fills in
+   -- about a third of the busy clocks of an IRIX boot. The index is bits 13:5
+   -- (512 lines); Config has always reported 16 KB, so the kernel's index
+   -- flush loops now cover it exactly once.
 
    -- tags
-   signal tag_address_a    : std_logic_vector(7 downto 0) := (others => '0');   -- SGI: 256 lines
+   signal tag_address_a    : std_logic_vector(8 downto 0) := (others => '0');   -- SGI: 512 lines
    signal tag_data_a       : std_logic_vector(20 downto 0) := (others => '0');  -- SGI: 20-bit tag + valid
    signal tag_wren_a       : std_logic := '0';
-   signal tag_address_b1   : std_logic_vector(7 downto 0);   -- SGI
-   signal tag_address_b2   : std_logic_vector(7 downto 0);   -- SGI
+   signal tag_address_b1   : std_logic_vector(8 downto 0);   -- SGI
+   signal tag_address_b2   : std_logic_vector(8 downto 0);   -- SGI
    signal tag_q_b1         : std_logic_vector(20 downto 0);  -- SGI
    signal tag_q_b2         : std_logic_vector(20 downto 0);  -- SGI
    signal fill_addrTag_sav : unsigned(13 downto 0) := (others => '0');
@@ -120,12 +129,12 @@ architecture arch of cpu_instrcache is
    -- data
    signal fill_grant       : std_logic;
    signal fill_active_2x   : std_logic := '0';
-   signal fill_line_2x     : unsigned(7 downto 0) := (others => '0');   -- SGI
+   signal fill_line_2x     : unsigned(8 downto 0) := (others => '0');   -- SGI
    signal fill_beat_2x     : unsigned(1 downto 0) := (others => '0');
-   signal cache_ram_addr_a : std_logic_vector(9 downto 0);   -- SGI: 256 x 4 doublewords
+   signal cache_ram_addr_a : std_logic_vector(10 downto 0);  -- SGI: 512 x 4 doublewords
    signal cache_wr_a       : std_logic;
    
-   signal cache_address_b  : std_logic_vector(10 downto 0);  -- SGI: 2048 words
+   signal cache_address_b  : std_logic_vector(11 downto 0);  -- SGI: 4096 words
    signal cache_q_b        : std_logic_vector(31 downto 0);
    
    -- state machine
@@ -178,7 +187,7 @@ begin
    generic map
    (
       width      => 21, -- SGI: 20 bits(31..12) of address + 1 bit valid
-      widthad    => 8   -- SGI: 256 lines
+      widthad    => 9   -- SGI: 512 lines
    )
    port map
    (
@@ -190,14 +199,14 @@ begin
       q          => tag_q_b1
    );
    
-   tag_address_b1 <= std_logic_vector(read_index1(12 downto 5));   -- SGI
+   tag_address_b1 <= std_logic_vector(read_index1(13 downto 5));   -- SGI
    read_hit1      <= '1' when (unsigned(tag_q_b1(19 downto 0)) = read_addrCompare1(31 downto 12) and tag_q_b1(20) = '1') else '0';   -- SGI
    
    itagram2 : entity mem.RamMLAB
    generic map
    (
       width      => 21, -- SGI: 20 bits(31..12) of address + 1 bit valid
-      widthad    => 8   -- SGI: 256 lines
+      widthad    => 9   -- SGI: 512 lines
    )
    port map
    (
@@ -209,7 +218,7 @@ begin
       q          => tag_q_b2
    );
    
-   tag_address_b2 <= std_logic_vector(read_index2(12 downto 5));   -- SGI
+   tag_address_b2 <= std_logic_vector(read_index2(13 downto 5));   -- SGI
    read_hit2      <= '1' when (unsigned(tag_q_b2(19 downto 0)) = read_addrCompare2(31 downto 12) and tag_q_b2(20) = '1') else '0';   -- SGI
 
    --------- data
@@ -226,7 +235,7 @@ begin
             fill_beat_2x   <= (others => '0');
          elsif (fill_grant = '1') then
             fill_active_2x <= '1';
-            fill_line_2x   <= fill_addrTag_sav(12 downto 5);   -- SGI
+            fill_line_2x   <= fill_addrTag_sav(13 downto 5);   -- SGI
             fill_beat_2x   <= (others => '0');
             if (ddr3_DOUT_READY = '1') then
                fill_beat_2x <= 2x"1";
@@ -245,7 +254,7 @@ begin
       end if;
    end process;
 
-   cache_ram_addr_a <= std_logic_vector(fill_addrTag_sav(12 downto 5) & "00")   -- SGI
+   cache_ram_addr_a <= std_logic_vector(fill_addrTag_sav(13 downto 5) & "00")   -- SGI
                        when (fill_grant = '1') else
                        std_logic_vector(fill_line_2x & fill_beat_2x);
    cache_wr_a       <= (fill_active_2x or fill_grant) and ddr3_DOUT_READY and ram_active;
@@ -253,9 +262,9 @@ begin
    icache: entity work.dpram_dif
    generic map 
    ( 
-      addr_width_a  => 10,   -- SGI: 8 KB
+      addr_width_a  => 11,   -- SGI: 16 KB
       data_width_a  => 64,
-      addr_width_b  => 11,   -- SGI
+      addr_width_b  => 12,   -- SGI
       data_width_b  => 32
    )
    port map
@@ -273,9 +282,9 @@ begin
       q_b         => cache_q_b
    );
    
-   cache_address_b <= std_logic_vector(fill_addrTag_sav(12 downto 2))  when (state /= IDLE) else   -- SGI: 12:2
-                      std_logic_vector(read_index2(12 downto 2)) when (read_select = '1') else
-                      std_logic_vector(read_index1(12 downto 2));
+   cache_address_b <= std_logic_vector(fill_addrTag_sav(13 downto 2))  when (state /= IDLE) else   -- SGI: 13:2
+                      std_logic_vector(read_index2(13 downto 2)) when (read_select = '1') else
+                      std_logic_vector(read_index1(13 downto 2));
    
    read_data       <= cache_q_b when LITTLE_ENDIAN else byteswap32(cache_q_b);
    
@@ -320,12 +329,12 @@ begin
                      -- todo: should only clear if tag matches
                      tag_wren_a     <= '1';
                      tag_data_a     <= (others => '0');
-                     tag_address_a  <= std_logic_vector(cmd_addr_eff(12 downto 5));   -- SGI
+                     tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));   -- SGI
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1' and cmd_code_eff = 5x"08") then
                      tag_wren_a     <= '1';
                      tag_data_a     <= TagLo_Valid & std_logic_vector(TagLo_Addr(19 downto 0));   -- SGI: full tag
-                     tag_address_a  <= std_logic_vector(cmd_addr_eff(12 downto 5));   -- SGI
+                     tag_address_a  <= std_logic_vector(cmd_addr_eff(13 downto 5));   -- SGI
                      cmd_pending    <= '0';
                   elsif (cmd_ena_eff = '1') then
                      cmd_pending    <= '0';   -- SGI: a code this cache ignores
@@ -337,7 +346,7 @@ begin
                   
                when CLEARCACHE =>
                   tag_wren_a     <= '1';
-                  if (tag_address_a /= 8x"FF") then   -- SGI: 256 lines
+                  if (tag_address_a /= 9x"1FF") then   -- SGI: 512 lines
                      tag_address_a <= std_logic_vector(unsigned(tag_address_a) + 1);
                   else
                      state          <= IDLE;
@@ -348,7 +357,7 @@ begin
                      state          <= IDLE;
                      tag_wren_a     <= '1';
                      tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 12));   -- SGI: full tag
-                     tag_address_a  <= std_logic_vector(fill_addrTag_sav(12 downto 5));   -- SGI
+                     tag_address_a  <= std_logic_vector(fill_addrTag_sav(13 downto 5));   -- SGI
                      fill_done      <= '1'; 
                   end if;
                   

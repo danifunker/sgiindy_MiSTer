@@ -30,6 +30,10 @@ Usage (on the MiSTer):
     bcnread.py                one decoded sample
     bcnread.py --loop 30 --interval 2      sample for a minute
     bcnread.py --raw          just the hex words
+    bcnread.py --perf         (ver >= 10, docs/50) the performance counters,
+                              raw, as one line of 28 integers; two of these
+                              a workload apart are the workload's breakdown:
+                              perfdiff.py BEFORE AFTER on the host
     bcnread.py --stats        one line: the disk-time counters as seconds
                               (the difference of two of these over a boot is
                               the boot's disk time; scripts/irixrate.sh
@@ -45,7 +49,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 21
+NWORDS = 35
 CLK_HZ = 50_000_000          # clk_sys; the x64 counters are in units of 64 cycles
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
@@ -248,11 +252,21 @@ def main():
     ap.add_argument("--interval", type=float, default=2.0)
     ap.add_argument("--raw", action="store_true")
     ap.add_argument("--stats", action="store_true")
+    ap.add_argument("--perf", action="store_true")
     a = ap.parse_args()
     for i in range(a.loop):
         ws = rdwords()
         if a.raw:
             print(" ".join("%016x" % w for w in ws))
+        elif a.perf:
+            if bits(ws[0], 63, 48) != 0xBEC0 or bits(ws[0], 47, 40) < 10:
+                print("perf: no counters (beacon ver %d, need 10)" % bits(ws[0], 47, 40))
+            else:
+                vals = []
+                for w in ws[21:35]:
+                    vals += [bits(w, 63, 32), bits(w, 31, 0)]
+                print("perf %.3f beat=%d %s" % (time.time(), bits(ws[0], 31, 0),
+                                               " ".join(str(v) for v in vals)))
         elif a.stats:
             if bits(ws[0], 63, 48) != 0xBEC0 or bits(ws[0], 47, 40) < 9:
                 print("scsi: no stats (beacon ver %d, need 9)" % bits(ws[0], 47, 40))

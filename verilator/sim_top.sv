@@ -106,9 +106,17 @@ module sim_top
     output wire [31:0] dbg_exc_bad,
     output wire [31:0] dbg_rpc,
     output wire        dbg_retire,
+    // The CPU performance counters (docs/50), printed by the harness at exit.
+    output wire [63:0] perf0, perf1, perf2, perf3, perf4, perf5, perf6, perf7,
     output wire  [4:0] irq_lines,
     output wire [39:0] int2_state
 );
+
+    wire [63:0] perf_bcn [8];
+    assign perf0 = perf_bcn[0]; assign perf1 = perf_bcn[1];
+    assign perf2 = perf_bcn[2]; assign perf3 = perf_bcn[3];
+    assign perf4 = perf_bcn[4]; assign perf5 = perf_bcn[5];
+    assign perf6 = perf_bcn[6]; assign perf7 = perf_bcn[7];
 
     wire        ram_req, ram_we, ram_ack, ram_last;
     wire [31:0] ram_addr;
@@ -282,6 +290,7 @@ module sim_top
         .dbg_hpc3_dma  (),
         .dbg_int_bcn   (),
         .dbg_vdma_bcn  (),
+        .dbg_perf_bcn  (perf_bcn),
         .irq_lines_o   (irq_lines),
         .int2_state_o  (int2_state)
     );
