@@ -254,6 +254,13 @@ about a third.
 | `cpu_instrcache.vhd` | A fill request for a line the cache already holds is answered from it: a third copy of the tags in block RAM (`itagramf`, registered read) at the fill's line, states `CHECK` then `CACHED`, `fill_done` three clocks after the request with no bus transaction; a line whose tag was written on the edge the read took is filled rather than trusted (`tag_wr_q`). Block RAM because the first fit's asynchronous MLAB copy cost ~430 ALMs at 97 % of the device | `cpu.vhd` asks for a fill after EVERY instruction TLB walk without a lookup - by then the fetch-path lookup has moved on to the next PC. With a one-page mini-TLB that is a DDR3 line fill for every crossing into another mapped page, 22 per 1000 instructions in a perl loop against 38.7 fills in all (build 28) |
 | `cpu.vhd`, `r4300_wrap.vhd` | `dbg_perf(9 downto 0)` and `dbg_ifetch` ports | Performance-counter events for `sgi_indy.sv` and the simulator's instruction-cache access trace (`--itrace`). Wires only |
 
+### Loads that do not stall execute (docs/51)
+
+| File | Change | Why |
+|---|---|---|
+| `cpu.vhd` | `LOAD_NO_STALL` generic (default true). `loadMayRun`: the load in decode leaves execute without `stall3`/`executeStallFromMEM` when the instruction being decoded behind it (`opcodeCacheMuxed`) names neither `decodeTarget` in its rs/rt fields nor is a memory instruction (primary opcode 0x20-0x3F, LDL/LDR). LWC1/LDC1, COP0/COP2 reads, a load that walks the TLB (`TLB_dataStall` clears `executeLoadNoStall`) and a faulting load keep stalling. Stage 4 keys `writebackForwardValue1/2` to `decSource` for such a load, as for any other instruction | Upstream held execute a clock on every load. 24.8 % of IRIX kernel instructions are loads and 80 % of them are followed by an instruction that does not read the loaded register. Board, build 33: boot 1.68 -> 1.64 clocks per instruction, bzip2 103.9 -> 99.5 s |
+| `cpu_datacache.vhd` | `read_ena` holds `cache_address_b` on `tag_addr_1` as `write_ena` does; a read that finishes outside IDLE (READWAIT, WAITSLOW, the end of a FILL) shifts by `read_offset`, `RW_addr(2 downto 0)` captured in IDLE | Both assumed execute stayed frozen for the whole read: in a no-stall load's first stage-4 clock `tag_addr` and `RW_addr` already belong to the next instruction. For a stalled load both are what they were |
+
 ### The memory path — no clock-domain crossing
 
 KI runs `cpu.vhd`'s clk93 at 75 MHz against a 50 MHz clk1x bridge and moved
