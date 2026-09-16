@@ -230,9 +230,14 @@ module sgi_indy #(
     output logic [31:0] dbg_exc_bad,
     output logic [31:0] dbg_rpc,
     output logic        dbg_retire,
-    // The CPU performance counters (docs/50), eight beacon words. See the
+    // The CPU performance counters (docs/50), nine beacon words. See the
     // block that builds them for the layout.
-    output logic [63:0] dbg_perf_bcn [8],
+    output logic [63:0] dbg_perf_bcn [9],
+    // The instruction cache's access stream (simulator --itrace; the board
+    // leaves it unconnected). See cpu.vhd's dbg_ifetch.
+    output logic [32:0] dbg_ifetch,
+    // And the data cache's (--dtrace); see cpu.vhd's dbg_dfetch.
+    output logic [33:0] dbg_dfetch,
 
     // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
     // the top's beacon writer. Pure observation.
@@ -307,7 +312,7 @@ module sgi_indy #(
     logic  [2:0] mem_size;
     logic        fill_grant, fill_data_ready;
     logic [63:0] fill_data;
-    logic  [7:0] cpu_perf;      // the CPU's fill/bus events, for the counters
+    logic  [9:0] cpu_perf;      // the CPU's fill/bus events, for the counters
 
     r4300_wrap u_cpu (
         .clk              (clk),
@@ -336,6 +341,8 @@ module sgi_indy #(
         .dbg_rpc          (dbg_rpc),
         .dbg_retire       (dbg_retire),
         .dbg_perf         (cpu_perf),
+        .dbg_ifetch       (dbg_ifetch),
+        .dbg_dfetch       (dbg_dfetch),
 
         .mem_request      (mem_request),
         .mem_rnw          (mem_rnw),
@@ -906,6 +913,8 @@ module sgi_indy #(
     //   w5 {D-cache writeback beats,     uncached fetches}
     //   w6 {instruction TLB walks,       data TLB walks}
     //   w7 {bus transactions issued,     clocks a transaction was on the bus /64}
+    //   w8 {I-cache fills requested after an instruction TLB walk,
+    //       fill requests the I-cache answered from a line it held}
     //
     // "/64" counters are 38 bits wide and report the top 32 (46 minutes at
     // 50 MHz before they wrap); event counters are plain 32 bits. The stall
@@ -921,7 +930,7 @@ module sgi_indy #(
     logic [37:0] pc_retired, pc_run, pc_st1, pc_st3, pc_st4, pc_tlb,
                  pc_ifill_bus, pc_dfill_bus, pc_bus;
     logic [31:0] pc_ifills, pc_dfills, pc_wbbeats, pc_ufetch, pc_tlbi_walks,
-                 pc_tlbd_walks, pc_memreq;
+                 pc_tlbd_walks, pc_memreq, pc_irefills, pc_icached;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -943,6 +952,8 @@ module sgi_indy #(
             pc_tlbi_walks <= '0;
             pc_tlbd_walks <= '0;
             pc_memreq     <= '0;
+            pc_irefills   <= '0;
+            pc_icached    <= '0;
         end else begin
             pf_tlbd_q <= pf_tlbd;
             pf_tlbi_q <= pf_tlbi;
@@ -962,6 +973,8 @@ module sgi_indy #(
             if (pf_tlbi && !pf_tlbi_q)  pc_tlbi_walks <= pc_tlbi_walks + 32'd1;
             if (pf_tlbd && !pf_tlbd_q)  pc_tlbd_walks <= pc_tlbd_walks + 32'd1;
             if (cpu_perf[4])            pc_memreq     <= pc_memreq + 32'd1;
+            if (cpu_perf[8])            pc_irefills   <= pc_irefills + 32'd1;
+            if (cpu_perf[9])            pc_icached    <= pc_icached + 32'd1;
         end
     end
 
@@ -973,6 +986,7 @@ module sgi_indy #(
     assign dbg_perf_bcn[5] = { pc_wbbeats,         pc_ufetch };
     assign dbg_perf_bcn[6] = { pc_tlbi_walks,      pc_tlbd_walks };
     assign dbg_perf_bcn[7] = { pc_memreq,          pc_bus[37:6] };
+    assign dbg_perf_bcn[8] = { pc_irefills,        pc_icached };
 
     // VDMA beacon words (docs/33): the MC engine, the descriptor, and the
     // Newport's view of what arrived - enough to say from the board which

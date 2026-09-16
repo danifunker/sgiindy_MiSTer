@@ -31,7 +31,8 @@ Usage (on the MiSTer):
     bcnread.py --loop 30 --interval 2      sample for a minute
     bcnread.py --raw          just the hex words
     bcnread.py --perf         (ver >= 10, docs/50) the performance counters,
-                              raw, as one line of 28 integers; two of these
+                              raw, as one line of 28 integers (30 from
+                              ver 11, word 35); two of these
                               a workload apart are the workload's breakdown:
                               perfdiff.py BEFORE AFTER on the host
     bcnread.py --stats        one line: the disk-time counters as seconds
@@ -49,7 +50,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 35
+NWORDS = 36
 CLK_HZ = 50_000_000          # clk_sys; the x64 counters are in units of 64 cycles
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",
@@ -263,7 +264,8 @@ def main():
                 print("perf: no counters (beacon ver %d, need 10)" % bits(ws[0], 47, 40))
             else:
                 vals = []
-                for w in ws[21:35]:
+                last = 36 if bits(ws[0], 47, 40) >= 11 else 35
+                for w in ws[21:last]:
                     vals += [bits(w, 63, 32), bits(w, 31, 0)]
                 print("perf %.3f beat=%d %s" % (time.time(), bits(ws[0], 31, 0),
                                                " ".join(str(v) for v in vals)))

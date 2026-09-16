@@ -21,7 +21,7 @@ flatten to drift out of sync.
 | `cpu_cop0.vhd` | CP0, exceptions, TLB registers |
 | `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | the two TLB lookup engines |
 | `cpu_FPU.vhd`, `cpu_FPU_sqrt.vhd` | the FPU |
-| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 32-byte lines: the D-cache 16 KB physically indexed, the I-cache 8 KB (one R4600 way - see "The instruction cache") |
+| `cpu_instrcache.vhd`, `cpu_datacache.vhd` | primary caches, 32-byte lines, both 16 KB direct-mapped and physically indexed (the I-cache was 8 KB from build 24 to 27 - see "The instruction cache" and "Speed") |
 | `divider.vhd` | integer divider |
 | `functions.vhd`, `export.vhd` | `pFunctions` / `pexport` packages |
 | `SyncFifoFallThroughMLAB.vhd` | the CPU's write FIFO (KI's, with its accept handshake) |
@@ -229,6 +229,20 @@ The proper follow-up is 16 KB as two 8 KB ways with the way selected by
 physical bit 13 (no replacement policy needed, no alias possible); it costs a
 second data-RAM read and a mux on the fetch data path, which is exactly the
 path KI's `FetchIndex` work shortened.
+
+### Speed — the TLB matched in parallel, 16 KB of instruction cache, refills answered from it (docs/50)
+
+Measured on the board with a beacon profiler before any of this was changed:
+the pipeline advanced in about a quarter of the clocks of an IRIX boot, a
+sequential TLB walk held it in 14-19 % of them, and instruction-cache fills in
+about a third.
+
+| File | Change | Why |
+|---|---|---|
+| `cpu_cop0.vhd` | The fields a TLB match needs (VPN2, page mask, ASID, region, global) are shadowed in registers beside the entry RAM (`TLBSH_*`), written in the same clock as `TLBMEM`; all 48 entries are compared at once (`TLB_camHit`, `TLB_camIndex`, lowest index wins). A lookup jumps to the matching entry in its first clock and ends in its second, or ends not-found in its first; TLBP answers in one clock | Upstream compared one entry per clock from the one that matched last. The instruction mini-TLB holds one page and the data mini-TLB four, so an IRIX user program walked up to 48 clocks at every crossing, and every refill walked all 48 before its exception. N64 and KI software barely map anything; IRIX maps every user program |
+| `cpu_instrcache.vhd`, `cpu.vhd` | 16 KB: index bits 13:5 (512 lines), `FetchIndexPhys1/2 = FetchAddrTLBMuxed(13 downto 12) & FetchIndex(11 downto 2)`, the fill index physical | The 8 KB cache was the largest single stall on the board. A physically indexed cache has no colour alias to take at any size, and `Config` has always reported 16 KB |
+| `cpu_instrcache.vhd` | A fill request for a line the cache already holds is answered from it: a third copy of the tags (`itagramf`) read at the fill's line, state `CACHED`, `fill_done` two clocks later with no bus transaction; not taken while a tag write is landing (`tag_wren_a`) | `cpu.vhd` asks for a fill after EVERY instruction TLB walk without a lookup - by then the fetch-path lookup has moved on to the next PC. With a one-page mini-TLB that is a DDR3 line fill for every crossing into another mapped page, 22 per 1000 instructions in a perl loop against 38.7 fills in all (build 28) |
+| `cpu.vhd`, `r4300_wrap.vhd` | `dbg_perf(9 downto 0)` and `dbg_ifetch` ports | Performance-counter events for `sgi_indy.sv` and the simulator's instruction-cache access trace (`--itrace`). Wires only |
 
 ### The memory path — no clock-domain crossing
 

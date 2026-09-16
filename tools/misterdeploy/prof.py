@@ -17,7 +17,7 @@ Each record is <d Q Q Q Q>: seconds since the start, then beacon words 0
 (heartbeat), 10 (PC/cop0), 13 (REX3 VDMA beat counters) and 15 (display line
 cache counters). A full snapshot of every beacon word is written at the start and at
 the end, so the disk-time counters (words 16-20) and the performance
-counters (21-34, ver 10) bracket the window too.
+counters (21-34 from ver 10, 35 from ver 11) bracket the window too.
 tools/misterdeploy/profan.py reads the file on the host.
 
     prof.py --out /tmp/p.bin --secs 60                # one minute at ~1 kHz
@@ -38,7 +38,7 @@ import struct
 import time
 
 BASE = 0x35800000
-NWORDS = 35          # the beacon since ver 10 (docs/50); older fits leave 21..34 stale
+NWORDS = 36          # the beacon since ver 11 (docs/50); older fits leave the rest stale
 IDLE_DEFAULT = "0x88012adc-0x88012b64,0x8802befc-0x8802bfa0"
 HDR = b"SGIPROF2"    # followed by <I nwords>, then the snapshot
 

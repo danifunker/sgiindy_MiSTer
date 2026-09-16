@@ -157,8 +157,23 @@ entity cpu is
       -- writeback beat, 3 an uncached fetch requested (one-clock pulses);
       -- 4 a bus transaction issued (pulse); 5 a bus transaction in flight,
       -- 6 an instruction cache fill in flight, 7 a data cache fill in flight
-      -- (levels). Wires only - nothing inside the CPU reads them.
-      dbg_perf              : out std_logic_vector(7 downto 0) := (others => '0');
+      -- (levels); 8 an instruction cache fill requested after an instruction
+      -- TLB walk, 9 a fill request the instruction cache answered from a line
+      -- it already held (pulses). Wires only - nothing inside the CPU reads
+      -- them.
+      dbg_perf              : out std_logic_vector(9 downto 0) := (others => '0');
+      -- SGI: the instruction cache's access stream, for the simulator's
+      -- --itrace (docs/50). Bit 32 pulses the clock after a fetch looked in
+      -- the cache (the fetch that found its line, or the one that filled it;
+      -- a fetch held for a mini-TLB walk is counted once, when the walk hands
+      -- it back); bits 31:0 are the physical address it looked up. Wires
+      -- only, unconnected on the board.
+      dbg_ifetch            : out std_logic_vector(32 downto 0) := (others => '0');
+      -- SGI: the data cache's access stream, for the simulator's --dtrace
+      -- (docs/50), one clock late: bit 33 pulses for a load or store that
+      -- went to the data cache, bit 32 says it was a store, bits 31:0 are the
+      -- physical address. Unconnected on the board.
+      dbg_dfetch            : out std_logic_vector(33 downto 0) := (others => '0');
 
       mem_request           : out std_logic := '0';
       mem_rnw               : out std_logic := '0'; 
@@ -666,6 +681,9 @@ architecture arch of cpu is
    signal instrcache_data              : std_logic_vector(31 downto 0);
    signal instrcache_fill              : std_logic := '0';
    signal instrcache_fill_done         : std_logic;
+   signal dbg_ifetch_v                 : std_logic := '0';   -- SGI: see dbg_ifetch
+   signal dbg_irefill_v                : std_logic := '0';   -- SGI: see dbg_perf(8)
+   signal instrcache_cached            : std_logic;          -- SGI: see dbg_perf(9)
    signal cache_commandEnableI         : std_logic;
    signal cache_commandEnableD         : std_logic;
    
@@ -2149,6 +2167,7 @@ begin
       fill_addrData     => mem1_addrCompare,   -- SGI: not mem1_address; see its declaration
       fill_addrTag      => mem1_addrCompare,   -- SGI: the fill INDEX is physical too (PIPT), see FetchIndexPhys1
       fill_done         => instrcache_fill_done,
+      fill_cached       => instrcache_cached,   -- SGI
       
       CacheCommandEna   => cache_commandEnableI,
       CacheCommand      => executeCacheCommand,
@@ -2211,6 +2230,8 @@ begin
          instrcache_fill <= '0';
          mem1_request    <= '0';
          TLB_ss_load     <= '0';
+         dbg_ifetch_v    <= '0';   -- SGI
+         dbg_irefill_v   <= '0';   -- SGI
          
          if (reset_93 = '1') then
 
@@ -2274,6 +2295,8 @@ begin
                      useCached_data   <= TLB_instrUseCache and INSTRCACHEON;
                      if (TLB_instrUseCache = '1' and INSTRCACHEON = '1') then
                         instrcache_fill <= '1';
+                        dbg_ifetch_v    <= '1';   -- SGI
+                        dbg_irefill_v   <= '1';   -- SGI
                      else
                         mem1_request    <= '1';
                      end if;
@@ -2306,6 +2329,7 @@ begin
                if (TLB_instrStall = '1') then
                   stall1          <= '1'; 
                elsif (fetchCache = '1') then
+                  dbg_ifetch_v          <= '1';   -- SGI
                   if (instrcache_hit = '0') then
                      instrcache_fill    <= '1';
                      stall1             <= '1';
@@ -5092,6 +5116,19 @@ begin
    dbg_perf(5)  <= '1' when (memstate = MEMSTATE_BUSY) else '0';
    dbg_perf(6)  <= instrcache_active;
    dbg_perf(7)  <= datacache_active;
+   dbg_perf(8)  <= dbg_irefill_v;
+   dbg_perf(9)  <= instrcache_cached;
+   dbg_ifetch   <= dbg_ifetch_v & std_logic_vector(mem1_addrCompare);
+
+   -- The data cache's enables are combinational (the load/store process
+   -- above), so the trace registers them with the address they go with.
+   process (clk93)
+   begin
+      if rising_edge(clk93) then
+         dbg_dfetch <= (datacache_readena or datacache_writeena) & datacache_writeena &
+                       std_logic_vector(datacache_addr);
+      end if;
+   end process;
    dbg_exc_code <= std_logic_vector(dbg_exc_code_u);
    dbg_exc_epc  <= std_logic_vector(dbg_exc_epc_u);
    dbg_exc_bad  <= std_logic_vector(dbg_exc_bad_u);

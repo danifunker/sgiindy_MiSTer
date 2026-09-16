@@ -81,7 +81,12 @@ entity r4300_wrap is
       dbg_retire        : out std_logic;
       -- Fill/writeback/bus-transaction events for the performance counters;
       -- see cpu.vhd's port of the same name.
-      dbg_perf          : out std_logic_vector(7 downto 0);
+      dbg_perf          : out std_logic_vector(9 downto 0);
+      -- The instruction cache's access stream, for the simulator; see
+      -- cpu.vhd's port of the same name.
+      dbg_ifetch        : out std_logic_vector(32 downto 0);
+      -- And the data cache's; see cpu.vhd's dbg_dfetch.
+      dbg_dfetch        : out std_logic_vector(33 downto 0);
 
       -- Memory port. See rtl/cpu/r4300_bus.sv for the byte-lane contract;
       -- it is not the obvious one and it differs between read and write.
@@ -293,6 +298,8 @@ begin
       dbg_rpc               => dbg_rpc,
       dbg_retire            => dbg_retire,
       dbg_perf              => dbg_perf,
+      dbg_ifetch            => dbg_ifetch,
+      dbg_dfetch            => dbg_dfetch,
 
       mem_request           => mem_request,
       mem_rnw               => mem_rnw,

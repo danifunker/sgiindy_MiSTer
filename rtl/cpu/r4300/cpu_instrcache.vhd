@@ -55,6 +55,9 @@ entity cpu_instrcache is
       fill_addrData     : in  unsigned(31 downto 0);
       fill_addrTag      : in  unsigned(31 downto 0);
       fill_done         : out std_logic := '0';
+      -- SGI: pulses with fill_done when the line was already in the cache and
+      -- no DDR3 trip was made (see CACHED below). A performance counter.
+      fill_cached       : out std_logic := '0';
       
       CacheCommandEna   : in  std_logic;
       CacheCommand      : in  unsigned(4 downto 0);
@@ -126,6 +129,21 @@ architecture arch of cpu_instrcache is
    signal read_hit1        : std_logic;
    signal read_hit2        : std_logic;
 
+   -- SGI: A REFILL OF A LINE THE CACHE ALREADY HOLDS IS ANSWERED FROM IT.
+   -- cpu.vhd asks for a fill after EVERY instruction TLB walk, without a
+   -- lookup: the walk ends with the translated address in mem1_addrCompare,
+   -- and the fetch-path lookup (read_index/read_addrCompare) has moved on to
+   -- the next PC by then. The instruction mini-TLB holds ONE page, so every
+   -- fetch that crosses into another mapped page walks - and build 28 on the
+   -- board paid a whole DDR3 line fill (~40 clocks) for each, 22 per 1000
+   -- instructions in a perl loop against 38.7 fills in all (docs/50), mostly
+   -- for lines that were in the cache all along. A third copy of the tags,
+   -- read at the fill's own line, sees that; the request then takes two
+   -- clocks and no bus transaction (state CACHED).
+   signal tag_address_f    : std_logic_vector(8 downto 0);
+   signal tag_q_f          : std_logic_vector(20 downto 0);
+   signal fill_hit         : std_logic;
+
    -- data
    signal fill_grant       : std_logic;
    signal fill_active_2x   : std_logic := '0';
@@ -142,7 +160,8 @@ architecture arch of cpu_instrcache is
    (
       IDLE,
       CLEARCACHE,
-      FILL
+      FILL,
+      CACHED   -- SGI: a fill request for a line already held; see fill_hit
    );
    signal state : tstate := IDLE;
    
@@ -221,6 +240,28 @@ begin
    tag_address_b2 <= std_logic_vector(read_index2(13 downto 5));   -- SGI
    read_hit2      <= '1' when (unsigned(tag_q_b2(19 downto 0)) = read_addrCompare2(31 downto 12) and tag_q_b2(20) = '1') else '0';   -- SGI
 
+   -- SGI: the fill side's own copy of the tags, read at the line a fill
+   -- request names (fill_addrTag and fill_addrData are the same register,
+   -- loaded in the clock the request is). See fill_hit.
+   itagramf : entity mem.RamMLAB
+   generic map
+   (
+      width      => 21,
+      widthad    => 9
+   )
+   port map
+   (
+      inclock    => clk93,
+      wren       => tag_wren_a,
+      data       => tag_data_a,
+      wraddress  => tag_address_a,
+      rdaddress  => tag_address_f,
+      q          => tag_q_f
+   );
+
+   tag_address_f  <= std_logic_vector(fill_addrTag(13 downto 5));
+   fill_hit       <= '1' when (unsigned(tag_q_f(19 downto 0)) = fill_addrData(31 downto 12) and tag_q_f(20) = '1') else '0';
+
    --------- data
    
    -- The KI bridge returns cache-fill beats in the 50 MHz clk1x domain.
@@ -294,6 +335,7 @@ begin
 
          tag_wren_a  <= '0';
          fill_done   <= '0';
+         fill_cached <= '0';   -- SGI
          ram_request <= '0';
          
          if (fill_request = '1') then
@@ -339,9 +381,16 @@ begin
                   elsif (cmd_ena_eff = '1') then
                      cmd_pending    <= '0';   -- SGI: a code this cache ignores
                   elsif (fill_request = '1' or fill_latched = '1') then
-                     state          <= FILL;
-                     ram_request    <= '1';
                      fill_latched   <= '0';
+                     -- SGI: tag_wren_a is a tag write landing at the end of
+                     -- this clock - an invalidate the async read cannot see
+                     -- yet - so a line that has one pending is filled.
+                     if (fill_hit = '1' and tag_wren_a = '0') then
+                        state       <= CACHED;
+                     else
+                        state       <= FILL;
+                        ram_request <= '1';
+                     end if;
                   end if;
                   
                when CLEARCACHE =>
@@ -358,10 +407,18 @@ begin
                      tag_wren_a     <= '1';
                      tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 12));   -- SGI: full tag
                      tag_address_a  <= std_logic_vector(fill_addrTag_sav(13 downto 5));   -- SGI
-                     fill_done      <= '1'; 
+                     fill_done      <= '1';
                   end if;
-                  
-            end case;  
+
+               when CACHED =>
+                  -- SGI: cache_address_b is the fill's line while state is
+                  -- not IDLE, so the word is on read_data in the clock
+                  -- fill_done is, exactly as after a FILL.
+                  state          <= IDLE;
+                  fill_done      <= '1';
+                  fill_cached    <= '1';
+
+            end case;
             
          end if;
 

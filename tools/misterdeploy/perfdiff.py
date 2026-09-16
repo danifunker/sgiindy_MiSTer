@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Two performance-counter readings -> what the machine did between them.
 
-The counters are beacon words 21-34 (ver 10, docs/50): sgi_indy.sv counts the
-CPU's clocks and events, sgiindy.sv the DDR3 port's. `bcnread.py --perf` on
-the board prints one reading as a line of 28 integers; give this two of them
+The counters are beacon words 21-34 (ver 10, docs/50) and 35 (ver 11):
+sgi_indy.sv counts the CPU's clocks and events, sgiindy.sv the DDR3 port's.
+`bcnread.py --perf` on the board prints one reading as a line of 28 integers
+(30 from ver 11); give this two of them
 (or two files holding one each, or a file holding many - the first and last
 are used).
 
@@ -43,15 +44,19 @@ NAMES = [
     "n_ram", "n_fbw",
     "lat_x64", "n_rd",
     "bsy_x64", "n_fbr",
+    "irefills", "icached",   # ver 11
 ]
 
 
 def parse_line(line):
-    m = re.search(r"perf\s+([\d.]+)\s+beat=(\d+)\s+((?:\d+\s*){28})", line)
+    m = re.search(r"perf\s+([\d.]+)\s+beat=(\d+)\s+((?:\d+\s*){28,30})", line)
     if not m:
         return None
     vals = [int(x) for x in m.group(3).split()]
     d = dict(zip(NAMES, vals))
+    d["has_w35"] = len(vals) >= 30
+    for k in NAMES[len(vals):]:
+        d[k] = 0
     d["t"] = float(m.group(1))
     d["beat"] = int(m.group(2))
     return d
@@ -94,6 +99,11 @@ def report(a, b):
                "writeback beats %d (%.1f lines)"
                % (d["dfills"], per_k(d["dfills"]), per(x("dfillbus_x64"), d["dfills"]),
                   d["wbbeats"], d["wbbeats"] / 4.0))
+    if a.get("has_w35") and b.get("has_w35"):
+        out.append("  I-cache fills asked for after an instruction TLB walk %d (%.2f per 1000), "
+                   "answered from a line already held %d (%.1f %%) - no DDR3 trip"
+                   % (d["irefills"], per_k(d["irefills"]), d["icached"],
+                      100.0 * per(d["icached"], d["irefills"])))
     out.append("  TLB walks: instruction %d (%.2f per 1000), data %d (%.2f per 1000), "
                "%.1f clocks per walk"
                % (d["tlbi_walks"], per_k(d["tlbi_walks"]), d["tlbd_walks"],

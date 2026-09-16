@@ -476,7 +476,7 @@ wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
-wire [63:0] perf_bcn [8];   // CPU performance counters (docs/50)
+wire [63:0] perf_bcn [9];   // CPU performance counters (docs/50)
 
 sgi_indy u_core
 (
@@ -830,7 +830,9 @@ ddr3_mux u_mem
 // clocks each master held the port, clocks the CPU and the rasteriser waited
 // for it, transactions, the bridge's latency to a read's first word).
 // bcnread.py --perf turns two readings into a workload's breakdown.
-localparam int BCN_WORDS = 35;
+// ver=11 adds word 35: instruction cache fills requested after an instruction
+// TLB walk, and fill requests the cache answered from a line it already held.
+localparam int BCN_WORDS = 36;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
@@ -890,7 +892,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h0A, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0B, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -925,6 +927,7 @@ assign bcn_src[31] = { mx_q_ram[37:6], mx_q_fbw[37:6] };
 assign bcn_src[32] = { mx_n_ram,       mx_n_fbw };
 assign bcn_src[33] = { mx_c_lat[37:6], mx_n_rd };
 assign bcn_src[34] = { mx_c_bsy[37:6], mx_n_fbr };
+assign bcn_src[35] = perf_bcn[8];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
