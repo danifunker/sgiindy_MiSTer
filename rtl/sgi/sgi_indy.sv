@@ -108,6 +108,11 @@ module sgi_indy #(
     // panics the IRIX installer.
     input  logic [47:0] mac_addr,
 
+    // ---- the MiSTer's clock -----------------------------------------------
+    // hps_io's RTC, straight through to sgi_ds1386.sv, which loads its time
+    // registers from it (docs/51). Zero keeps the part's fixed power-on date.
+    input  logic [64:0] host_rtc,
+
     // ---- main memory -----------------------------------------------------
     output logic        ram_req,
     output logic        ram_we,
@@ -1007,6 +1012,7 @@ module sgi_indy #(
         .reset (reset),
         .mac_addr(mac_addr),
         .ce    (ce),
+        .host_rtc(host_rtc),
         .sel   (bus_req && sel_rtc),
         .we    (bus_we),
         .addr  (bus_addr[14:0]),

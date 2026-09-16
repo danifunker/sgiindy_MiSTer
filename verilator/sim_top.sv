@@ -232,6 +232,10 @@ module sim_top
         // RTC's NVRAM, which is where the PROM reads `eaddr` from, and the
         // IRIX installer dereferences the null it gets back without one.
         .mac_addr      (48'h08_00_69_12_34_56),
+        // No host clock: the DS1386 keeps its fixed power-on date, so the
+        // IRIX boot's console - which prints the date - stays identical run
+        // to run and can be compared against a control.
+        .host_rtc      (65'd0),
         .dbg_raw_index (1'b0),   // --fbindex does this in C++, on the dump
 
         .fbw_req       (fbw_req),

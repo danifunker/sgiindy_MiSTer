@@ -101,6 +101,7 @@ module syn_top (
 
         .ps2_key          (lfsr[52:42]),
         .ps2_mouse        (lfsr[63:39]),
+        .host_rtc         ({1'b0, lfsr}),
 
         .ram_req          (ram_req),
         .ram_we           (ram_we),

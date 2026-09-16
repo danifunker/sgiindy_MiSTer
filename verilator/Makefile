@@ -163,6 +163,16 @@ tb_scsi_cache:
 	   tb_scsi_cache.sv $(RTL)/scsi/scsi_cache.sv
 	./obj_dir_tbc/tb_scsi_cache
 
+# --- the DS1386 against the MiSTer's clock (docs/51) --------------------------
+# rtl/sgi/sgi_ds1386.sv's time registers loaded from hps_io's RTC: every field,
+# the 1940-based year, the weekday, a time sent during reset, resets keeping the
+# time, and software writes still winning.
+#   make -C verilator tb_ds1386
+tb_ds1386:
+	$V --binary --timing $(TBC_W) --top-module tb_ds1386 --Mdir ./obj_dir_tbrtc -o tb_ds1386 \
+	   tb_ds1386.sv $(RTL)/sgi/sgi_ds1386.sv
+	./obj_dir_tbrtc/tb_ds1386
+
 # The bench in the shape sgi_scsi.sv instantiates since build 27: the CD slot
 # cached with a 64-sector window and multi-block on (CACHE_CD = 1, SECT2 = 64,
 # MB_CD = 1).
