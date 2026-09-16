@@ -99,6 +99,8 @@ architecture arch of cpu_datacache is
    
    signal tag_addr_1       : unsigned(31 downto 0) := (others => '0');
    signal tag_addr_low     : unsigned(4 downto 0) := (others => '0');
+   signal read_offset      : unsigned(2 downto 0) := (others => '0');   -- SGI: RW_addr(2:0) as it was in IDLE
+   signal read_offset_mux  : unsigned(2 downto 0);
    signal tag_read_addr    : unsigned(13 downto 0) := (others => '0');
    signal fillAddr         : unsigned(31 downto 0) := (others => '0');
 
@@ -292,8 +294,14 @@ begin
       );
    end generate;
    
-   cache_address_b <= std_logic_vector(tag_read_addr(13 downto 3)) when (state /= IDLE) else 
-                      std_logic_vector(tag_addr_1(13 downto 3)) when (ce_fetch = '0' or write_ena = '1') else 
+   -- SGI: read_ena holds the address like write_ena does. A load no longer
+   -- has to freeze execute (cpu.vhd, LOAD_NO_STALL), so in the load's first
+   -- stage-4 cycle ce_fetch can be '1' and tag_addr already belongs to the
+   -- instruction behind it. The word read on this clock is the one READWAIT
+   -- returns after a store; it has to be the load's own. For a stalled load
+   -- ce_fetch is '0' in that cycle anyway, so this changes nothing there.
+   cache_address_b <= std_logic_vector(tag_read_addr(13 downto 3)) when (state /= IDLE) else
+                      std_logic_vector(tag_addr_1(13 downto 3)) when (ce_fetch = '0' or write_ena = '1' or read_ena = '1') else
                       std_logic_vector(tag_addr(13 downto 3));
                
   
@@ -331,14 +339,21 @@ begin
                       '1' when (writeMode = '0' and state = FILL and ram_done = '1') else 
                       '0';
    
-   read_data       <= cache_q_b                        when (RW_addr(2 downto 0) = "000") else
-                      8x"0"  & cache_q_b(63 downto  8) when (RW_addr(2 downto 0) = "001") else
-                      16x"0" & cache_q_b(63 downto 16) when (RW_addr(2 downto 0) = "010") else
-                      24x"0" & cache_q_b(63 downto 24) when (RW_addr(2 downto 0) = "011") else
-                      32x"0" & cache_q_b(63 downto 32) when (RW_addr(2 downto 0) = "100") else
-                      40x"0" & cache_q_b(63 downto 40) when (RW_addr(2 downto 0) = "101") else
-                      48x"0" & cache_q_b(63 downto 48) when (RW_addr(2 downto 0) = "110") else
-                      56x"0" & cache_q_b(63 downto 56); -- when (RW_addr(2 downto 0) = "111")
+   -- SGI: a read that finishes outside IDLE (READWAIT, WAITSLOW, the end of a
+   -- FILL) shifts by the offset captured when it was issued. RW_addr is
+   -- combinational from cpu.vhd's execute registers, which only hold still
+   -- for the whole read while loads stall execute; with LOAD_NO_STALL they
+   -- carry the next instruction by then.
+   read_offset_mux <= RW_addr(2 downto 0) when (state = IDLE) else read_offset;
+
+   read_data       <= cache_q_b                        when (read_offset_mux = "000") else
+                      8x"0"  & cache_q_b(63 downto  8) when (read_offset_mux = "001") else
+                      16x"0" & cache_q_b(63 downto 16) when (read_offset_mux = "010") else
+                      24x"0" & cache_q_b(63 downto 24) when (read_offset_mux = "011") else
+                      32x"0" & cache_q_b(63 downto 32) when (read_offset_mux = "100") else
+                      40x"0" & cache_q_b(63 downto 40) when (read_offset_mux = "101") else
+                      48x"0" & cache_q_b(63 downto 48) when (read_offset_mux = "110") else
+                      56x"0" & cache_q_b(63 downto 56); -- when (read_offset_mux = "111")
    
    CachecommandStall <= '1' when (CacheCommandEna = '1' and CacheCommand = 5x"01") else
                         '1' when (CacheCommandEna = '1' and CacheCommand = 5x"05") else
@@ -409,7 +424,8 @@ begin
                   tag_read_addr  <= tag_addr_1(13 downto 0);
                   isCommand      <= '0'; 
                   isWB           <= '0'; 
-                  ram_reqAddr    <= RW_addr(31 downto 0); 
+                  ram_reqAddr    <= RW_addr(31 downto 0);
+                  read_offset    <= RW_addr(2 downto 0);   -- SGI: see read_data
                   tag_data_cmd   <= (write_ena and (not write_through_in)) &
                                     '1' & std_logic_vector(RW_addr(31 downto 12)); -- default for fill
                   tag_addr_cmd   <= std_logic_vector(tag_addr_1(13 downto 5)); 

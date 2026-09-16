@@ -19,6 +19,10 @@ entity cpu is
       -- KI instruction fetches use the unmapped KSEG0/KSEG1 path. The data TLB
       -- remains enabled for mapped data accesses.
       INSTR_KSEG_ONLY       : boolean := false;
+      -- SGI: let a load leave execute without freezing it for a clock when the
+      -- instruction behind it neither reads the loaded register nor touches
+      -- memory. See loadMayRun.
+      LOAD_NO_STALL         : boolean := true;
       -- Build the pre-event execution trace.
       --
       -- The trace is a diagnostic, and it is not free. debug_trace_bus is 896
@@ -930,6 +934,8 @@ architecture arch of cpu is
    signal executeNew                   : std_logic := '0';
    signal executeIgnoreNext            : std_logic := '0';
    signal executeStallFromMEM          : std_logic := '0';
+   signal loadMayRun                   : std_logic;         -- SGI: LOAD_NO_STALL
+   signal executeLoadNoStall           : std_logic := '0';  -- SGI: LOAD_NO_STALL
    signal resultWriteEnable            : std_logic := '0';
    signal executeBranchdelaySlot       : std_logic := '0';
    signal resultTarget                 : unsigned(4 downto 0) := (others => '0');
@@ -3611,6 +3617,44 @@ begin
     
    exceptionNewPC <= '1' when (decodeExcType = EXCTYPE_PC and value1(1 downto 0) > 0) else '0';
     
+   -- SGI: may the load in decode leave execute without stalling it?
+   --
+   -- Every load used to hold execute for a clock (stall3 until the data cache
+   -- answers), so that the instruction behind it could be given the loaded
+   -- value by forwarding. Most never need it: over IRIX's kernel text 24.8 %
+   -- of instructions are loads, and 80 % of those are followed by an
+   -- instruction that does not read the loaded register (docs/51 section 6).
+   -- For those the load goes to stage 4 and the next instruction executes in
+   -- the same clock.
+   --
+   -- opcodeCacheMuxed is that next instruction: it is what decode latches on
+   -- the same stall = 0 clock that moves this load into execute. Its rs and rt
+   -- fields are compared raw - wherever a format uses them for something
+   -- else the answer is only more conservative. It must also not be a memory
+   -- instruction (primary opcode 0x20-0x3F, and LDL/LDR at 0x1A/0x1B), which
+   -- keeps the data cache serving one access at a time exactly as before:
+   -- nothing behind the load reaches stage 4 until the load is done there.
+   -- CACHE (0x2F) is excluded by the same rule.
+   --
+   -- What a load in stage 4 still needs once execute has moved on:
+   -- * forwarding: the instruction then in decode is the one after next, so
+   --   stage 4 compares decSource rather than decodeSource (executeLoadNoStall)
+   -- * the byte offset its read is shifted by, which cpu_datacache.vhd now
+   --   captures when the read is issued, and the data-RAM address in the
+   --   clock the read is issued, which read_ena now holds
+   -- * everything else: the writeback* copies stage 4 already uses while
+   --   stall4 is set, because a read that misses holds stall4 - and the
+   --   uncached path's replay, which latches its own address
+   --
+   -- Not for LWC1/LDC1 (the FPU register is not forwarded by this path), a
+   -- mini-TLB miss (TLB_dataStall takes the stalled path back), or a load
+   -- that faults (EXEExceptionMem).
+   loadMayRun <= '1' when (LOAD_NO_STALL and
+                           decodeCOP1ReadEnable = '0' and
+                           opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101" and
+                           decSource1 /= decodeTarget and decSource2 /= decodeTarget) else
+                 '0';
+
    ---------------------- COP ------------------                  
    FPU_command_ena      <= decodeFPUCommandEnable  when (exception = '0' and stall = 0 and executeIgnoreNext = '0' and decodeNew = '1') else '0';
    FPU_TransferEna      <= decodeFPUTransferEnable when (exception = '0' and stall = 0 and executeIgnoreNext = '0' and decodeNew = '1') else '0';
@@ -3871,6 +3915,7 @@ begin
             executeNew                    <= '0';
             executeIgnoreNext             <= '0';
             executeStallFromMEM           <= '0';
+            executeLoadNoStall            <= '0';   -- SGI
 
             resultWriteEnable             <= '0';
             executeBranchdelaySlot        <= '0';
@@ -3983,6 +4028,7 @@ begin
             if (stall = 0) then
             
                executeNew              <= '0';
+               executeLoadNoStall      <= '0';   -- SGI
                executeICacheEnable     <= '0';
                executeDCacheEnable     <= '0';
                executeSetLL            <= '0';
@@ -4212,7 +4258,9 @@ begin
                      if (decodehiUpdate = '1') then hi <= value1; end if;
                      if (decodeloUpdate = '1') then lo <= value1; end if;
                      
-                     if ((EXEExceptionMem = '0' and decodeMemReadEnable = '1') or decodeCOP0ReadEnable = '1' or decodeCOP2ReadEnable = '1') then
+                     if (EXEExceptionMem = '0' and decodeMemReadEnable = '1' and loadMayRun = '1') then
+                        executeLoadNoStall  <= '1';   -- SGI: see loadMayRun
+                     elsif ((EXEExceptionMem = '0' and decodeMemReadEnable = '1') or decodeCOP0ReadEnable = '1' or decodeCOP2ReadEnable = '1') then
                         stall3              <= '1';
                         executeStallFromMEM <= '1';
                      end if;
@@ -4276,6 +4324,9 @@ begin
             if (TLB_dataStall = '1') then
                stall3              <= '1';
                executeStallFromMEM <= '0';
+               -- SGI: a load that waits for a TLB walk takes the stalled path
+               -- when TLB_dataUnStall sets executeStallFromMEM.
+               executeLoadNoStall  <= '0';
             end if;
 
          end if;
@@ -4560,8 +4611,17 @@ begin
                   end if;
                   
                   if (executeMemReadEnable = '1' and executeCOP1ReadEnable = '0') then
-                     if (decodeSource1 > 0 and resultTarget = decodeSource1) then writebackForwardValue1 <= '1'; end if;
-                     if (decodeSource2 > 0 and resultTarget = decodeSource2) then writebackForwardValue2 <= '1'; end if;
+                     if (executeLoadNoStall = '1') then
+                        -- SGI: execute did not stop for this load, so the
+                        -- instruction behind it leaves decode on this clock
+                        -- too, and the one that reads writebackData next is
+                        -- being decoded now - as for any other instruction.
+                        if (decSource1 > 0 and resultTarget = decSource1) then writebackForwardValue1 <= '1'; end if;
+                        if (decSource2 > 0 and resultTarget = decSource2) then writebackForwardValue2 <= '1'; end if;
+                     else
+                        if (decodeSource1 > 0 and resultTarget = decodeSource1) then writebackForwardValue1 <= '1'; end if;
+                        if (decodeSource2 > 0 and resultTarget = decodeSource2) then writebackForwardValue2 <= '1'; end if;
+                     end if;
                   end if;
                   
                   if (executeMemReadEnable = '1' and
