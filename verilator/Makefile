@@ -359,9 +359,10 @@ ddr3test:
 	   --x-assign fast --x-initial fast --noassert \
 	   -o Vddr3_mux $(RTL)/mister/ddr3_mux.sv tb_ddr3.cpp
 
-# The same bench with the display's bursts split into 3-word reads, so the
-# sub-burst path (docs/50) is exercised - the bench's display bursts are
-# 1-16 words and the shipping FBR_SUB of 16 would never split one.
+# The same bench with the display's bursts split into 3-word reads. Written
+# when the shipping FBR_SUB was 16, which the bench's 1-16-word display bursts
+# never split; the shipping value is 4 since docs/51, so `ddr3test` splits
+# them too and this is the odd-sized case.
 ddr3test_sub:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3sub --top-module ddr3_mux \
 	   -GFBR_SUB=3 -GFBR_AHEAD=2 \
