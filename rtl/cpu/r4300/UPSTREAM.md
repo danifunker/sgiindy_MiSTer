@@ -90,7 +90,7 @@ step would put a generated copy in the synthesis path.
 | `cpu_instrcache.vhd` | A `cache` command that arrives while the cache is FILLING is latched and retired when the fill ends | It used to be dropped: IRIX's flush loop's own fetches start fills, a fraction of every flush was lost, and the dynamic linker executed a page it had just relocated with the bytes that were there before — `init` died with signal 11 |
 | `cpu_FPU.vhd` | An exactly-zero sum keeps the operands' sign when they agree | `(-0) + (-0)` was `+0`. IEEE 754 §6.3. `fpu/signed_zero`, `fpu/double_signed_zero` |
 | `cpu_FPU.vhd` | Divide-by-zero is not raised for `inf / 0` | It is only for a finite dividend. `fpu/vec_arith_single`, `fpu/vec_arith_double` - IRIS fails these too |
-| `cpu_FPU.vhd` | comment only: the `cvt.s.l` / `cvt.d.l` 56-bit truncation | Known limitation, diagnosed but not fixed. `fpu/vec_cvt_from_l` |
+| `cpu_FPU.vhd` | `cvt.s.l` / `cvt.d.l` raise Unimplemented Operation for a source outside [-2^53, 2^53] (`INT64_MAX` / `INT64_MIN`); upstream's bounds are the N64 R4300's, ±2^55 | Measured on an Indy R4400 rev 6.0 and an R5000 rev 1.0, byte-identical: 2^40 + 1 converts, 2^53 + 1 and 2^62 + 2^10 trap and write nothing, in both precisions. The "56-bit truncation" once noted here was never reachable - anything that wide trapped before the datapath saw it. `fpu/vec_cvt_from_l` |
 
 ### Reverted — "corrections" the hardware-validated suite proved wrong
 

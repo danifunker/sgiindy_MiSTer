@@ -82,8 +82,13 @@ architecture arch of cpu_FPU is
    constant OP_C_LE     : unsigned(5 downto 0) := 6x"3E";
    constant OP_C_NGT    : unsigned(5 downto 0) := 6x"3F";
    
-   constant INT64_MAX   : signed(63 downto 0)  := x"0080000000000000";
-   constant INT64_MIN   : signed(63 downto 0)  := x"FF80000000000000";
+   -- SGI: cvt.s.l / cvt.d.l refuse a source outside [-2^53, 2^53] with
+   -- Unimplemented Operation. Upstream's bounds are the N64 R4300's, +-2^55;
+   -- an Indy R4400 rev 6.0 and an R5000 rev 1.0 both trap 2^53 + 1 and 2^62
+   -- and convert 2^40 + 1 (../iris cpu-tests, fpu/vec_cvt_from_l). Compared
+   -- as `>= INT64_MAX` and `< INT64_MIN` below, hence the + 1.
+   constant INT64_MAX   : signed(63 downto 0)  := x"0020000000000001";
+   constant INT64_MIN   : signed(63 downto 0)  := x"FFE0000000000000";
    
    signal csr     : unsigned(24 downto 0) := (others => '0'); 
    alias csr_roundmode              is csr(1 downto 0);
@@ -1647,16 +1652,6 @@ begin
          CISD_stage3 <= CISD_stage2;
          
          -- stage 0
-         --
-         -- SGI KNOWN LIMITATION: cvt.s.l / cvt.d.l truncate the source to its
-         -- low 56 bits, so any |value| >= 2^56 converts to the wrong number.
-         -- The whole normalise-and-round datapath below is 57 bits wide
-         -- (clz_value, shifter_input, the leading-zero count), which is enough
-         -- for a double's 53-bit significand but not for a 64-bit integer's
-         -- magnitude. Widening it means widening the shifter and re-deriving
-         -- the sticky bit, since the suite checks the Inexact flag as well as
-         -- the value - not a change worth making blind.
-         -- cpu-tests: fpu/vec_cvt_from_l, vector 6 (2^62 + 1024).
          if (command_ena = '1' and OPgroup(2) = '1') then
             if (bit64 = '1') then
                clz_value <= unsigned(abs(resize(signed(command_op1(55 downto 0)), 57)));
