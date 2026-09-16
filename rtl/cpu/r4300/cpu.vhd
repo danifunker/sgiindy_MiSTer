@@ -2949,39 +2949,6 @@ begin
                            decodeExcCode           <= x"B";
                            decodeExcCOP            <= "01";
                         end if;
-
-                        -- SGI: the MIPS IV COP1 function codes must raise
-                        -- Reserved Instruction on a MIPS III part.
-                        --
-                        -- Upstream lets them fall through to the FPU, whose
-                        -- decoder answers `when others => unimplemented`, so
-                        -- they arrive as a Floating-Point exception with
-                        -- FCSR.Cause.E instead. That reading is defensible for
-                        -- an operation the FPU merely does not implement -
-                        -- which is how the R4300 is left to behave - but these
-                        -- five are not in the MIPS III instruction set at all,
-                        -- and software probes for MIPS IV by executing one and
-                        -- catching the trap. Getting RI wrong makes an R4400
-                        -- look like an R5000.
-                        --
-                        -- Only the MIPS IV additions are listed. Function codes
-                        -- that are reserved in MIPS III as well are left to the
-                        -- FPU's Unimplemented Operation, which is what the
-                        -- manual asks for and what already works.
-                        -- cpu-tests: mips4/recip_rsqrt(_d), mips4/fp_cond_move_s(_d).
-                        if (PRESENT_AS_R4600 and COP1_enable = '1' and decSource1(4) = '1') then
-                           case (to_integer(decFunct)) is
-                              when 16#11# |   -- MOVF.fmt / MOVT.fmt
-                                   16#12# |   -- MOVZ.fmt
-                                   16#13# |   -- MOVN.fmt
-                                   16#15# |   -- RECIP.fmt
-                                   16#16# =>  -- RSQRT.fmt
-                                 decodeFPUCommandEnable <= '0';
-                                 decodeExcType          <= EXCTYPE_DECODE;
-                                 decodeExcCode          <= x"A";
-                              when others => null;
-                           end case;
-                        end if;
                        
                      when 16#12# => -- COP2
                         -- SGI: an R4000/R4400 has no coprocessor 2 at all, so
