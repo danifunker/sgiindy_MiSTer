@@ -1,0 +1,414 @@
+Jul 26 03:01:10 6F:IRIS syslogd: restart
+Jul 26 03:01:10 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 03:01:10 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 03:01:10 2A:IRIS unix: All Rights Reserved.
+Jul 26 03:01:10 2A:IRIS unix: 
+Jul 26 03:01:10 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 03:01:10 2A:IRIS unix: 
+Jul 26 03:01:15 3A:IRIS network: WARNING: IRIS's Internet address is the default.
+Jul 26 03:01:15 3A:IRIS network: WARNING: Using standalone network mode.
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:01:25 3D:IRIS last message repeated 3 times
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:01:25 3D:IRIS inetd[147]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:01:27 5B:IRIS sendmail: starting
+Jul 26 03:01:27 2C:IRIS sendmail[184]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:01:27 5B:IRIS sendmail: 554 /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured^M
+Jul 26 03:01:27 2C:IRIS sendmail[181]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:01:36 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 10_Tt_record), may not function correctly
+Jul 26 03:02:00 6B:IRIS Xsession: root: login
+Jul 26 03:02:01 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 03:04:57 6B:IRIS Xsession: root: logout
+Jul 26 03:04:58 3A:IRIS INFO: The system is shutting down.
+Jul 26 03:04:58 3A:IRIS INFO: Please wait.
+Jul 26 03:05:00 3F:IRIS syslogd: going down on signal 15
+Jul 26 03:05:08 6F:IRIS syslogd: restart
+Jul 26 03:05:08 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 03:05:08 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 03:05:08 2A:IRIS unix: All Rights Reserved.
+Jul 26 03:05:08 2A:IRIS unix: 
+Jul 26 03:05:08 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 03:05:08 2A:IRIS unix: 
+Jul 26 03:05:08 4A:IRIS unix: WARNING: time of day clock behind file system time--resetting time
+Jul 26 03:05:08 4A:IRIS unix: WARNING: CHECK AND RESET THE DATE!
+Jul 26 03:05:13 3A:IRIS network: WARNING: IRIS's Internet address is the default.
+Jul 26 03:05:13 3A:IRIS network: WARNING: Using standalone network mode.
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:05:23 3D:IRIS last message repeated 3 times
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:05:23 3D:IRIS inetd[144]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:05:24 5B:IRIS sendmail: starting
+Jul 26 03:05:24 5B:IRIS sendmail: 554 /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured^M
+Jul 26 03:05:24 2C:IRIS sendmail[175]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:05:24 2C:IRIS sendmail[178]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:05:30 3D:IRIS objectserver[365]: printer verify: unable to get printer list
+Jul 26 03:05:32 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 03:05:39 6B:IRIS Xsession: root: login
+Jul 26 03:05:40 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 03:08:06 3D:IRIS mediad: could not unmount /dev/dsk/dks0d4s7, No such file or directory
+Jul 26 03:09:09 5E:IRIS login[474]: failed: umount on /dev/ttyd1
+Jul 26 03:09:33 6B:IRIS Xsession: root: logout
+Jul 26 03:09:33 6B:IRIS Xsession: root: logout
+Jul 26 03:09:35 3A:IRIS INFO: The system is shutting down.
+Jul 26 03:09:35 3A:IRIS INFO: Please wait.
+Jul 26 03:09:36 3F:IRIS syslogd: going down on signal 15
+Jul 26 03:09:45 6F:IRIS syslogd: restart
+Jul 26 03:09:45 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 03:09:45 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 03:09:45 2A:IRIS unix: All Rights Reserved.
+Jul 26 03:09:45 2A:IRIS unix: 
+Jul 26 03:09:45 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 03:09:45 2A:IRIS unix: 
+Jul 26 03:09:45 4A:IRIS unix: WARNING: time of day clock behind file system time--resetting time
+Jul 26 03:09:45 4A:IRIS unix: WARNING: CHECK AND RESET THE DATE!
+Jul 26 03:09:50 3A:IRIS network: WARNING: IRIS's Internet address is the default.
+Jul 26 03:09:50 3A:IRIS network: WARNING: Using standalone network mode.
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:10:00 3D:IRIS last message repeated 3 times
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:10:00 3D:IRIS inetd[144]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:10:01 5B:IRIS sendmail: starting
+Jul 26 03:10:01 5B:IRIS sendmail: 554 /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured^M
+Jul 26 03:10:01 2C:IRIS sendmail[175]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:10:01 2C:IRIS sendmail[178]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:10:08 3D:IRIS objectserver[365]: printer verify: unable to get printer list
+Jul 26 03:10:09 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ^HL^_V), may not function correctly
+Jul 26 03:10:17 6B:IRIS Xsession: EZsetup: login
+Jul 26 03:10:17 3B:IRIS Xsession: EZsetup: user "EZsetup": cannot chdir to home "/var/sysadmdesktop/EZsetup" (err 13), using "/"
+Jul 26 03:10:17 3B:IRIS Xsession: EZsetup: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 03:10:17 6B:IRIS Xsession: EZsetup: logout
+Jul 26 03:10:22 6B:IRIS Xsession: EZsetup: login
+Jul 26 03:10:22 3B:IRIS Xsession: EZsetup: user "EZsetup": cannot chdir to home "/var/sysadmdesktop/EZsetup" (err 13), using "/"
+Jul 26 03:10:22 3B:IRIS Xsession: EZsetup: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 03:10:22 6B:IRIS Xsession: EZsetup: logout
+Jul 26 03:10:29 6B:IRIS Xsession: root: login
+Jul 26 03:10:30 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 03:10:44 3D:IRIS objectserver[365]: printer verify: unable to get printer list
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:11:55 3D:IRIS last message repeated 3 times
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:11:55 3D:IRIS inetd[581]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:12:02 5D:IRIS timed[585]: This machine is master
+Jul 26 03:12:02 6B:IRIS Xsession: root: logout
+Jul 26 03:12:02 6B:IRIS Xsession: root: logout
+Jul 26 03:12:04 3A:IRIS INFO: The system is shutting down.
+Jul 26 03:12:04 3A:IRIS INFO: Please wait.
+Jul 26 03:12:05 3F:IRIS syslogd: going down on signal 15
+Jul 26 03:12:12 6F:IRIS syslogd: restart
+Jul 26 03:12:12 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 03:12:12 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 03:12:12 2A:IRIS unix: All Rights Reserved.
+Jul 26 03:12:12 2A:IRIS unix: 
+Jul 26 03:12:12 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 03:12:12 2A:IRIS unix: 
+Jul 26 03:12:12 4A:IRIS unix: WARNING: time of day clock behind file system time--resetting time
+Jul 26 03:12:12 4A:IRIS unix: WARNING: CHECK AND RESET THE DATE!
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:12:18 3D:IRIS last message repeated 3 times
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:12:18 3D:IRIS inetd[170]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:12:19 5B:IRIS sendmail: starting
+Jul 26 03:12:19 5B:IRIS sendmail: 554 /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured^M
+Jul 26 03:12:19 2C:IRIS sendmail[204]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:12:19 2C:IRIS sendmail[207]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:12:25 5D:IRIS timed[174]: This machine is master
+Jul 26 03:12:27 3D:IRIS objectserver[394]: printer verify: unable to get printer list
+Jul 26 03:12:28 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 03:12:35 6B:IRIS Xsession: EZsetup: login
+Jul 26 03:12:35 3B:IRIS Xsession: EZsetup: user "EZsetup": cannot chdir to home "/var/sysadmdesktop/EZsetup" (err 13), using "/"
+Jul 26 03:12:35 3B:IRIS Xsession: EZsetup: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 03:12:35 6B:IRIS Xsession: EZsetup: logout
+Jul 26 03:12:39 6B:IRIS Xsession: root: login
+Jul 26 03:12:39 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 03:53:57 6B:IRIS Xsession: root: logout
+Jul 26 03:53:57 6B:IRIS Xsession: root: logout
+Jul 26 03:53:59 3A:IRIS INFO: The system is shutting down.
+Jul 26 03:53:59 3A:IRIS INFO: Please wait.
+Jul 26 03:53:59 1D:IRIS prngd[1000]: No object at position /var/run/egd-pool: No such file or directory
+Jul 26 03:54:01 3F:IRIS syslogd: going down on signal 15
+Jul 26 03:54:08 6F:IRIS syslogd: restart
+Jul 26 03:54:08 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 03:54:08 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 03:54:08 2A:IRIS unix: All Rights Reserved.
+Jul 26 03:54:08 2A:IRIS unix: 
+Jul 26 03:54:08 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 03:54:08 2A:IRIS unix: 
+Jul 26 03:54:08 4A:IRIS unix: WARNING: time of day clock behind file system time--resetting time
+Jul 26 03:54:08 4A:IRIS unix: WARNING: CHECK AND RESET THE DATE!
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 03:54:11 3D:IRIS last message repeated 3 times
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 03:54:11 3D:IRIS inetd[170]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 03:54:12 5B:IRIS sendmail: starting
+Jul 26 03:54:12 2C:IRIS sendmail[207]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:54:12 5B:IRIS sendmail: 554 /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured^M
+Jul 26 03:54:12 2C:IRIS sendmail[204]: NOQUEUE: SYSERR(root): /etc/sendmail.cf: line 146: illegal domain (.BAR.FOO.COM) configured
+Jul 26 03:54:18 5D:IRIS timed[174]: This machine is master
+Jul 26 03:54:22 3D:IRIS prngd[322]: Info: Random pool not (yet) seeded
+Jul 26 03:54:24 5D:IRIS prngd[369]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Jul 26 03:54:24 5D:IRIS prngd[369]: have 7 out of 200 filedescriptors open
+Jul 26 03:54:29 3D:IRIS objectserver[516]: printer verify: unable to get printer list
+Jul 26 03:54:30 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 03:54:40 6B:IRIS Xsession: root: login
+Jul 26 03:54:40 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 07:02:46 6B:IRIS Xsession: root: logout
+Jul 26 07:02:47 6B:IRIS Xsession: root: logout
+Jul 26 07:02:48 3A:IRIS INFO: The system is shutting down.
+Jul 26 07:02:48 3A:IRIS INFO: Please wait.
+Jul 26 07:06:59 5E:IRIS lboot: Automatically reconfiguring the operating system
+Jul 26 07:07:06 5E:IRIS lboot: Reboot to start using the reconfigured kernel
+Jul 26 07:07:06 3F:IRIS syslogd: going down on signal 15
+Jul 26 07:07:26 6F:IRIS syslogd: restart
+Jul 26 07:07:26 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 07:07:26 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 07:07:26 2A:IRIS unix: All Rights Reserved.
+Jul 26 07:07:26 2A:IRIS unix: 
+Jul 26 07:07:26 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 07:07:26 2A:IRIS unix: 
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 07:07:29 3D:IRIS last message repeated 3 times
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 07:07:29 3D:IRIS inetd[162]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 07:07:30 5B:IRIS sendmail: starting
+Jul 26 07:07:32 6C:IRIS sendmail[208]: NOQUEUE: --> 050 WARNING: local host name (IRIS) is not qualified; fix $j in config file
+Jul 26 07:07:32 7C:IRIS sendmail[228]: NOQUEUE: disconnect level 2
+Jul 26 07:07:32 7C:IRIS sendmail[228]: NOQUEUE: in background, pid=228
+Jul 26 07:07:32 6C:IRIS sendmail[228]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Jul 26 07:07:32 6C:IRIS sendmail[228]: sgi_getla: la 0 cnt 3 rtn 3
+Jul 26 07:07:32 7C:IRIS sendmail[229]: runqueue /var/spool/mqueue, pid=229, forkflag=1
+Jul 26 07:07:32 7C:IRIS sendmail[229]: NOQUEUE: disconnect level 1
+Jul 26 07:07:32 7C:IRIS sendmail[229]: NOQUEUE: in background, pid=229
+Jul 26 07:07:32 7C:IRIS sendmail[228]: NOQUEUE: dropenvelope, e_flags=0x1, OpMode=d, pid=228
+Jul 26 07:07:32 6C:IRIS sendmail[228]: sgi_getla: la 0 cnt 4 rtn 4
+Jul 26 07:07:32 6C:IRIS sendmail[228]: sgi_getla: la 0 cnt 4 rtn 4
+Jul 26 07:07:32 6C:IRIS sendmail[228]: accepting connections on port 25
+Jul 26 07:07:34 7C:IRIS sendmail[229]: NOQUEUE: finis, pid=229
+Jul 26 07:07:35 5D:IRIS timed[167]: This machine is master
+Jul 26 07:07:42 5D:IRIS prngd[620]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Jul 26 07:07:42 5D:IRIS prngd[620]: have 7 out of 200 filedescriptors open
+Jul 26 07:07:48 3D:IRIS objectserver[855]: printer verify: unable to get printer list
+Jul 26 07:07:48 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 07:08:02 6B:IRIS Xsession: root: login
+Jul 26 07:08:03 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 07:09:56 5B:IRIS makewhatis: /usr/share/catman/p_man/cat3/standard/unaligned.z: No such file or directory
+Jul 26 07:24:08 6C:IRIS sendmail[228]: sgi_getla: la 1 cnt 1 rtn 2
+Jul 26 07:24:08 7C:IRIS sendmail[27819]: runqueue /var/spool/mqueue, pid=27819, forkflag=1
+Jul 26 07:24:08 7C:IRIS sendmail[27819]: NOQUEUE: disconnect level 1
+Jul 26 07:24:08 7C:IRIS sendmail[27819]: NOQUEUE: in background, pid=27819
+Jul 26 07:24:08 7C:IRIS sendmail[27819]: NOQUEUE: finis, pid=27819
+Jul 26 07:26:53 6B:IRIS Xsession: root: logout
+Jul 26 07:26:57 6B:IRIS Xsession: EZsetup: login
+Jul 26 07:26:57 3B:IRIS Xsession: EZsetup: user "EZsetup": cannot chdir to home "/var/sysadmdesktop/EZsetup" (err 13), using "/"
+Jul 26 07:26:57 3B:IRIS Xsession: EZsetup: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 07:26:57 6B:IRIS Xsession: EZsetup: logout
+Jul 26 07:27:00 6B:IRIS Xsession: 4Dgifts: login
+Jul 26 07:27:00 3B:IRIS Xsession: 4Dgifts: user "4Dgifts": cannot chdir to home "/usr/people/4Dgifts" (err 13), using "/"
+Jul 26 07:27:00 3B:IRIS Xsession: 4Dgifts: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 07:27:00 6B:IRIS Xsession: 4Dgifts: logout
+Jul 26 07:27:03 6B:IRIS Xsession: demos: login
+Jul 26 07:27:03 3B:IRIS Xsession: demos: user "demos": cannot chdir to home "/usr/demos" (err 13), using "/"
+Jul 26 07:27:03 3B:IRIS Xsession: demos: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 07:27:03 6B:IRIS Xsession: demos: logout
+Jul 26 07:27:05 6B:IRIS Xsession: guest: login
+Jul 26 07:27:05 3B:IRIS Xsession: guest: user "guest": cannot chdir to home "/usr/people/guest" (err 13), using "/"
+Jul 26 07:27:05 3B:IRIS Xsession: guest: Session "/var/X11/xdm/Xsession" execution failed (err 13)
+Jul 26 07:27:05 6B:IRIS Xsession: guest: logout
+Jul 26 07:27:08 6B:IRIS Xsession: root: login
+Jul 26 07:27:08 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 07:27:28 3D:IRIS objectserver[855]: printer verify: unable to get printer list
+Jul 26 07:31:20 6B:IRIS Xsession: root: logout
+Jul 26 07:31:22 6B:IRIS Xsession: EZsetup: login
+Jul 26 07:31:30 6B:IRIS Xsession: EZsetup: logout
+Jul 26 07:31:32 6B:IRIS Xsession: 4Dgifts: login
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [1] 28106
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [1]    Done                 wait
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [1] 28107
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [1]    Done                 xrdb -merge /usr/people/4Dgifts/.Xdefaults_1280
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [1] 28110
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [2] 28112
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [3] 28113
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [4] 28115
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [5] 28116
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [5]    Done                 xset -art 40 -ari 3
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [4]    Done                 xwsh -title console -icontitle console -geometry 80x24+8+655 -cursorfg 3
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [3]    Done                 xwsh -title `hostname` -geometry 80x40+464+140 -fn  ...
+Jul 26 07:31:44 6B:IRIS Xsession: 4Dgifts: [3] 28139
+Jul 26 07:31:45 6B:IRIS Xsession: 4Dgifts: [4] 28140
+Jul 26 07:32:13 6B:IRIS Xsession: 4Dgifts: [3]    Done                 env GLRES=*geometry: 99x90+366-940 /usr/sbin/mailbox -m  ...
+Jul 26 07:32:13 6B:IRIS Xsession: 4Dgifts: [1] 28157
+Jul 26 07:32:14 6B:IRIS Xsession: 4Dgifts: logout
+Jul 26 07:32:21 6B:IRIS Xsession: root: login
+Jul 26 07:32:21 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 07:35:14 6B:IRIS Xsession: root: logout
+Jul 26 07:35:17 6B:IRIS Xsession: user: login
+Jul 26 07:35:17 6B:IRIS Xsession: user: access control disabled, clients can connect from any host
+Jul 26 07:38:46 6B:IRIS Xsession: user: logout
+Jul 26 07:38:46 6B:IRIS Xsession: user: logout
+Jul 26 07:38:47 3A:IRIS INFO: The system is shutting down.
+Jul 26 07:38:47 3A:IRIS INFO: Please wait.
+Jul 26 07:38:48 7C:IRIS sendmail[228]: NOQUEUE: interrupt
+Jul 26 07:42:44 5E:IRIS lboot: Automatically reconfiguring the operating system
+Jul 26 07:42:49 5E:IRIS lboot: Reboot to start using the reconfigured kernel
+Jul 26 07:42:49 3F:IRIS syslogd: going down on signal 15
+Jul 26 08:01:35 6F:IRIS syslogd: restart
+Jul 26 08:01:36 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 08:01:36 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 08:01:36 2A:IRIS unix: All Rights Reserved.
+Jul 26 08:01:36 2A:IRIS unix: 
+Jul 26 08:01:36 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 08:01:36 2A:IRIS unix: 
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 08:01:39 3D:IRIS last message repeated 3 times
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 08:01:39 3D:IRIS inetd[162]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 08:01:40 5B:IRIS sendmail: starting
+Jul 26 08:01:45 5D:IRIS timed[166]: This machine is master
+Jul 26 08:01:46 6C:IRIS sendmail[625]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Jul 26 08:01:49 5D:IRIS prngd[697]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Jul 26 08:01:49 5D:IRIS prngd[697]: have 7 out of 200 filedescriptors open
+Jul 26 08:01:56 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 08:02:11 6B:IRIS Xsession: root: login
+Jul 26 08:02:11 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 08:02:24 6B:IRIS Xsession: root: logout
+Jul 26 08:02:25 3A:IRIS INFO: The system is shutting down.
+Jul 26 08:02:25 3A:IRIS INFO: Please wait.
+Jul 26 08:02:28 3F:IRIS syslogd: going down on signal 15
+Jul 26 08:03:01 6F:IRIS syslogd: restart
+Jul 26 08:03:01 2A:IRIS unix: [WIRIX Release 5.3
+Jul 26 08:03:01 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 26 08:03:01 2A:IRIS unix: All Rights Reserved.
+Jul 26 08:03:01 2A:IRIS unix: 
+Jul 26 08:03:01 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 26 08:03:01 2A:IRIS unix: 
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.mountd: No such file or directory
+Jul 26 08:03:04 3D:IRIS last message repeated 3 times
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 26 08:03:04 3D:IRIS inetd[161]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 26 08:03:05 5B:IRIS sendmail: starting
+Jul 26 08:03:10 5D:IRIS timed[165]: This machine is master
+Jul 26 08:03:12 6C:IRIS sendmail[623]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Jul 26 08:03:12 5D:IRIS prngd[626]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Jul 26 08:03:12 5D:IRIS prngd[626]: have 7 out of 200 filedescriptors open
+Jul 26 08:03:18 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 26 08:03:26 6B:IRIS Xsession: root: login
+Jul 26 08:03:27 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 26 08:06:18 6B:IRIS Xsession: root: logout
+Jul 26 08:06:19 6B:IRIS Xsession: root: logout
+Jul 26 08:06:20 3A:IRIS INFO: The system is shutting down.
+Jul 26 08:06:20 3A:IRIS INFO: Please wait.
+Jul 26 08:06:22 3F:IRIS syslogd: going down on signal 15
+Jul 29 03:10:04 6F:IRIS syslogd: restart
+Jul 29 03:10:04 2A:IRIS unix: [WIRIX Release 5.3
+Jul 29 03:10:04 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Jul 29 03:10:04 2A:IRIS unix: All Rights Reserved.
+Jul 29 03:10:04 2A:IRIS unix: 
+Jul 29 03:10:04 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Jul 29 03:10:04 2A:IRIS unix: 
+Jul 29 03:10:04 4A:IRIS unix: WARNING: clock gained 2 days
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.mountd: No such file or directory
+Jul 29 03:10:08 3D:IRIS last message repeated 3 times
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.rwalld: No such file or directory
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.rusersd: No such file or directory
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.rquotad: No such file or directory
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.sprayd: No such file or directory
+Jul 29 03:10:08 3D:IRIS inetd[162]: /usr/etc/rpc.bootparamd: No such file or directory
+Jul 29 03:10:09 5B:IRIS sendmail: starting
+Jul 29 03:10:14 5D:IRIS timed[166]: This machine is master
+Jul 29 03:10:16 6C:IRIS sendmail[625]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Jul 29 03:10:16 5D:IRIS prngd[627]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Jul 29 03:10:16 5D:IRIS prngd[627]: have 7 out of 200 filedescriptors open
+Jul 29 03:10:22 3D:IRIS mediad: Unknown CDROM brand (Sony    CDU-76S         1.0 ), may not function correctly
+Jul 29 03:10:33 6B:IRIS Xsession: root: login
+Jul 29 03:10:33 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Jul 29 03:24:05 6B:IRIS Xsession: root: logout
+Jul 29 03:24:05 6B:IRIS Xsession: root: logout
+Jul 29 03:24:06 3A:IRIS INFO: The system is shutting down.
+Jul 29 03:24:06 3A:IRIS INFO: Please wait.
+Jul 29 03:24:09 3F:IRIS syslogd: going down on signal 15
+Aug 31 18:35:04 6F:IRIS syslogd: restart
+Aug 31 18:35:04 2A:IRIS unix: [WIRIX Release 5.3
+Aug 31 18:35:04 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Aug 31 18:35:04 2A:IRIS unix: All Rights Reserved.
+Aug 31 18:35:04 2A:IRIS unix: 
+Aug 31 18:35:04 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Aug 31 18:35:04 2A:IRIS unix: 
+Aug 31 18:35:04 4A:IRIS unix: WARNING: clock gained 33 days
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.mountd: No such file or directory
+Aug 31 18:35:07 3D:IRIS last message repeated 3 times
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.rwalld: No such file or directory
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.rusersd: No such file or directory
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.rquotad: No such file or directory
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.sprayd: No such file or directory
+Aug 31 18:35:07 3D:IRIS inetd[162]: /usr/etc/rpc.bootparamd: No such file or directory
+Aug 31 18:35:08 5B:IRIS sendmail: starting
+Aug 31 18:35:13 5D:IRIS timed[166]: This machine is master
+Aug 31 18:35:15 6C:IRIS sendmail[620]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Aug 31 18:35:18 5D:IRIS prngd[795]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Aug 31 18:35:18 5D:IRIS prngd[795]: have 7 out of 200 filedescriptors open
+Aug 31 18:35:36 6B:IRIS Xsession: root: login
+Aug 31 18:35:37 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Aug 31 18:35:58 6B:IRIS Xsession: root: logout
+Aug 31 18:35:58 6B:IRIS Xsession: root: logout
+Aug 31 18:35:59 3A:IRIS INFO: The system is shutting down.
+Aug 31 18:35:59 3A:IRIS INFO: Please wait.
+Aug 31 18:36:02 3F:IRIS syslogd: going down on signal 15
+Sep 16 10:47:25 6F:IRIS syslogd: restart
+Sep 16 10:47:25 2A:IRIS unix: [WIRIX Release 5.3
+Sep 16 10:47:25 2A:IRIS unix: Copyright 1987-1994 Silicon Graphics, Inc.
+Sep 16 10:47:25 2A:IRIS unix: All Rights Reserved.
+Sep 16 10:47:25 2A:IRIS unix: 
+Sep 16 10:47:25 2A:IRIS unix: [9ZPerr_init: SysAD parity is enabled.
+Sep 16 10:47:25 4A:IRIS unix: WARNING: clock gained 15 days
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.mountd: No such file or directory
+Sep 16 10:47:35 3D:IRIS last message repeated 3 times
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.rwalld: No such file or directory
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.rusersd: No such file or directory
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.rquotad: No such file or directory
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.sprayd: No such file or directory
+Sep 16 10:47:35 3D:IRIS inetd[159]: /usr/etc/rpc.bootparamd: No such file or directory
+Sep 16 10:47:38 5B:IRIS sendmail: starting
+Sep 16 10:47:41 5D:IRIS timed[164]: This machine is master
+Sep 16 10:47:42 1A:IRIS unix: ALERT: ec0: no carrier: check Ethernet cable
+Sep 16 10:47:42 2A:IRIS unix: 
+Sep 16 10:48:08 5D:IRIS prngd[559]: prngd 0.9.29 (12 Jul 2004) started up for user root
+Sep 16 10:48:08 5D:IRIS prngd[559]: have 7 out of 200 filedescriptors open
+Sep 16 10:48:23 6C:IRIS sendmail[689]: starting daemon (980427.SGI.8.8.8): SMTP+queueing@00:15:00
+Sep 16 10:48:49 1A:IRIS unix: ALERT: ec0: no carrier: check Ethernet cable
+Sep 16 10:48:49 2A:IRIS unix: 
+Sep 16 10:49:20 6B:IRIS Xsession: root: login
+Sep 16 10:49:21 6B:IRIS Xsession: root: access control disabled, clients can connect from any host
+Sep 16 10:49:55 1A:IRIS unix: ALERT: ec0: no carrier: check Ethernet cable
+Sep 16 10:49:55 2A:IRIS unix: 
+Sep 16 10:51:24 1A:IRIS unix: ALERT: ec0: no carrier: check Ethernet cable
+Sep 16 10:51:24 2A:IRIS unix: 
+Sep 16 10:53:19 6B:IRIS Xsession: root: logout
+Sep 16 10:53:21 3A:IRIS INFO: The system is shutting down.
+Sep 16 10:53:21 3A:IRIS INFO: Please wait.
+Sep 16 10:53:29 3F:IRIS syslogd: going down on signal 15

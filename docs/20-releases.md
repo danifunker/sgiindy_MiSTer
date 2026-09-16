@@ -31,6 +31,73 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260916_2 — a CPU checked against real Indys, the MiSTer's clock, 23 s off the boot
+
+`releases/SGIIndy_20260916_2.rbf`, md5 `91980dc9a94ab0f1a052f614e6a1cf6f`
+(build 36, SEED=2; 39,090 ALMs, 47,945 registers, 483 / 553 M10K, core
+clock setup slack +3.063 ns, HDMI PLL +0.182 ns, every domain met). Same
+`releases/boot.rom`.
+
+Everything below is written up in docs/51.
+
+* **The CPU against the suite real Indys validated.** The cpu-tests suite
+  (`../iris`) was run on an R4400 and an R5000 Indy and turned out to have
+  been wrong in sixteen places - and four of this core's changes to the
+  vendored CPU had been made to match those wrong answers. They are undone:
+  NaN polarity (the fraction's top bit set marks a *signalling* NaN on these
+  parts), MIPS IV COP1 function codes are the FPU's Unimplemented Operation
+  and not Reserved Instruction, COP2 takes no exception with `Status.CU2`
+  set, and `cvt.s.l`/`cvt.d.l` refuse past 2^53. The suite has an R4600
+  case now (iris branch `claude/r4600-cputests`), with every expectation's
+  source written down.
+* **CP0 instructions were usable from User mode**: any IRIX process could
+  have written Status. MFC0/MTC0, the TLB instructions, ERET and CACHE are
+  now Coprocessor Unusable outside Kernel mode unless `Status.CU0` is set.
+* **The clock.** The DS1386 had no time source and powered up in February
+  1996 on every load. It takes the MiSTer's clock now, and keeps it across
+  resets. Main sends local time; IRIX keeps GMT and applies `/etc/TIMEZONE`,
+  so set `TZ=GMT0` there to see the MiSTer's time.
+* **The disk.** The HPC3's SCSI DMA engine wrote every byte of a data phase
+  to DDR3 as its own transaction; it writes a word per eight bytes now. And
+  the WD33C93B takes a READ's bytes four at a time from the target's
+  look-ahead, still acknowledging each. Disk data phases during the boot:
+  22.4 s -> 11.2 s.
+* **The CPU pipeline.** A load no longer holds execute for a clock when the
+  next instruction does not need its value, and the display's DDR3 reads go
+  out in 4-word sub-bursts instead of 16, so a cache line fill waits behind
+  at most 8 of its words (fills 24 -> 20 clocks).
+
+Measured with `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`:
+
+| workload | SGIIndy_20260916 | SGIIndy_20260916_2 |
+|---|---:|---:|
+| launch to the X login screen | 125 s | **102 s** |
+| disk data phases in the boot window | 22.4 s for 42.4 MB | 11.2 s for 42.3 MB |
+| clocks per instruction, boot / login | 1.71 / 1.85 | 1.59 / 1.70 |
+| perl interpreter loop | 13.5 s | 12.2 s |
+| bzip2 -9 of /unix | 101.9 s | 94.4 s |
+| `ls -lR /usr/lib/X11` into the Console | 8.8 s | 8.1 s |
+| 60 x `/bin/ls /` | 4.9 s | 5.0 s |
+| dd 10 MB off the raw disk | 5.9 s | 3.9 s |
+| `xterm -e /bin/true`, cold / warm | 1.55 / 0.51 s | 1.22 / 0.49 s |
+
+Tested: in the simulator, `make cpuonly` (728 runs, 0 against expectation),
+the R4600 cpu-tests suite 2259 / 0 over 246 tests (iris `5f0c1b2`, including
+new tests for traps and stalling instructions right behind a load), the SCSI
+runs (`run-scsi`, `run-scsiwr`, `run-dma`), tb_ddr3 at sub-burst sizes 16, 8,
+4 and 3, and `tb_ds1386`. On the board, this bitstream: the suite as the PROM
+2264 / 0 over 251 tests; `scripts/diskcheck.sh` (new) PASS - IRIX's own `sum`
+and `sum -r` of 8.9 MB of files match the bytes on the image and a 3.2 MB
+copy it wrote is identical; a full perfprobe run with no display line-cache
+miss in any window; no SCSI notice in either boot's `/var/adm/SYSLOG`. The
+clock was measured on build 31: the date the MiSTer says, and 103 s of IRIX
+time across a 103.24 s host-timed gap.
+
+The IRIX *simulator* boot of the no-stall load printed one
+`wd93 ... SYNC negotiation error` notice that its control did not; no board
+boot has (docs/51 §9). Perl-like loops still vary from boot to boot with where
+their pages land in the direct-mapped instruction cache.
+
 ## SGIIndy_20260916 — twice the speed: the TLB, the memory port, the instruction cache
 
 `releases/SGIIndy_20260916.rbf`, md5 `aea29ae92655eb59a8fa88549f2c5f31`
