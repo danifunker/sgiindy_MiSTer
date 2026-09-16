@@ -839,7 +839,8 @@ architecture arch of cpu is
       EXCTYPE_TRAPIS0,
       EXCTYPE_TRAPIS1,
       EXCTYPE_TRAPIE0,
-      EXCTYPE_TRAPIE1
+      EXCTYPE_TRAPIE1,
+      EXCTYPE_COP0U      -- SGI: see COP0_usable
    );
    signal decodeExcType : t_decodeExcType := EXCTYPE_NONE;    
    
@@ -1013,6 +1014,21 @@ architecture arch of cpu is
    signal exceptionPC                  : unsigned(63 downto 0) := (others => '0');
    signal COP0ReadValue                : unsigned(63 downto 0) := (others => '0');
    
+   signal COP0_enable                  : std_logic;   -- SGI: Status.CU0
+   -- SGI: the CP0 instructions (MFC0/MTC0 and friends, the TLB instructions,
+   -- ERET) and CACHE are usable in Kernel mode - which EXL and ERL force, see
+   -- privilegeMode in cpu_cop0.vhd - or with Status.CU0 set; anywhere else they
+   -- are Coprocessor Unusable with Cause.CE = 0 (R4000 manual, chapter 5).
+   -- Upstream executes them in any mode: an N64 game never leaves Kernel mode,
+   -- but every IRIX process runs in User mode. cpu-tests excep/cp0_unusable_user.
+   --
+   -- Checked in EXECUTE (EXCTYPE_COP0U in exceptionNew3), not at decode: the
+   -- first instruction after an ERET is decoded while that ERET is still on
+   -- its way through, i.e. with EXL - and so Kernel mode - still set. A
+   -- decode-time check let exactly the instruction a user program starts with
+   -- through. The enables the instruction would act on are gated with the
+   -- same term where execute registers them.
+   signal COP0_usable                  : std_logic;
    signal COP1_enable                  : std_logic;
    signal COP2_enable                  : std_logic;
    signal fpuRegMode                   : std_logic;
@@ -2885,6 +2901,9 @@ begin
                         
                      when 16#10# => -- COP0
                         blockIRQ <= '1';
+                        decodeExcType <= EXCTYPE_COP0U;   -- SGI: see COP0_usable
+                        decodeExcCode <= x"B";            -- SGI
+                        decodeExcCOP  <= "00";            -- SGI
                         if (decSource1(4) = '1') then
                            case (to_integer(decImmData(5 downto 0))) is
                               when 1 => decodeTLBR  <= '1';                         
@@ -3111,6 +3130,9 @@ begin
                         -- nothing here ever writes the instruction cache, so a
                         -- writeback of it has nothing to write back - but only
                         -- if the op stops at decode.
+                        decodeExcType <= EXCTYPE_COP0U;   -- SGI: see COP0_usable
+                        decodeExcCode <= x"B";            -- SGI
+                        decodeExcCOP  <= "00";            -- SGI
                         case (to_integer(decSource2)) is
                            when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# |
                                 16#0D# | 16#10# | 16#11# | 16#15# | 16#19# =>
@@ -3563,6 +3585,7 @@ begin
                      '1' when (EXEExceptionMem = '1' and (decodeMemReadEnable = '1' or decodeMemWriteEnable = '1')) else
                      '1' when (decodeExcType = EXCTYPE_DECODE) else
                      '1' when (decodeExcType = EXCTYPE_PC      and value1(1 downto 0) > 0) else
+                     '1' when (decodeExcType = EXCTYPE_COP0U   and COP0_usable = '0') else   -- SGI
                      '1' when (decodeExcType = EXCTYPE_ADD     and (((calcResult_add(31) xor value1(31)) and (calcResult_add(31) xor value2(31))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_DADD    and (((calcResult_add(63) xor value1(63)) and (calcResult_add(63) xor value2(63))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_ADDI    and (((calcResult_add(31) xor value1(31)) and (calcResult_add(31) xor decodeImmData(15))) = '1')) else
@@ -4040,9 +4063,9 @@ begin
                      executeLoadType               <= decodeLoadType;   
                      executeMemReadEnable          <= decodeMemReadEnable and (not EXEExceptionMem); 
    
-                     execute_ERET                  <= decodeERET;
-                     executeCOP0WriteEnable        <= decodeCOP0WriteEnable;     
-                     executeCOP0ReadEnable         <= decodeCOP0ReadEnable;      
+                     execute_ERET                  <= decodeERET            and COP0_usable;   -- SGI
+                     executeCOP0WriteEnable        <= decodeCOP0WriteEnable and COP0_usable;   -- SGI
+                     executeCOP0ReadEnable         <= decodeCOP0ReadEnable  and COP0_usable;   -- SGI
                      executeCOP0Register           <= decodeCOP0Register;
                      
                      executeCOP1ReadEnable         <= decodeCOP1ReadEnable;
@@ -4059,7 +4082,7 @@ begin
                         exceptionAllowDelay <= '1';
                      end if;
 
-                     if (decodeERET = '1') then
+                     if (decodeERET = '1' and COP0_usable = '1') then   -- SGI: COP0_usable
                         llBit <= '0';
                      elsif (EXEExceptionMem = '0') then
                         if (decodeResetLL = '1') then
@@ -4080,18 +4103,18 @@ begin
                         end if;
                      end if;
 
-                     executeICacheEnable           <= decodeCacheEnable;
-                     executeDCacheEnable           <= decodeCacheEnable;
+                     executeICacheEnable           <= decodeCacheEnable and COP0_usable;   -- SGI
+                     executeDCacheEnable           <= decodeCacheEnable and COP0_usable;   -- SGI
                      executeCacheCommand           <= decodeSource2;
                      
                      if (DATACACHEON_intern = '0' or (DATACACHETLBON_intern = '0' and EXETLBDataAccess = '1')) then
                         executeDCacheEnable <= '0';
                      end if;
                      
-                     execute_TLBR                  <= decodeTLBR; 
-                     execute_TLBWI                 <= decodeTLBWI;
-                     execute_TLBWR                 <= decodeTLBWR;
-                     execute_TLBP                  <= decodeTLBP; 
+                     execute_TLBR                  <= decodeTLBR  and COP0_usable;   -- SGI
+                     execute_TLBWI                 <= decodeTLBWI and COP0_usable;   -- SGI
+                     execute_TLBWR                 <= decodeTLBWR and COP0_usable;   -- SGI
+                     execute_TLBP                  <= decodeTLBP  and COP0_usable;   -- SGI
                      
                      -- new mul/div
                      if (decodecalcMULT = '1') then
@@ -4929,6 +4952,7 @@ begin
       exception               => exception,   
       exceptionStage1         => exceptionStage1,   
             
+      COP0_enable             => COP0_enable,   -- SGI
       COP1_enable             => COP1_enable,
       COP2_enable             => COP2_enable,
       fpuRegMode              => fpuRegMode,
@@ -5062,6 +5086,8 @@ begin
    dbg_pc       <= std_logic_vector(PCold1(31 downto 0));
    dbg_pc_valid <= decodeNew;
    dbg_mode     <= std_logic_vector(privilegeMode) & bit64region & region_TLBmapped;
+
+   COP0_usable  <= '1' when (privilegeMode = "00" or COP0_enable = '1') else '0';   -- SGI
    dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
    dbg_retire   <= dbg_retire_i;
    dbg_perf(0)  <= instrcache_request;
