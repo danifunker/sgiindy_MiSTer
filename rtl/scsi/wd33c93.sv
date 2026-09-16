@@ -82,6 +82,11 @@ module wd33c93 #(
     input  logic        scsi_io,
     input  logic        scsi_req,
     input  logic  [7:0] scsi_din,   // target -> initiator
+    // The three bytes the target will send after scsi_din, first in [23:16],
+    // when it is sending a READ's data (scsi_din_ahead_ok): scsi.v's
+    // dout_ahead_read. See din_ahead.
+    input  logic [23:0] scsi_din_ahead,
+    input  logic        scsi_din_ahead_ok,
 
     // ---- HPC3 SCSI DMA channel -------------------------------------------
     // Held, not pulsed: `dma_req` stays up until the engine answers, because
@@ -344,6 +349,33 @@ module wd33c93 #(
     // than to anything specified, and scsi.v is vendored.
     localparam int DIN_SETTLE = 6;
     logic [2:0] din_settle;
+    // DATA IN BYTES TAKEN FOUR AT A TIME, still acknowledged one at a time.
+    // The settle above is scsi.v's prefetch at work: after every advance of its
+    // byte counter it borrows the buffer RAM's read port for up to three clocks
+    // to refresh the look-ahead registers behind dout_pair/dout_pair_next (the
+    // MacLC's longword pseudo-DMA reads them), and only then restores the
+    // current byte. So once the current byte is good, the three after it are
+    // good too - they settled first. Taking them with it lets the next three
+    // bytes skip the settle: a DMA DATA IN byte cost DIN_SETTLE + 1 clocks of
+    // waiting before it could even be offered to the engine.
+    //
+    // ONLY IF REQ HELD FOR THE WHOLE SETTLE. The sequencer can see REQ on the
+    // clock ACK falls, before the target has advanced its counter; the advance
+    // can then find the byte three ahead in a block not yet read off the card,
+    // drop REQ, and start the fetch - with the look-ahead registers still
+    // holding what the buffer had there before. A settle that saw REQ drop
+    // takes its one byte and settles again next time, exactly as before.
+    // Every REQ/ACK handshake still happens, so the target sees the same bus.
+    //
+    // AND ONLY A READ'S BYTES (scsi_din_ahead_ok). Those come out of the
+    // sector buffers' own look-ahead registers; every other command's answer
+    // is computed from the byte counter, and exporting all of them three bytes
+    // further on cost 2,249 ALMs (build 34). A short INQUIRY or MODE SENSE
+    // settles on every byte, as before.
+    localparam bit DIN_LOOKAHEAD = 1'b1;
+    logic [23:0] din_ahead;
+    logic  [1:0] din_ahead_n;
+    logic        din_req_held;
     // True while a DMA data phase is running, so that leaving the phase can be
     // reported to the engine as an end of transfer exactly once.
     logic       dma_in_data;
@@ -505,10 +537,17 @@ module wd33c93 #(
             sat_pause_cnt <= 12'd0;
             sat_paused  <= 1'b0;
             rst_timer   <= 9'd0;
+            din_ahead_n <= 2'd0;
         end else if (ce) begin
             bsy_q   <= scsi_bsy;
             dma_eop <= 1'b0;
             if (rst_timer != 9'd0) rst_timer <= rst_timer - 9'd1;
+            // Bytes taken ahead belong to the DATA IN loop they were taken in.
+            // Anything else - a pause, a reset, a new command, a phase change
+            // (ST_SAT_PHASE drops them below) - throws them away.
+            if (state != ST_SAT_PHASE && state != ST_SAT_DIN && state != ST_SAT_DMA &&
+                state != ST_SAT_ACK && state != ST_SAT_REL)
+                din_ahead_n <= 2'd0;
 
             // ---- the HPC3 channel's ch_reset -------------------------------
             // Ahead of the register access below, so a driver that resets the
@@ -1006,6 +1045,7 @@ module wd33c93 #(
 `ifdef MSG_DEBUG
                     $display("[INI] SAT_PHASE bsy=%b req=%b phase=%b atn=%b cdb_idx=%0d ident=%b", scsi_bsy, scsi_req, phase, scsi_atn, cdb_idx, sat_identify_sent);
 `endif
+                    if (!scsi_bsy || phase != PH_DATA_IN) din_ahead_n <= 2'd0;
                     // TRANSFER COUNT EXHAUSTED WITH THE TARGET STILL IN A
                     // DATA PHASE IS A PAUSE, NOT A WAIT - and not reporting
                     // it is what wedged fsck (docs/29). IRIX splits any
@@ -1173,8 +1213,20 @@ module wd33c93 #(
                                 end else if (use_dma) begin
                                     dma_dir_in  <= 1'b1;
                                     dma_in_data <= 1'b1;
-                                    din_settle  <= DIN_SETTLE;
-                                    state       <= ST_SAT_DIN;
+                                    if (din_ahead_n != 2'd0) begin
+                                        // Taken with an earlier byte: no
+                                        // settle. See din_ahead.
+                                        data_latch  <= din_ahead[23:16];
+                                        dma_wdata   <= din_ahead[23:16];
+                                        din_ahead   <= {din_ahead[15:0], 8'h00};
+                                        din_ahead_n <= din_ahead_n - 2'd1;
+                                        dma_req     <= 1'b1;
+                                        state       <= ST_SAT_DMA;
+                                    end else begin
+                                        din_settle   <= DIN_SETTLE;
+                                        din_req_held <= 1'b1;
+                                        state        <= ST_SAT_DIN;
+                                    end
                                 end else if (!dbr) begin
                                     // Target sends. Take the byte and hold it
                                     // in the data register until the driver
@@ -1207,12 +1259,16 @@ module wd33c93 #(
                 // bus state; DBR stays clear, because nothing is waiting to be
                 // collected.
                 ST_SAT_DIN: begin
+                    if (!scsi_req) din_req_held <= 1'b0;
                     if (din_settle != 0) din_settle <= din_settle - 3'd1;
                     else begin
                         data_latch <= scsi_din;
                         dma_wdata  <= scsi_din;
                         dma_req    <= 1'b1;
                         state      <= ST_SAT_DMA;
+                        din_ahead  <= scsi_din_ahead;
+                        din_ahead_n <= (DIN_LOOKAHEAD && din_req_held && scsi_req &&
+                                        scsi_din_ahead_ok) ? 2'd3 : 2'd0;
                     end
                 end
 

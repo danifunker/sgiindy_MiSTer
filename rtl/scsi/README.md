@@ -48,8 +48,20 @@ decode those rather than the names:
 
 ## `scsi.v` is no longer pristine
 
-One local change, marked in the source with `SGI LOCAL CHANGE` at every hunk so
-a re-vendor can find them:
+Two local changes, marked in the source with `SGI LOCAL CHANGE` at every hunk
+so a re-vendor can find them.
+
+**A READ's next three bytes are an output** (`dout_ahead_read`,
+`dout_ahead_ok`; docs/51 §10). The WD33C93B model takes a DATA IN byte with
+the three after it so that three bytes in four skip the settle for the
+buffer's look-ahead prefetch. The bytes are the sector buffers' own `q_b` /
+`q_c` / `q_d` terms, exactly the READ arms of `cmd_dout_pair` and
+`cmd_dout_pair_next`. The existing `dout_pair` / `dout_pair_next` outputs carry
+the same bytes but for every command, and connecting them builds every
+response ROM three bytes further on: +2,249 ALMs over the three targets, 99 %
+of the device. Two assigns and two ports; nothing inside the target changes.
+
+And the older one:
 
 **The CD-ROM logical block size follows MODE SELECT instead of being hardwired
 to 2048.** Upstream reads the block descriptor's *length* and discards its

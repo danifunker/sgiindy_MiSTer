@@ -1,0 +1,39 @@
+[16:52:53] restoring /media/fat/games/SGIIndy/SGIIndy53.img from /media/fat/games/SGIIndy/SGIIndy53-pristine.img
+[16:57:30] launching f69fc429b42bbd177cb51adabbe47bfc (/tmp/SGIIndy.rbf)
+[16:57:38] core launched; boot profile running
+[16:57:49] +11s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 171 marker  0.2% 
+[16:58:01] +23s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 168 marker  0.2% 
+[16:58:12] +34s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:58:23] +45s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:58:34] +56s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:58:46] +68s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:58:57] +79s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:59:08] +90s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:59:19] +101s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[16:59:31] +113s X-UP       panicstr=0x00000000 panel9  0.0% idx16 34.8% indices   2 marker  0.0% 
+[16:59:31] X-UP at +113s after the launch returned
+[16:59:46] parking the pointer, logging in as root (login profile until idle)
+prof: 22488 samples in 45.0 s (500 Hz), 37.3 % idle, stopped on idle -> /tmp/perf-login.bin
+[17:00:47] login settled after 47 s
+[17:00:52] quitting Software Manager, pointer into the Console
+prof: 7500 samples in 15.0 s (500 Hz), 97.6 % idle, stopped on time -> /tmp/perf-idle.bin
+[17:02:24] skipping fork
+[17:02:24] skipping perl
+[17:02:24] skipping bzip2
+[17:02:24] bench rawdisk: /bin/dd if=/dev/rdsk/dks0d1s0 of=/dev/null bs=65536 count=160
+prof: 24940 samples in 25.0 s (998 Hz), 91.8 % idle, stopped on idle -> /tmp/perf-rawdisk.bin
+[17:03:09] bench rawdisk idle after 26 s (host clock, includes typing and 4 s of idle)
+[17:03:13] skipping scroll
+[17:03:13] skipping xterm
+[17:03:13] skipping xterm2
+[17:03:13] skipping xdpy
+[17:03:29] halting
+[17:04:47] bench.txt:
+== rawdisk
+160+0 records in
+160+0 records out
+
+real	0m4.049s
+user	0m0.028s
+sys	0m1.717s
+[17:04:58] done -> tests/out/hw/perf-b34

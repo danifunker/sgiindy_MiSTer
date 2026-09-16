@@ -154,6 +154,10 @@ module sgi_scsi #(
 
     wire [NUM_TARGETS-1:0] t_bsy, t_msg, t_cd, t_io, t_req;
     wire [7:0]             t_dout [NUM_TARGETS];
+    // Each target's next three DATA IN bytes of a READ, and whether it is
+    // sending a READ - the initiator's look-ahead (scsi.v, dout_ahead_read).
+    wire [23:0]            t_ahead     [NUM_TARGETS];
+    wire [NUM_TARGETS-1:0] t_ahead_ok;
     // Hoisted out of the generate: a runtime index into a generate block is
     // not a constant expression, so the per-target LBA has to live in an
     // array at module scope for the mux below to select from it.
@@ -176,11 +180,19 @@ module sgi_scsi #(
     wire bus_io  = |t_io;
     wire bus_req = |t_req;
 
-    logic [7:0] bus_din;
+    logic [7:0]  bus_din;
+    logic [23:0] bus_din_ahead;
+    logic        bus_din_ahead_ok;
     always_comb begin
-        bus_din = 8'h00;
+        bus_din          = 8'h00;
+        bus_din_ahead    = 24'h0;
+        bus_din_ahead_ok = 1'b0;
         for (int t = 0; t < NUM_TARGETS; t++)
-            if (t_bsy[t]) bus_din = t_dout[t];
+            if (t_bsy[t]) begin
+                bus_din          = t_dout[t];
+                bus_din_ahead    = t_ahead[t];
+                bus_din_ahead_ok = t_ahead_ok[t];
+            end
     end
 
     wd33c93 #(.HOST_ID(HOST_ID)) u_wd33c93 (
@@ -204,6 +216,8 @@ module sgi_scsi #(
         .scsi_io   (bus_io),
         .scsi_req  (bus_req),
         .scsi_din  (bus_din),
+        .scsi_din_ahead(bus_din_ahead),
+        .scsi_din_ahead_ok(bus_din_ahead_ok),
         .dma_req   (dma_req),
         .dma_dir_in(dma_dir_in),
         .dma_wdata (dma_wdata),
@@ -345,14 +359,23 @@ module sgi_scsi #(
                     .req_bus        (),
                     .ack            (b_ack),
                     // Initiator-side hints the MacLC core's NCR5380 uses to
-                    // prefetch. This initiator is byte-at-a-time and asks for
-                    // nothing early, so both stay low.
+                    // prefetch. This initiator asks for nothing early, so both
+                    // stay low.
                     .host_csr_rd    (1'b0),
                     .host_data_rd   (1'b0),
                     .din            (b_dout_init),
                     .dout           (t_dout[t]),
+                    // Left open ON PURPOSE: connected, these build every
+                    // command's answer three bytes further on (+2,249 ALMs,
+                    // build 34). The initiator's look-ahead is the READ-only
+                    // dout_ahead_read below.
                     .dout_pair      (),
                     .dout_pair_next (),
+                    // The next three DATA IN bytes of a READ, which the
+                    // initiator takes with the current one (wd33c93.sv,
+                    // din_ahead).
+                    .dout_ahead_read(t_ahead[t]),
+                    .dout_ahead_ok  (t_ahead_ok[t]),
                     .cd_snd_l       (unused_snd_l),
                     .cd_snd_r       (unused_snd_r),
                     .img_mounted    (img_mounted[t]),
@@ -423,6 +446,8 @@ module sgi_scsi #(
                 assign t_io[t]   = 1'b0;
                 assign t_req[t]  = 1'b0;
                 assign t_dout[t] = 8'h00;
+                assign t_ahead[t]    = 24'h0;
+                assign t_ahead_ok[t] = 1'b0;
                 assign t_lba[t]  = 32'h0;
                 assign t_din[t]  = 16'h0;
                 assign t_rd[t]   = 1'b0;
