@@ -1,0 +1,21 @@
+--- a/harness/start.S	2026-09-16 13:09:11.006304400 -0400
++++ b/harness/start.S	2026-09-16 13:09:11.252276900 -0400
+@@ -38,11 +38,15 @@
+     beqz    $10, relocated
+     nop
+ 
+-    /* Copy [_ftext, _end) from (link + bias) down to link. */
++    /* Copy [_ftext, _fbss) from (link + bias) down to link.
++     *
++     * MiSTer core: _fbss, not _end. .bss is zeroed below once relocated, and
++     * copying it is what made the image need every byte to _end - past the
++     * 512 KB PROM region once the suite grew (hw-cputest/build.sh). */
+     lui     $11, %hi(_ftext)
+     addiu   $11, $11, %lo(_ftext)    /* dst     */
+-    lui     $12, %hi(_end)
+-    addiu   $12, $12, %lo(_end)      /* dst end */
++    lui     $12, %hi(_fbss)
++    addiu   $12, $12, %lo(_fbss)     /* dst end */
+     addu    $13, $11, $10            /* src     */
+ 1:  lw      $14, 0($13)
+     sw      $14, 0($11)
