@@ -95,10 +95,16 @@ echo "=== $(date '+%F %T') $TAG: $N launches, deadline ${WAIT}s, rbf md5 $RBFMD5
 declare -A TALLY
 for i in $(seq 1 "$N"); do
     if [ -n "$FRESH" ]; then
-        # Rename over the attached file: the core still holding the old one
-        # keeps its inode, the next launch opens the fresh copy.
         TC=$(date +%s)
-        rsh "cp '$FRESH' '$IMG.tmp' && mv '$IMG.tmp' '$IMG' && sync" || { echo "image restore failed" | tee -a "$LOG"; exit 1; }
+        # Restore IN PLACE, with the image closed first. Renaming a fresh copy over
+        # the attached image (what every --fresh restore did until 2026-09-16) left
+        # the old file unlinked while MiSTer still held it open, and the board's exFAT
+        # driver never gave those clusters back: after two weeks of runs ~37 GB of the
+        # 59 GB card belonged to no file, a reboot did not return it, and a restore
+        # failed with ENOSPC (docs/50). Loading the menu core closes the image - so a
+        # guest still running cannot write into the fresh copy either - and the copy
+        # then overwrites the same file, needing no free space.
+        rsh "echo 'load_core /media/fat/menu.rbf' > /dev/MiSTer_cmd; for i in \$(seq 1 30); do ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q '$IMG\$' || break; sleep 1; done; cp '$FRESH' '$IMG' && sync" || { echo "image restore failed" | tee -a "$LOG"; exit 1; }
         printf "  %2d/%-2d  image restored in %ds\n" "$i" "$N" "$(( $(date +%s) - TC ))" | tee -a "$LOG"
     fi
     rsh "python3 $DBG/fb_poke.py fill 0xE7" >/dev/null 2>&1

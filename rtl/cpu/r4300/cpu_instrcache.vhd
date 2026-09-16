@@ -138,11 +138,12 @@ architecture arch of cpu_instrcache is
    -- board paid a whole DDR3 line fill (~40 clocks) for each, 22 per 1000
    -- instructions in a perl loop against 38.7 fills in all (docs/50), mostly
    -- for lines that were in the cache all along. A third copy of the tags,
-   -- read at the fill's own line, sees that; the request then takes two
-   -- clocks and no bus transaction (state CACHED).
+   -- read at the fill's own line, sees that; the request then takes three
+   -- clocks and no bus transaction (states CHECK, CACHED).
    signal tag_address_f    : std_logic_vector(8 downto 0);
    signal tag_q_f          : std_logic_vector(20 downto 0);
    signal fill_hit         : std_logic;
+   signal tag_wr_q         : std_logic := '0';   -- a tag write landed on the last edge
 
    -- data
    signal fill_grant       : std_logic;
@@ -161,6 +162,7 @@ architecture arch of cpu_instrcache is
       IDLE,
       CLEARCACHE,
       FILL,
+      CHECK,   -- SGI: a fill request waits here a clock for itagramf's read
       CACHED   -- SGI: a fill request for a line already held; see fill_hit
    );
    signal state : tstate := IDLE;
@@ -242,21 +244,29 @@ begin
 
    -- SGI: the fill side's own copy of the tags, read at the line a fill
    -- request names (fill_addrTag and fill_addrData are the same register,
-   -- loaded in the clock the request is). See fill_hit.
-   itagramf : entity mem.RamMLAB
+   -- loaded in the clock the request is). See fill_hit. BLOCK RAM, not a
+   -- third MLAB: an asynchronously read 512 x 21-bit MLAB is ~430 ALMs with
+   -- its read mux (build 30's fit: 97 % of the device), where this is two
+   -- M10K. Its read is registered, so a request waits one clock in CHECK for
+   -- the tag - one clock more on a real fill of ~30.
+   itagramf : entity mem.dpram
    generic map
    (
-      width      => 21,
-      widthad    => 9
+      addr_width  => 9,
+      data_width  => 21
    )
    port map
    (
-      inclock    => clk93,
-      wren       => tag_wren_a,
-      data       => tag_data_a,
-      wraddress  => tag_address_a,
-      rdaddress  => tag_address_f,
-      q          => tag_q_f
+      clock_a     => clk93,
+      address_a   => tag_address_a,
+      data_a      => tag_data_a,
+      wren_a      => tag_wren_a,
+
+      clock_b     => clk93,
+      address_b   => tag_address_f,
+      data_b      => 21x"0",
+      wren_b      => '0',
+      q_b         => tag_q_f
    );
 
    tag_address_f  <= std_logic_vector(fill_addrTag(13 downto 5));
@@ -336,6 +346,7 @@ begin
          tag_wren_a  <= '0';
          fill_done   <= '0';
          fill_cached <= '0';   -- SGI
+         tag_wr_q    <= tag_wren_a;   -- SGI: see CHECK
          ram_request <= '0';
          
          if (fill_request = '1') then
@@ -381,16 +392,8 @@ begin
                   elsif (cmd_ena_eff = '1') then
                      cmd_pending    <= '0';   -- SGI: a code this cache ignores
                   elsif (fill_request = '1' or fill_latched = '1') then
+                     state          <= CHECK;   -- SGI: was FILL, see CHECK
                      fill_latched   <= '0';
-                     -- SGI: tag_wren_a is a tag write landing at the end of
-                     -- this clock - an invalidate the async read cannot see
-                     -- yet - so a line that has one pending is filled.
-                     if (fill_hit = '1' and tag_wren_a = '0') then
-                        state       <= CACHED;
-                     else
-                        state       <= FILL;
-                        ram_request <= '1';
-                     end if;
                   end if;
                   
                when CLEARCACHE =>
@@ -408,6 +411,21 @@ begin
                      tag_data_a     <= '1' & std_logic_vector(fill_addrData(31 downto 12));   -- SGI: full tag
                      tag_address_a  <= std_logic_vector(fill_addrTag_sav(13 downto 5));   -- SGI
                      fill_done      <= '1';
+                  end if;
+
+               when CHECK =>
+                  -- SGI: tag_q_f is the tag of the fill's line as of the edge
+                  -- that ended IDLE. A tag write that landed on that same edge
+                  -- (tag_wr_q) is a read-during-write the block RAM does not
+                  -- define - it may be the invalidate of this very line - so
+                  -- such a line is filled rather than trusted. Nothing writes
+                  -- a tag during CHECK: a command arriving now is held in
+                  -- cmd_pending until IDLE.
+                  if (fill_hit = '1' and tag_wr_q = '0') then
+                     state          <= CACHED;
+                  else
+                     state          <= FILL;
+                     ram_request    <= '1';
                   end if;
 
                when CACHED =>
