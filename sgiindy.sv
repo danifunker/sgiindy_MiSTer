@@ -157,6 +157,7 @@ wire  [1:0] buttons;
 wire [127:0] status;
 wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;
+wire [64:0] host_rtc;
 
 wire        ioctl_download;
 wire [15:0] ioctl_index;
@@ -224,6 +225,9 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(VDNUM)) hps_io
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
+
+	// The MiSTer's clock, for the DS1386 (sgi_ds1386.sv, docs/51).
+	.RTC(host_rtc),
 
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
@@ -563,6 +567,7 @@ sgi_indy u_core
 	.ps2_mouse        (ps2_mouse),
 
 	.mac_addr         (mac_addr),
+	.host_rtc         (host_rtc),
 
 	.scsi_img_mounted (scsi_img_mounted),
 	.scsi_img_blocks  (img_size[40:9]),

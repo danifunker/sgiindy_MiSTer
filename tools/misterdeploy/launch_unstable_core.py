@@ -351,6 +351,29 @@ def main():
     if not args.core:
         ap.error("--core is required (or set RBF_NAME)")
 
+    # MISTER_RBF_PATH: load an rbf that is somewhere else on the device - in
+    # practice /tmp, which is RAM - straight through /dev/MiSTer_cmd, with no
+    # reboot (a reboot empties /tmp) and no OSD walk. For testing a build the
+    # card cannot take: on 2026-09-16 the card was full and a new rbf was 2,420
+    # bytes bigger than the clusters the old one owned, so an in-place copy
+    # would have died half-written. Every script that launches through this
+    # file picks it up from the environment.
+    rbf_path = os.environ.get("MISTER_RBF_PATH")
+    if rbf_path and not args.dry_run:
+        print(f"[load] {rbf_path} via /dev/MiSTer_cmd (MISTER_RBF_PATH; no reboot, no OSD)")
+        cmd = f"test -f {shlex.quote(rbf_path)} && echo load_core {shlex.quote(rbf_path)} > /dev/MiSTer_cmd"
+        ssh = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if args.ssh_key:
+            ssh += ["-i", args.ssh_key]
+        rc = subprocess.run(ssh + [f"{args.ssh_user}@{args.host}", cmd]).returncode
+        if rc != 0:
+            print(f"[load] FAILED: {rbf_path} is not on the device (rc={rc})")
+            return 1
+        if args.no_verify:
+            return 0
+        return 0 if verify(args.host, args.port,
+                           os.path.splitext(posixpath.basename(rbf_path))[0]) else 1
+
     # Resolve the folder's real path on the device from the live menu (no /media/fat
     # assumption), used both for --push and for the folder listing.
     entry = folder_entry(args.host, args.port, args.folder)

@@ -77,7 +77,17 @@ module ddr3_mux #(
     // The display's bursts go to the bridge as reads of at most FBR_SUB words,
     // at most FBR_AHEAD of them outstanding at once (docs/50). tb_ddr3 runs a
     // second build with small values so the splitting is exercised.
-    parameter int FBR_SUB   = 16,
+    //
+    // 4, NOT 16 (docs/51). The bridge answers reads in the order it took
+    // them, so a CPU cache fill taken while the display has its sub-bursts
+    // outstanding waits for all of their words first: up to FBR_AHEAD x
+    // FBR_SUB = 32 of them at 16. Build 31 on the board spent 24 clocks per
+    // line fill on the bus, against 8 in the simulator, which has no display
+    // behind the mux. At 4 the wait is at most 8 words. The display's stream
+    // stays continuous - FBR_AHEAD sub-bursts still overlap - and in tb_ddr3
+    // its worst wait went from 45 clocks to 83, against ~5000 clocks of
+    // line-cache slack; perfprobe's line-cache miss counts are the check.
+    parameter int FBR_SUB   = 4,
     parameter int FBR_AHEAD = 2
 ) (
     input  logic        clk,

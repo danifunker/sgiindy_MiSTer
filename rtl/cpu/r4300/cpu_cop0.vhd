@@ -111,6 +111,7 @@ entity cpu_cop0 is
       exception               : out std_logic := '0';
       exceptionStage1         : out std_logic := '0';
             
+      COP0_enable             : out std_logic;   -- SGI: Status.CU0, see cpu.vhd COP0_usable
       COP1_enable             : out std_logic;
       COP2_enable             : out std_logic;
       fpuRegMode              : out std_logic;
@@ -538,6 +539,7 @@ architecture arch of cpu_cop0 is
 
 begin 
 
+   COP0_enable   <= COP0_12_SR_enable_cop0;   -- SGI
    COP1_enable   <= COP0_12_SR_enable_cop1;
    COP2_enable   <= COP0_12_SR_enable_cop2;
    fpuRegMode    <= COP0_12_SR_floatingPointMode;

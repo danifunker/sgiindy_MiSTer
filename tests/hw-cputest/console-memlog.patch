@@ -1,17 +1,17 @@
---- a/harness/console.c	2026-08-30 13:12:24.236228016 -0400
-+++ b/harness/console.c	2026-08-30 13:15:42.379238025 -0400
-@@ -17,6 +17,45 @@
+--- a/harness/console.c	2026-09-16 13:07:52.113289800 -0400
++++ b/harness/console.c	2026-09-16 13:08:20.296885700 -0400
+@@ -17,6 +17,44 @@
  
  int have_testdev = 0;
  
 +/* ---- memory sink -------------------------------------------------------
 + *
-+ * ADDED FOR THE MiSTer CORE, where neither of the two sinks above can be read.
-+ * That machine's SCC transmits nothing anyone can capture - no start bit has
-+ * ever reached the HPS's ttyS1 - and its GIO slot 0 answers an unclaimed cycle
-+ * rather than a test device, so have_testdev stays 0. What it does have is a
-+ * DDR3 shared with an ARM that can mmap /dev/mem, which makes a buffer in main
-+ * memory the one sink a host can actually read.
++ * ADDED FOR THE MiSTer CORE, where neither of the suite's own sinks can be
++ * read. That machine's SCC transmits nothing anyone can capture - no start
++ * bit has ever reached the HPS's ttyS1 - and its GIO slot 0 answers an
++ * unclaimed cycle rather than a test device, so have_testdev stays 0. What it
++ * does have is a DDR3 shared with an ARM that can mmap /dev/mem, which makes a
++ * buffer in main memory the one sink a host can actually read.
 + *
 + * KSEG1, deliberately: uncached, so a reader outside the CPU sees every byte
 + * without the suite having to flush anything - and the cache tests would make
@@ -42,26 +42,10 @@
 +    }
 +}
 +
-+
  /* Bounded so a wedged SCC can't hang the whole suite. */
  #define TX_SPIN_LIMIT 100000
  
-@@ -55,7 +94,13 @@
-     if (scc_dead) return;
-     while (!(RD8(SCC_CHB_CMD) & SCC_RR0_TX_EMPTY)) {
-         if (++spins > TX_SPIN_LIMIT) {
--            if (have_testdev) scc_dead = 1;
-+            /* SGI: or when the memory sink is live. The rule this replaces is
-+             * "never latch unless something else is capturing output", and the
-+             * memory sink is something else capturing output. On a machine whose
-+             * SCC never drains, every character after the first otherwise burns
-+             * the whole 100000-iteration limit - which the comment above measures
-+             * at 78 seconds of a 117-second run. */
-+            if (have_testdev || memlog_ready) scc_dead = 1;
-             return;
-         }
-     }
-@@ -116,9 +161,11 @@
+@@ -129,9 +167,11 @@
      if (c == '\n') {
          scc_putc('\r');
          if (have_testdev) WR32(TESTDEV_PUTC, '\r');
@@ -73,3 +57,17 @@
  }
  
  void con_puts(const char *s)
+--- a/harness/testlib.c	2026-09-16 13:07:52.147593200 -0400
++++ b/harness/testlib.c	2026-09-16 13:08:20.373359100 -0400
+@@ -306,7 +306,10 @@
+                        arcs_disk_write(SCSILOG_ARCS_PATH,
+                                        (u64)SCSILOG_LBA * 512u, b, n));
+         } else {
+-            con_printf("scsilog: rc=%d\n", scsilog_flush(SCSILOG_TARGET));
++            /* MiSTer core: no. SCSI ID 2 may hold a real image there, and
++             * LBA 8192 of it is not the suite's to write. The memory sink in
++             * console.c is how this log leaves the machine. */
++            con_puts("scsilog: skipped on the MiSTer core\n");
+         }
+         arcs_flush();
+         con_flush();          /* or the machine stops mid-line — see console.c */

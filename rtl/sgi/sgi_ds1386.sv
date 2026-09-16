@@ -28,6 +28,18 @@
 //  a hang - see docs/03-boot-prom.md on the checksum and the validity tag -
 //  and it is the one thing standing between this and a remembered `setenv`.
 //  Wiring the array to MiSTer's SD-card save path is the fix.
+//
+//  THE TIME COMES FROM THE MiSTer (docs/51). Without a battery the clock used
+//  to power up at a fixed 1996 date on every load; IRIX then found the time of
+//  day behind its root file system's, fell back to that, and printed "CHECK
+//  AND RESET THE DATE!" - so the machine always believed it was the moment of
+//  its last shutdown. hps_io's RTC output carries the MiSTer's own clock, sent
+//  by Main once when the core starts: when it arrives the time registers are
+//  loaded from it, and from then on a reset leaves them running, the way a
+//  battery-backed part ignores the machine's reset. Main sends LOCAL time, so
+//  that is what the part holds; IRIX keeps its clock in GMT and applies
+//  /etc/TIMEZONE, so for IRIX to show the MiSTer's time its TZ wants to be
+//  GMT0 - the install default, PST8PDT, shows it that many hours earlier.
 //============================================================================
 
 module sgi_ds1386 #(
@@ -52,6 +64,14 @@ module sgi_ds1386 #(
     // see the block by the nv0/nv1 declarations.
     input  logic [47:0] mac_addr,
     input  logic        ce,
+
+    // hps_io's RTC, MSM6242B layout as Main_MiSTer's send_rtc() fills it, all
+    // BCD: [7:0] seconds, [15:8] minutes, [23:16] hours (24-hour), [31:24]
+    // day of month, [39:32] month, [47:40] year of the century, [55:48] day
+    // of week (0 = Sunday, binary). Bit 64 toggles each time a new time is
+    // sent. Tie to zero to keep the power-on date (simulation does, so an
+    // IRIX boot stays cycle-deterministic).
+    input  logic [64:0] host_rtc,
 
     input  logic        sel,          // one-cycle request pulse, address in window
     input  logic        we,
@@ -145,6 +165,25 @@ module sgi_ds1386 #(
     logic [31:0] tick;
 
     wire te = rtc[R_COMMAND][7];
+
+    // ---- the MiSTer's clock ----------------------------------------------
+    // None of these three is reset: the host sends its time once, possibly
+    // while the machine is still held in reset (boot.rom's download holds it
+    // for 65,535 clocks after Main has already sent the RTC), and a battery
+    // backed clock does not forget the time because the machine was reset.
+    logic host_toggle_q = 1'b0;   // host_rtc[64] as last seen
+    logic host_pending  = 1'b0;   // a time arrived and has not been loaded yet
+    logic host_valid    = 1'b0;   // the time registers came from the host
+
+    // The year register counts from 1940 (IRIS's ds1x86.rs, which boots IRIX
+    // with it: year - 1940). The host sends the year of the century, so
+    // 00..39 are 2000..2039 = register 60..99 and 40..99 are 1940..1999 =
+    // register 00..59. Both are a change to the BCD tens digit alone.
+    wire [7:0] host_year = (host_rtc[47:44] < 4'd4) ? {host_rtc[47:44] + 4'd6, host_rtc[43:40]}
+                                                    : {host_rtc[47:44] - 4'd4, host_rtc[43:40]};
+    // Day of week: 1 = Monday here (IRIS: Jan 1 1970, a Thursday, is 5), 0 =
+    // Sunday from the host.
+    wire [7:0] host_day  = (host_rtc[55:48] == 8'd0) ? 8'h07 : host_rtc[55:48];
 
     // ---- bus ------------------------------------------------------------
     // Device byte for each half of the doubleword: w=0 is the byte at addr+0,
@@ -244,18 +283,41 @@ module sgi_ds1386 #(
         rtcq1 <= rtc[{addr[5:3], 1'b1}];
         lowq  <= dev_low;
 
+        host_toggle_q <= host_rtc[64];
+        if (host_rtc[64] != host_toggle_q) host_pending <= 1'b1;
+
         if (reset) begin
-            for (i = 0; i < 16; i = i + 1) rtc[i] <= 8'h00;
-            rtc[R_YEAR]    <= POR_YEAR;
-            rtc[R_MONTH]   <= POR_MONTH;
-            rtc[R_DATE]    <= POR_DATE;
-            rtc[R_DAY]     <= POR_DAY;
-            rtc[R_HOURS]   <= POR_HOUR;
+            // Once the host has set the time, a reset keeps it: only the
+            // command register's TE is forced, so the clock is never left
+            // frozen by a reset that landed inside a software update.
+            if (!host_valid) begin
+                for (i = 0; i < 16; i = i + 1) rtc[i] <= 8'h00;
+                rtc[R_YEAR]    <= POR_YEAR;
+                rtc[R_MONTH]   <= POR_MONTH;
+                rtc[R_DATE]    <= POR_DATE;
+                rtc[R_DAY]     <= POR_DAY;
+                rtc[R_HOURS]   <= POR_HOUR;
+            end
             rtc[R_COMMAND] <= 8'h80;          // TE set: the clock runs
             tick           <= 32'd0;
         end else begin
             //---------------- the clock ----------------
-            if (ce && te) begin
+            if (host_pending && host_rtc[64] == host_toggle_q) begin
+                // A new host time, loaded whole. hps_io writes the 65 bits a
+                // word at a time and toggles bit 64 last, so by the clock
+                // after the toggle every field is the new one.
+                rtc[R_HUNDREDTHS] <= 8'h00;
+                rtc[R_SECONDS]    <= host_rtc[7:0];
+                rtc[R_MINUTES]    <= host_rtc[15:8];
+                rtc[R_HOURS]      <= host_rtc[23:16];
+                rtc[R_DAY]        <= host_day;
+                rtc[R_DATE]       <= host_rtc[31:24];
+                rtc[R_MONTH]      <= host_rtc[39:32];
+                rtc[R_YEAR]       <= host_year;
+                tick              <= 32'd0;
+                host_pending      <= 1'b0;
+                host_valid        <= 1'b1;
+            end else if (ce && te) begin
                 if (tick >= TICK_DIV - 1) begin
                     tick <= 32'd0;
                     if (rtc[R_HUNDREDTHS] != 8'h99) begin

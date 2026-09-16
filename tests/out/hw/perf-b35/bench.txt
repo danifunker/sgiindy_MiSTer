@@ -1,0 +1,42 @@
+== fork
+
+real	0m4.374s
+user	0m0.908s
+sys	0m3.159s
+== perl
+
+real	0m12.796s
+user	0m11.490s
+sys	0m0.329s
+== bzip2
+
+real	1m32.861s
+user	1m12.959s
+sys	0m16.098s
+== rawdisk
+160+0 records in
+160+0 records out
+
+real	0m4.439s
+user	0m0.024s
+sys	0m1.673s
+== scroll
+
+real	0m8.285s
+user	0m1.242s
+sys	0m2.897s
+== xterm
+
+real	0m1.843s
+user	0m0.135s
+sys	0m0.575s
+== xterm2
+
+real	0m0.441s
+user	0m0.128s
+sys	0m0.200s
+== xdpy
+
+real	0m0.170s
+user	0m0.023s
+sys	0m0.084s

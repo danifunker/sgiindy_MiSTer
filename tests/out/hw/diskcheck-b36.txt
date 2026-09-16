@@ -1,0 +1,19 @@
+core: 91980dc9a94ab0f1a052f614e6a1cf6f (/tmp/SGIIndy.rbf)
+---- sumcheck on the board ----
+---- what IRIX computed (/root/sums.txt) ----
+6899 6199 /unix
+11858 2960 /lib/libc.so.1
+41170 2860 /usr/lib/libX11.so.1
+3511 5595 /usr/lib/libXm.so.1
+10734   6199 /unix
+05383   2960 /lib/libc.so.1
+63140   2860 /usr/lib/libX11.so.1
+01874   5595 /usr/lib/libXm.so.1
+
+---- the same files read off the image ----
+/unix: 3173840 bytes, md5 82bfc2cf1ac40b97b4281bd2c0bc129f; sysv 6899 6199 /unix [IRIX agrees]; bsd 10734  6199 /unix [IRIX agrees]
+/lib/libc.so.1: 1515300 bytes, md5 b821fafcd806a498c83333c74d2f5127; sysv 11858 2960 /lib/libc.so.1 [IRIX agrees]; bsd 05383  2960 /lib/libc.so.1 [IRIX agrees]
+/usr/lib/libX11.so.1: 1464000 bytes, md5 9c609b2ddae2b56fa73c2616077f2550; sysv 41170 2860 /usr/lib/libX11.so.1 [IRIX agrees]; bsd 63140  2860 /usr/lib/libX11.so.1 [IRIX agrees]
+/usr/lib/libXm.so.1: 2864640 bytes, md5 3d4f43beef38c9ae0df9d78d363d3367; sysv 3511 5595 /usr/lib/libXm.so.1 [IRIX agrees]; bsd 01874  5595 /usr/lib/libXm.so.1 [IRIX agrees]
+copy check: /root/unix.copy is byte-identical to /unix (3173840 bytes)
+DISKCHECK PASS

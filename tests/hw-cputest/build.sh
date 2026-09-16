@@ -13,9 +13,8 @@
 #
 #   0x00000  promstub.S    - jump to 0x1000, and the four BEV=1 vectors
 #   0x01000  the suite     - objcopy -O binary of cputest.elf
-#   ...      zeroes        - harness/start.S copies [_ftext,_end) out of here,
-#                            which runs past the image; .bss wants zeroes and
-#                            this is where they come from
+#   ...      zeroes        - padding; harness/start.S (patched) copies only
+#                            [_ftext,_fbss) out of here and zeroes .bss itself
 #
 # THE SUITE IS PATCHED ON THE WAY THROUGH, into a scratch copy - the checkout is
 # never touched. console-memlog.patch adds a third output sink that writes into
@@ -55,6 +54,14 @@ echo "== adding the memory log sink =="
     echo "error: the console patch did not apply - the suite has moved on" >&2
     exit 2; }
 
+echo "== relocating only text and data =="
+# start.S copies the image out of the ROM up to _end and then zeroes .bss
+# anyway; copying only to _fbss is what lets a suite whose .bss runs past the
+# 512 KB PROM region still boot from it (the R4600 suite spans ~573 KB to _end).
+( cd "$WORK/cpu-tests" && patch -p1 --forward < "$HERE/relocate-data-only.patch" ) || {
+    echo "error: relocate-data-only.patch did not apply - the suite has moved on" >&2
+    exit 2; }
+
 echo "== adding the throughput benchmarks =="
 # The docs/34 sluggishness instruments: cached/uncached loop IPC, load/store
 # cost, the L1-miss DDR3 round trip, and Count vs the DS1386's wall clock.
@@ -81,14 +88,14 @@ echo "== building the PROM stub =="
 IMG=$(stat -c %s "$WORK/cputest.bin")
 STUB=$(stat -c %s "$WORK/promstub.bin")
 
-# start.S copies to _end, not to the end of the image, so the ROM has to hold
-# every byte of that range. Check it rather than producing a rom that reads off
-# the end of the region and copies whatever the next one holds into .bss.
-SPAN=$(( $("${CROSS}nm" "$ELF" | awk '/ _end$/{print "0x"$1}') \
+# start.S (patched above) copies to _fbss, so the ROM has to hold every byte of
+# that range. Check it rather than producing a rom that reads off the end of
+# the region and copies whatever the next one holds into the data section.
+SPAN=$(( $("${CROSS}nm" "$ELF" | awk '/ _fbss$/{print "0x"$1}') \
        - $("${CROSS}nm" "$ELF" | awk '/ _ftext$/{print "0x"$1}') ))
 NEED=$(( IMAGE_OFF + SPAN ))
 if [ "$NEED" -gt "$PROM_BYTES" ]; then
-    echo "error: the suite spans $SPAN bytes to _end; $NEED > $PROM_BYTES in the PROM region" >&2
+    echo "error: the suite spans $SPAN bytes to _fbss; $NEED > $PROM_BYTES in the PROM region" >&2
     exit 2
 fi
 
@@ -109,5 +116,5 @@ PY
 
 echo "== $OUT =="
 ls -l "$OUT"
-echo "  suite spans $SPAN bytes to _end, $((PROM_BYTES - NEED)) bytes of PROM left over"
+echo "  suite spans $SPAN bytes to _fbss, $((PROM_BYTES - NEED)) bytes of PROM left over"
 echo "  md5 $(md5sum "$OUT" | awk '{print $1}')"

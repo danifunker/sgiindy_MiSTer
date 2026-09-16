@@ -19,6 +19,10 @@ entity cpu is
       -- KI instruction fetches use the unmapped KSEG0/KSEG1 path. The data TLB
       -- remains enabled for mapped data accesses.
       INSTR_KSEG_ONLY       : boolean := false;
+      -- SGI: let a load leave execute without freezing it for a clock when the
+      -- instruction behind it neither reads the loaded register nor touches
+      -- memory. See loadMayRun.
+      LOAD_NO_STALL         : boolean := true;
       -- Build the pre-event execution trace.
       --
       -- The trace is a diagnostic, and it is not free. debug_trace_bus is 896
@@ -329,10 +333,6 @@ architecture arch of cpu is
       end case;
       return result;
    end function;
-
-   -- SGI: kept in step with cpu_cop0.vhd's constant of the same name. See its
-   -- comment there for what claiming to be an R4600 commits the core to.
-   constant PRESENT_AS_R4600 : boolean := true;
 
    -- register file
    signal regs_address_a               : std_logic_vector(4 downto 0);
@@ -843,7 +843,8 @@ architecture arch of cpu is
       EXCTYPE_TRAPIS0,
       EXCTYPE_TRAPIS1,
       EXCTYPE_TRAPIE0,
-      EXCTYPE_TRAPIE1
+      EXCTYPE_TRAPIE1,
+      EXCTYPE_COP0U      -- SGI: see COP0_usable
    );
    signal decodeExcType : t_decodeExcType := EXCTYPE_NONE;    
    
@@ -933,6 +934,8 @@ architecture arch of cpu is
    signal executeNew                   : std_logic := '0';
    signal executeIgnoreNext            : std_logic := '0';
    signal executeStallFromMEM          : std_logic := '0';
+   signal loadMayRun                   : std_logic;         -- SGI: LOAD_NO_STALL
+   signal executeLoadNoStall           : std_logic := '0';  -- SGI: LOAD_NO_STALL
    signal resultWriteEnable            : std_logic := '0';
    signal executeBranchdelaySlot       : std_logic := '0';
    signal resultTarget                 : unsigned(4 downto 0) := (others => '0');
@@ -1017,6 +1020,21 @@ architecture arch of cpu is
    signal exceptionPC                  : unsigned(63 downto 0) := (others => '0');
    signal COP0ReadValue                : unsigned(63 downto 0) := (others => '0');
    
+   signal COP0_enable                  : std_logic;   -- SGI: Status.CU0
+   -- SGI: the CP0 instructions (MFC0/MTC0 and friends, the TLB instructions,
+   -- ERET) and CACHE are usable in Kernel mode - which EXL and ERL force, see
+   -- privilegeMode in cpu_cop0.vhd - or with Status.CU0 set; anywhere else they
+   -- are Coprocessor Unusable with Cause.CE = 0 (R4000 manual, chapter 5).
+   -- Upstream executes them in any mode: an N64 game never leaves Kernel mode,
+   -- but every IRIX process runs in User mode. cpu-tests excep/cp0_unusable_user.
+   --
+   -- Checked in EXECUTE (EXCTYPE_COP0U in exceptionNew3), not at decode: the
+   -- first instruction after an ERET is decoded while that ERET is still on
+   -- its way through, i.e. with EXL - and so Kernel mode - still set. A
+   -- decode-time check let exactly the instruction a user program starts with
+   -- through. The enables the instruction would act on are gated with the
+   -- same term where execute registers them.
+   signal COP0_usable                  : std_logic;
    signal COP1_enable                  : std_logic;
    signal COP2_enable                  : std_logic;
    signal fpuRegMode                   : std_logic;
@@ -2889,6 +2907,9 @@ begin
                         
                      when 16#10# => -- COP0
                         blockIRQ <= '1';
+                        decodeExcType <= EXCTYPE_COP0U;   -- SGI: see COP0_usable
+                        decodeExcCode <= x"B";            -- SGI
+                        decodeExcCOP  <= "00";            -- SGI
                         if (decSource1(4) = '1') then
                            case (to_integer(decImmData(5 downto 0))) is
                               when 1 => decodeTLBR  <= '1';                         
@@ -2949,49 +2970,9 @@ begin
                            decodeExcCode           <= x"B";
                            decodeExcCOP            <= "01";
                         end if;
-
-                        -- SGI: the MIPS IV COP1 function codes must raise
-                        -- Reserved Instruction on a MIPS III part.
-                        --
-                        -- Upstream lets them fall through to the FPU, whose
-                        -- decoder answers `when others => unimplemented`, so
-                        -- they arrive as a Floating-Point exception with
-                        -- FCSR.Cause.E instead. That reading is defensible for
-                        -- an operation the FPU merely does not implement -
-                        -- which is how the R4300 is left to behave - but these
-                        -- five are not in the MIPS III instruction set at all,
-                        -- and software probes for MIPS IV by executing one and
-                        -- catching the trap. Getting RI wrong makes an R4400
-                        -- look like an R5000.
-                        --
-                        -- Only the MIPS IV additions are listed. Function codes
-                        -- that are reserved in MIPS III as well are left to the
-                        -- FPU's Unimplemented Operation, which is what the
-                        -- manual asks for and what already works.
-                        -- cpu-tests: mips4/recip_rsqrt(_d), mips4/fp_cond_move_s(_d).
-                        if (PRESENT_AS_R4600 and COP1_enable = '1' and decSource1(4) = '1') then
-                           case (to_integer(decFunct)) is
-                              when 16#11# |   -- MOVF.fmt / MOVT.fmt
-                                   16#12# |   -- MOVZ.fmt
-                                   16#13# |   -- MOVN.fmt
-                                   16#15# |   -- RECIP.fmt
-                                   16#16# =>  -- RSQRT.fmt
-                                 decodeFPUCommandEnable <= '0';
-                                 decodeExcType          <= EXCTYPE_DECODE;
-                                 decodeExcCode          <= x"A";
-                              when others => null;
-                           end case;
-                        end if;
                        
                      when 16#12# => -- COP2
-                        -- SGI: an R4000/R4400 has no coprocessor 2 at all, so
-                        -- every COP2 instruction is Coprocessor Unusable with
-                        -- Cause.CE = 2 whatever Status.CU2 says. The R4300 does
-                        -- have one - a 64-bit data latch with no operations -
-                        -- which is why upstream implements the transfers. A
-                        -- machine claiming to be an R4400 should not.
-                        -- cpu-tests: excep/cop2_unusable.
-                        if (COP2_enable = '0' or PRESENT_AS_R4600) then
+                        if (COP2_enable = '0') then
                            decodeExcType           <= EXCTYPE_DECODE;
                            decodeExcCode           <= x"B";
                            decodeExcCOP            <= "10";
@@ -3155,6 +3136,9 @@ begin
                         -- nothing here ever writes the instruction cache, so a
                         -- writeback of it has nothing to write back - but only
                         -- if the op stops at decode.
+                        decodeExcType <= EXCTYPE_COP0U;   -- SGI: see COP0_usable
+                        decodeExcCode <= x"B";            -- SGI
+                        decodeExcCOP  <= "00";            -- SGI
                         case (to_integer(decSource2)) is
                            when 16#00# | 16#01# | 16#05# | 16#08# | 16#09# |
                                 16#0D# | 16#10# | 16#11# | 16#15# | 16#19# =>
@@ -3607,6 +3591,7 @@ begin
                      '1' when (EXEExceptionMem = '1' and (decodeMemReadEnable = '1' or decodeMemWriteEnable = '1')) else
                      '1' when (decodeExcType = EXCTYPE_DECODE) else
                      '1' when (decodeExcType = EXCTYPE_PC      and value1(1 downto 0) > 0) else
+                     '1' when (decodeExcType = EXCTYPE_COP0U   and COP0_usable = '0') else   -- SGI
                      '1' when (decodeExcType = EXCTYPE_ADD     and (((calcResult_add(31) xor value1(31)) and (calcResult_add(31) xor value2(31))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_DADD    and (((calcResult_add(63) xor value1(63)) and (calcResult_add(63) xor value2(63))) = '1')) else
                      '1' when (decodeExcType = EXCTYPE_ADDI    and (((calcResult_add(31) xor value1(31)) and (calcResult_add(31) xor decodeImmData(15))) = '1')) else
@@ -3632,6 +3617,44 @@ begin
     
    exceptionNewPC <= '1' when (decodeExcType = EXCTYPE_PC and value1(1 downto 0) > 0) else '0';
     
+   -- SGI: may the load in decode leave execute without stalling it?
+   --
+   -- Every load used to hold execute for a clock (stall3 until the data cache
+   -- answers), so that the instruction behind it could be given the loaded
+   -- value by forwarding. Most never need it: over IRIX's kernel text 24.8 %
+   -- of instructions are loads, and 80 % of those are followed by an
+   -- instruction that does not read the loaded register (docs/51 section 6).
+   -- For those the load goes to stage 4 and the next instruction executes in
+   -- the same clock.
+   --
+   -- opcodeCacheMuxed is that next instruction: it is what decode latches on
+   -- the same stall = 0 clock that moves this load into execute. Its rs and rt
+   -- fields are compared raw - wherever a format uses them for something
+   -- else the answer is only more conservative. It must also not be a memory
+   -- instruction (primary opcode 0x20-0x3F, and LDL/LDR at 0x1A/0x1B), which
+   -- keeps the data cache serving one access at a time exactly as before:
+   -- nothing behind the load reaches stage 4 until the load is done there.
+   -- CACHE (0x2F) is excluded by the same rule.
+   --
+   -- What a load in stage 4 still needs once execute has moved on:
+   -- * forwarding: the instruction then in decode is the one after next, so
+   --   stage 4 compares decSource rather than decodeSource (executeLoadNoStall)
+   -- * the byte offset its read is shifted by, which cpu_datacache.vhd now
+   --   captures when the read is issued, and the data-RAM address in the
+   --   clock the read is issued, which read_ena now holds
+   -- * everything else: the writeback* copies stage 4 already uses while
+   --   stall4 is set, because a read that misses holds stall4 - and the
+   --   uncached path's replay, which latches its own address
+   --
+   -- Not for LWC1/LDC1 (the FPU register is not forwarded by this path), a
+   -- mini-TLB miss (TLB_dataStall takes the stalled path back), or a load
+   -- that faults (EXEExceptionMem).
+   loadMayRun <= '1' when (LOAD_NO_STALL and
+                           decodeCOP1ReadEnable = '0' and
+                           opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101" and
+                           decSource1 /= decodeTarget and decSource2 /= decodeTarget) else
+                 '0';
+
    ---------------------- COP ------------------                  
    FPU_command_ena      <= decodeFPUCommandEnable  when (exception = '0' and stall = 0 and executeIgnoreNext = '0' and decodeNew = '1') else '0';
    FPU_TransferEna      <= decodeFPUTransferEnable when (exception = '0' and stall = 0 and executeIgnoreNext = '0' and decodeNew = '1') else '0';
@@ -3892,6 +3915,7 @@ begin
             executeNew                    <= '0';
             executeIgnoreNext             <= '0';
             executeStallFromMEM           <= '0';
+            executeLoadNoStall            <= '0';   -- SGI
 
             resultWriteEnable             <= '0';
             executeBranchdelaySlot        <= '0';
@@ -4004,6 +4028,7 @@ begin
             if (stall = 0) then
             
                executeNew              <= '0';
+               executeLoadNoStall      <= '0';   -- SGI
                executeICacheEnable     <= '0';
                executeDCacheEnable     <= '0';
                executeSetLL            <= '0';
@@ -4084,9 +4109,9 @@ begin
                      executeLoadType               <= decodeLoadType;   
                      executeMemReadEnable          <= decodeMemReadEnable and (not EXEExceptionMem); 
    
-                     execute_ERET                  <= decodeERET;
-                     executeCOP0WriteEnable        <= decodeCOP0WriteEnable;     
-                     executeCOP0ReadEnable         <= decodeCOP0ReadEnable;      
+                     execute_ERET                  <= decodeERET            and COP0_usable;   -- SGI
+                     executeCOP0WriteEnable        <= decodeCOP0WriteEnable and COP0_usable;   -- SGI
+                     executeCOP0ReadEnable         <= decodeCOP0ReadEnable  and COP0_usable;   -- SGI
                      executeCOP0Register           <= decodeCOP0Register;
                      
                      executeCOP1ReadEnable         <= decodeCOP1ReadEnable;
@@ -4103,7 +4128,7 @@ begin
                         exceptionAllowDelay <= '1';
                      end if;
 
-                     if (decodeERET = '1') then
+                     if (decodeERET = '1' and COP0_usable = '1') then   -- SGI: COP0_usable
                         llBit <= '0';
                      elsif (EXEExceptionMem = '0') then
                         if (decodeResetLL = '1') then
@@ -4124,18 +4149,18 @@ begin
                         end if;
                      end if;
 
-                     executeICacheEnable           <= decodeCacheEnable;
-                     executeDCacheEnable           <= decodeCacheEnable;
+                     executeICacheEnable           <= decodeCacheEnable and COP0_usable;   -- SGI
+                     executeDCacheEnable           <= decodeCacheEnable and COP0_usable;   -- SGI
                      executeCacheCommand           <= decodeSource2;
                      
                      if (DATACACHEON_intern = '0' or (DATACACHETLBON_intern = '0' and EXETLBDataAccess = '1')) then
                         executeDCacheEnable <= '0';
                      end if;
                      
-                     execute_TLBR                  <= decodeTLBR; 
-                     execute_TLBWI                 <= decodeTLBWI;
-                     execute_TLBWR                 <= decodeTLBWR;
-                     execute_TLBP                  <= decodeTLBP; 
+                     execute_TLBR                  <= decodeTLBR  and COP0_usable;   -- SGI
+                     execute_TLBWI                 <= decodeTLBWI and COP0_usable;   -- SGI
+                     execute_TLBWR                 <= decodeTLBWR and COP0_usable;   -- SGI
+                     execute_TLBP                  <= decodeTLBP  and COP0_usable;   -- SGI
                      
                      -- new mul/div
                      if (decodecalcMULT = '1') then
@@ -4233,7 +4258,9 @@ begin
                      if (decodehiUpdate = '1') then hi <= value1; end if;
                      if (decodeloUpdate = '1') then lo <= value1; end if;
                      
-                     if ((EXEExceptionMem = '0' and decodeMemReadEnable = '1') or decodeCOP0ReadEnable = '1' or decodeCOP2ReadEnable = '1') then
+                     if (EXEExceptionMem = '0' and decodeMemReadEnable = '1' and loadMayRun = '1') then
+                        executeLoadNoStall  <= '1';   -- SGI: see loadMayRun
+                     elsif ((EXEExceptionMem = '0' and decodeMemReadEnable = '1') or decodeCOP0ReadEnable = '1' or decodeCOP2ReadEnable = '1') then
                         stall3              <= '1';
                         executeStallFromMEM <= '1';
                      end if;
@@ -4297,6 +4324,9 @@ begin
             if (TLB_dataStall = '1') then
                stall3              <= '1';
                executeStallFromMEM <= '0';
+               -- SGI: a load that waits for a TLB walk takes the stalled path
+               -- when TLB_dataUnStall sets executeStallFromMEM.
+               executeLoadNoStall  <= '0';
             end if;
 
          end if;
@@ -4581,8 +4611,17 @@ begin
                   end if;
                   
                   if (executeMemReadEnable = '1' and executeCOP1ReadEnable = '0') then
-                     if (decodeSource1 > 0 and resultTarget = decodeSource1) then writebackForwardValue1 <= '1'; end if;
-                     if (decodeSource2 > 0 and resultTarget = decodeSource2) then writebackForwardValue2 <= '1'; end if;
+                     if (executeLoadNoStall = '1') then
+                        -- SGI: execute did not stop for this load, so the
+                        -- instruction behind it leaves decode on this clock
+                        -- too, and the one that reads writebackData next is
+                        -- being decoded now - as for any other instruction.
+                        if (decSource1 > 0 and resultTarget = decSource1) then writebackForwardValue1 <= '1'; end if;
+                        if (decSource2 > 0 and resultTarget = decSource2) then writebackForwardValue2 <= '1'; end if;
+                     else
+                        if (decodeSource1 > 0 and resultTarget = decodeSource1) then writebackForwardValue1 <= '1'; end if;
+                        if (decodeSource2 > 0 and resultTarget = decodeSource2) then writebackForwardValue2 <= '1'; end if;
+                     end if;
                   end if;
                   
                   if (executeMemReadEnable = '1' and
@@ -4973,6 +5012,7 @@ begin
       exception               => exception,   
       exceptionStage1         => exceptionStage1,   
             
+      COP0_enable             => COP0_enable,   -- SGI
       COP1_enable             => COP1_enable,
       COP2_enable             => COP2_enable,
       fpuRegMode              => fpuRegMode,
@@ -5106,6 +5146,8 @@ begin
    dbg_pc       <= std_logic_vector(PCold1(31 downto 0));
    dbg_pc_valid <= decodeNew;
    dbg_mode     <= std_logic_vector(privilegeMode) & bit64region & region_TLBmapped;
+
+   COP0_usable  <= '1' when (privilegeMode = "00" or COP0_enable = '1') else '0';   -- SGI
    dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
    dbg_retire   <= dbg_retire_i;
    dbg_perf(0)  <= instrcache_request;

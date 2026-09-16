@@ -30,6 +30,11 @@ module scsi
 	output  [7:0] dout, // data from target to initiator
 	output [15:0] dout_pair,
 	output [15:0] dout_pair_next,
+	// SGI LOCAL CHANGE: bytes data_cnt+1..+3 of a READ, first in [23:16],
+	// straight from the sector buffers, and whether this target is sending a
+	// READ's data now. See the assign beside dout_pair_next.
+	output [23:0] dout_ahead_read,
+	output        dout_ahead_ok,
 
 	// CD audio PCM (CDROM targets only; zeros on disks). Mixed at the top.
 	output signed [15:0] cd_snd_l,
@@ -593,6 +598,21 @@ assign dout_pair_next = (phase == PHASE_STATUS_OUT)?{status, status}:
 	 (phase == PHASE_MESSAGE_OUT)?{`MSG_CMD_COMPLETE, `MSG_CMD_COMPLETE}:
 	 (phase == PHASE_DATA_OUT)?cmd_dout_pair_next:
 	 16'h0000;
+
+// ===== SGI LOCAL CHANGE: a READ's next three bytes, for the WD33C93B =====
+// THE LOOK-AHEAD THE WD33C93B USES (sgi_scsi.sv, wd33c93.sv din_ahead).
+// It takes a DATA IN byte together with the three after it, which lets three
+// bytes in four skip the settle for the prefetch below. dout_pair and
+// dout_pair_next already hold those bytes, but for EVERY command: an INQUIRY,
+// a MODE SENSE or a CD TOC is computed from data_cnt, and connecting them
+// builds each of those three bytes further on - +2,249 ALMs over three
+// targets in build 34 (99 %), the CD-ROM's TOC and sub-channel answers most.
+// A READ's bytes are the only ones worth taking early, and they are the
+// buffers' own look-ahead registers: the same terms as cmd_dout_pair's READ
+// arm and cmd_dout_pair_next's, bytes 1, 2 and 3 of the four.
+assign dout_ahead_read = data_cnt[0] ? {buffer0_dout_next, buffer1_dout_next, buffer0_dout_next2}
+                                     : {buffer1_dout,      buffer0_dout_next, buffer1_dout_next};
+assign dout_ahead_ok   = (phase == PHASE_DATA_OUT) && cmd_read;
 
 // de-multiplex different data sources
 wire [7:0] cmd_dout =

@@ -80,6 +80,21 @@
 //    - The fifo. The spec's high water mark, the gio/dev fifo pointers and the
 //      whole burst-sizing apparatus exist to keep a 64-bit GIO64 burst busy;
 //      this engine moves one byte per handshake and the pointers are storage.
+//
+//  ONE MEMORY CYCLE PER WORD, NOT PER BYTE (docs/51). Main memory is a DDR3
+//  round trip - about ten clocks holding the port on the board - and this
+//  engine used to spend one on every byte: half of the ~25 clocks a byte of a
+//  data phase cost. DATA IN bytes now collect in `wbuf`, in their lanes, and
+//  go out as one write when the word's last lane is filled, when the
+//  descriptor's last byte arrives, when the target ends the phase, when the
+//  channel is stopped or flushed, or after FLUSH_IDLE clocks with no byte. DATA
+//  OUT reads a word once and answers the rest of its bytes from `rbuf`. The
+//  controller still gets its acknowledge per byte, and cbp/bc still advance
+//  per byte, so every register the driver can read says exactly what it did.
+//  What changes is when a byte becomes visible in memory: up to seven bytes
+//  later, and never later than the events above - none of which a driver
+//  can get ahead of, since nothing reads a receive buffer before the command
+//  completes.
 //    - 16-bit DMA (dmacfg bit 12). The PROM writes 0x00034801, which has it
 //      clear, and the WD33C93B is an 8-bit device. The Fujitsu 86603 is what
 //      needs it and this machine does not have one.
@@ -231,10 +246,10 @@ module hpc3_scsi_dma (
         D_FETCH_HI_W,
         D_EVAL,        // zero count is a link or the end of the chain
         D_RUN,         // wait for the controller to want a byte
-        D_MEM_RD,      // DATA OUT: fetch the byte from main memory
+        D_MEM_RD,      // DATA OUT: fetch the byte's word from main memory
         D_MEM_RD_W,
-        D_MEM_WR,      // DATA IN: store the byte into main memory
-        D_MEM_WR_W,
+        D_FLUSH,       // DATA IN: write the bytes collected in wbuf
+        D_FLUSH_W,
         D_ADVANCE,     // a byte moved: cbp++, bc--, and decide what comes next
         D_DESC_END,    // this descriptor is finished, whatever the count says
         D_COMPLETE     // clear ch_active
@@ -257,10 +272,32 @@ module hpc3_scsi_dma (
     // engine is in the middle of a descriptor fetch, and losing it means the
     // descriptor never completes.
     logic eop_lat;
-    // The byte the controller handed over, taken when its request is accepted.
-    // It has to be latched: the phase can move on while the memory cycle it
-    // belongs to is still outstanding.
-    logic [7:0] dev_byte;
+    // ---- word batching, see the header ------------------------------------
+    // DATA IN: the bytes of word `waddr` (physical address >> 3) not yet in
+    // memory, each in its own lane, `wbe` saying which lanes hold one.
+    logic [63:0] wbuf;
+    logic  [7:0] wbe;
+    logic [28:0] waddr;
+    // DATA OUT: the last word read and where from. Forgotten whenever a
+    // descriptor is fetched or the channel starts, so a buffer the driver has
+    // rewritten between two commands is always read again.
+    logic [63:0] rbuf;
+    logic [28:0] raddr;
+    logic        rvalid;
+    // Clocks in D_RUN with bytes held and none arriving. A target pausing
+    // mid-descriptor - waiting on the HPS for its next sector - still gets its
+    // bytes into memory within FLUSH_IDLE clocks.
+    localparam int FLUSH_IDLE = 1024;
+    logic [10:0] widle;
+    // Where D_FLUSH_W goes when the write is acknowledged.
+    typedef enum logic [1:0] { FN_ADVANCE, FN_RUN, FN_IDLE } flnext_t;
+    flnext_t fl_next;
+
+    // Stopping or flushing the channel: held bytes are written before the
+    // engine goes idle, and a write already on its way (D_FLUSH, D_FLUSH_W)
+    // just has its destination changed. Spelled out at both PIO sites below
+    // rather than as a task, to keep to what every tool here synthesises.
+    wire stop_in_flush = (dstate == D_FLUSH) || (dstate == D_FLUSH_W);
 
     wire [13:0] count = bc[13:0];
 
@@ -291,7 +328,9 @@ module hpc3_scsi_dma (
             fetch_ptr <= 32'h0;
             link_count <= 5'h0;
             eop_lat <= 1'b0;
-            dev_byte <= 8'h0;
+            wbuf <= 64'h0; wbe <= 8'h0; waddr <= 29'h0;
+            rbuf <= 64'h0; raddr <= 29'h0; rvalid <= 1'b0;
+            widle <= 11'h0; fl_next <= FN_IDLE;
             dev_reset <= 1'b0;
             dev_rdata <= 8'h0;
             dma_we <= 1'b0; dma_addr <= 32'h0; dma_wdata <= 64'h0; dma_be <= 8'h0;
@@ -338,26 +377,40 @@ module hpc3_scsi_dma (
                                 fetch_ptr   <= nbdp;
                                 link_count  <= 5'h0;
                                 eop_lat     <= 1'b0;
+                                rvalid      <= 1'b0;
                                 dstate      <= D_FETCH_LO;
                             end else if (!pio_wdata[4]) begin
                                 ctrl_active <= 1'b0;
-                                dstate      <= D_IDLE;
+                                if (stop_in_flush || wbe != 8'h0) begin
+                                    fl_next <= FN_IDLE;
+                                    if (!stop_in_flush) dstate <= D_FLUSH;
+                                end else begin
+                                    dstate  <= D_IDLE;
+                                end
                             end
                         end
 
                         if (pio_wdata[6]) begin
                             // Channel reset: stop, whatever else this write
-                            // said.
+                            // said. Bytes not yet written are dropped with
+                            // the transfer they belonged to.
                             ctrl_active <= 1'b0;
+                            wbe         <= 8'h0;
+                            rvalid      <= 1'b0;
                             dstate      <= D_IDLE;
                         end
 
-                        // FLUSH. There is no fifo to drain, so all this can do
-                        // is stop the channel - and it must NOT interrupt. See
-                        // the header.
-                        if (pio_wdata[3]) begin
+                        // FLUSH. The only fifo is wbuf, so this writes out
+                        // whatever it holds and stops the channel - and it
+                        // must NOT interrupt. See the header.
+                        if (pio_wdata[3] && !pio_wdata[6]) begin
                             ctrl_active <= 1'b0;
-                            dstate      <= D_IDLE;
+                            if (stop_in_flush || wbe != 8'h0) begin
+                                fl_next <= FN_IDLE;
+                                if (!stop_in_flush) dstate <= D_FLUSH;
+                            end else begin
+                                dstate  <= D_IDLE;
+                            end
                         end
                     end
                     R_GIO:    gio    <= pio_wdata;
@@ -391,6 +444,7 @@ module hpc3_scsi_dma (
                 // big-endian bus, BC at +4 the low half.
                 D_FETCH_LO_W:
                     if (dma_ack) begin
+                        rvalid   <= 1'b0;
                         cbp      <= dma_rdata[63:32];
                         bc       <= dma_rdata[31:0];
                         desc_eox <= dma_rdata[31] ;
@@ -435,16 +489,23 @@ module hpc3_scsi_dma (
                 end
 
                 D_RUN: begin
+                    widle <= 11'h0;
                     if (eop_lat) begin
                         // The target ended the phase with bytes still asked
                         // for - a MODE SENSE answer shorter than the
                         // allocation length does this. The descriptor is
                         // finished either way, which is what IRIS forces with
-                        // bc_done on caller_eop for channels 8 and 9.
-                        eop_lat <= 1'b0;
-                        dstate  <= D_DESC_END;
+                        // bc_done on caller_eop for channels 8 and 9. Bytes
+                        // still in wbuf are written first; eop_lat stays set,
+                        // so the next pass through here ends the descriptor.
+                        if (wbe != 8'h0) begin
+                            fl_next <= FN_RUN;
+                            dstate  <= D_FLUSH;
+                        end else begin
+                            eop_lat <= 1'b0;
+                            dstate  <= D_DESC_END;
+                        end
                     end else if (dev_req) begin
-                        dev_byte <= dev_wdata;
                         // The spec says control[2] decides the direction, IRIS
                         // takes it from the phase. The phase wins here: it is
                         // what the target is actually driving, and a driver
@@ -452,7 +513,42 @@ module hpc3_scsi_dma (
                         // the wire. Nothing has been seen to disagree; if
                         // something ever does, `ctrl_dir != !dev_dir_in` in a
                         // waveform is where it will show.
-                        dstate <= dev_dir_in ? D_MEM_WR : D_MEM_RD;
+                        if (dev_dir_in) begin
+                            if (wbe != 8'h0 && cbp[31:3] != waddr) begin
+                                // Bytes of another word are still held - a
+                                // descriptor that did not start where the last
+                                // one stopped. Write them out; the controller
+                                // is still asking, so this byte is taken on
+                                // the next pass.
+                                fl_next <= FN_RUN;
+                                dstate  <= D_FLUSH;
+                            end else begin
+                                wbuf[63 - 8*lane_q -: 8] <= dev_wdata;
+                                wbe     <= wbe | (8'h80 >> lane);
+                                waddr   <= cbp[31:3];
+                                dev_ack <= 1'b1;
+                                // The word's last lane, or the descriptor's
+                                // last byte: out it goes before the advance.
+                                if (lane == 3'd7 || count == 14'd1) begin
+                                    fl_next <= FN_ADVANCE;
+                                    dstate  <= D_FLUSH;
+                                end else begin
+                                    dstate  <= D_ADVANCE;
+                                end
+                            end
+                        end else if (rvalid && raddr == cbp[31:3]) begin
+                            dev_rdata <= rbuf[63 - 8*lane_q -: 8];
+                            dev_ack   <= 1'b1;
+                            dstate    <= D_ADVANCE;
+                        end else begin
+                            dstate    <= D_MEM_RD;
+                        end
+                    end else if (wbe != 8'h0) begin
+                        widle <= widle + 11'd1;
+                        if (widle == 11'(FLUSH_IDLE - 1)) begin
+                            fl_next <= FN_RUN;
+                            dstate  <= D_FLUSH;
+                        end
                     end
                 end
 
@@ -466,26 +562,32 @@ module hpc3_scsi_dma (
 
                 D_MEM_RD_W:
                     if (dma_ack) begin
+                        rbuf      <= dma_rdata;
+                        raddr     <= cbp[31:3];
+                        rvalid    <= 1'b1;
                         dev_rdata <= dma_rdata[63 - 8*lane_q -: 8];
                         dev_ack   <= 1'b1;
                         dstate    <= D_ADVANCE;
                     end
 
-                D_MEM_WR: begin
-                    dma_req  <= 1'b1;
-                    dma_we   <= 1'b1;
-                    dma_addr <= {cbp[31:3], 3'b000};
-                    // The byte goes out on every lane and the byte enable
-                    // picks the one that lands.
-                    dma_wdata <= {8{dev_byte}};
-                    dma_be    <= 8'h80 >> lane;
-                    dstate    <= D_MEM_WR_W;
+                D_FLUSH: begin
+                    dma_req   <= 1'b1;
+                    dma_we    <= 1'b1;
+                    dma_addr  <= {waddr, 3'b000};
+                    dma_wdata <= wbuf;
+                    dma_be    <= wbe;
+                    dstate    <= D_FLUSH_W;
                 end
 
-                D_MEM_WR_W:
+                D_FLUSH_W:
                     if (dma_ack) begin
-                        dev_ack <= 1'b1;
-                        dstate  <= D_ADVANCE;
+                        wbe   <= 8'h0;
+                        widle <= 11'h0;
+                        case (fl_next)
+                            FN_ADVANCE: dstate <= D_ADVANCE;
+                            FN_RUN:     dstate <= D_RUN;
+                            default:    dstate <= D_IDLE;
+                        endcase
                     end
 
                 // Reached only after a byte has actually moved, so the

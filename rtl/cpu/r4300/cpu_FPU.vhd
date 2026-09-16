@@ -82,8 +82,13 @@ architecture arch of cpu_FPU is
    constant OP_C_LE     : unsigned(5 downto 0) := 6x"3E";
    constant OP_C_NGT    : unsigned(5 downto 0) := 6x"3F";
    
-   constant INT64_MAX   : signed(63 downto 0)  := x"0080000000000000";
-   constant INT64_MIN   : signed(63 downto 0)  := x"FF80000000000000";
+   -- SGI: cvt.s.l / cvt.d.l refuse a source outside [-2^53, 2^53] with
+   -- Unimplemented Operation. Upstream's bounds are the N64 R4300's, +-2^55;
+   -- an Indy R4400 rev 6.0 and an R5000 rev 1.0 both trap 2^53 + 1 and 2^62
+   -- and convert 2^40 + 1 (../iris cpu-tests, fpu/vec_cvt_from_l). Compared
+   -- as `>= INT64_MAX` and `< INT64_MIN` below, hence the + 1.
+   constant INT64_MAX   : signed(63 downto 0)  := x"0020000000000001";
+   constant INT64_MIN   : signed(63 downto 0)  := x"FFE0000000000000";
    
    signal csr     : unsigned(24 downto 0) := (others => '0'); 
    alias csr_roundmode              is csr(1 downto 0);
@@ -324,17 +329,14 @@ begin
 --------------- Combinatorial ---------------------------------------
 ---------------------------------------------------------------------
 
-   -- SGI: signal on a SIGNALLING NaN (mantissa MSB clear), or on any NaN when
-   -- the predicate signals. Upstream tested the mantissa MSB set, which is the
-   -- quiet case - the exact opposite.
    cmp_inputInvalid_a <= '1' when (nanA = '1' and OP(3) = '1') else
-                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '1' and command_op1(51) = '0') else
-                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '0' and command_op1(22) = '0') else 
+                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '1' and command_op1(51) = '1') else
+                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '0' and command_op1(22) = '1') else 
                          '0';
                          
    cmp_inputInvalid_b <= '1' when (nanB = '1' and OP(3) = '1') else
-                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '1' and command_op2(51) = '0') else
-                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '0' and command_op2(22) = '0') else 
+                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '1' and command_op2(51) = '1') else
+                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '0' and command_op2(22) = '1') else 
                          '0';
    
    cmp_equal <= '1' when (zeroA = '1' and zeroB = '1') else
@@ -526,10 +528,8 @@ begin
          command_done <= '1';
       end if;
       
-      -- SGI: quiet NaN -> Unimplemented, always traps. Signalling NaN ->
-      -- Invalid, which traps only when the Invalid enable is set.
       if (checkInputs_nan = '1' and nanA = '1') then
-         if ((bit64 = '1' and command_op1(51) = '0') or (bit64 = '0' and command_op1(22) = '0')) then
+         if ((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1')) then
             if (csr_ena_invalidOperation = '1') then
                exceptionFPU <= '1';
                command_done <= '1';
@@ -541,7 +541,7 @@ begin
       end if;      
       
       if (checkInputs2_nan = '1' and nanB = '1') then
-         if ((bit64 = '1' and command_op2(51) = '0') or (bit64 = '0' and command_op2(22) = '0')) then   -- SGI: quiet-bit polarity, see above
+         if ((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')) then
             if (csr_ena_invalidOperation = '1') then
                exceptionFPU <= '1';
                command_done <= '1';
@@ -808,10 +808,8 @@ begin
                if (
                      (checkInputs_dn   = '1' and dnA = '1') or 
                      (checkInputs2_dn  = '1' and dnB = '1') or
-                     -- SGI: the Unimplemented path is the QUIET NaN one; the
-                     -- signalling case falls through to Invalid below.
-                     (checkInputs_nan  = '1' and nanA = '1' and ((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1'))) or
-                     (checkInputs2_nan = '1' and nanB = '1' and ((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')))
+                     (checkInputs_nan  = '1' and nanA = '1' and not((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1'))) or
+                     (checkInputs2_nan = '1' and nanB = '1' and not((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')))
                   ) then
                   csr_cause_unimplemented <= '1';
                   exception_inputInvalid  <= '1';
@@ -925,9 +923,9 @@ begin
          if (outputInvalid_1 = '1') then
             
             if (bit64Out = '1') then
-               FPUWriteData <= x"7FFFFFFFFFFFFFFF";   -- SGI: quiet bit set
+               FPUWriteData <= x"7FF7FFFFFFFFFFFF";
             else
-               FPUWriteData <= 32x"0" & x"7FFFFFFF";  -- SGI: quiet bit set
+               FPUWriteData <= 32x"0" & x"7FBFFFFF";
             end if;
             
             csr_cause_invalidOperation <= '1';
@@ -1654,16 +1652,6 @@ begin
          CISD_stage3 <= CISD_stage2;
          
          -- stage 0
-         --
-         -- SGI KNOWN LIMITATION: cvt.s.l / cvt.d.l truncate the source to its
-         -- low 56 bits, so any |value| >= 2^56 converts to the wrong number.
-         -- The whole normalise-and-round datapath below is 57 bits wide
-         -- (clz_value, shifter_input, the leading-zero count), which is enough
-         -- for a double's 53-bit significand but not for a 64-bit integer's
-         -- magnitude. Widening it means widening the shifter and re-deriving
-         -- the sticky bit, since the suite checks the Inexact flag as well as
-         -- the value - not a change worth making blind.
-         -- cpu-tests: fpu/vec_cvt_from_l, vector 6 (2^62 + 1024).
          if (command_ena = '1' and OPgroup(2) = '1') then
             if (bit64 = '1') then
                clz_value <= unsigned(abs(resize(signed(command_op1(55 downto 0)), 57)));
