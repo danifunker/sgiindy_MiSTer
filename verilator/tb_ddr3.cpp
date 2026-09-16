@@ -72,7 +72,7 @@ static uint64_t garbage() { return ((uint64_t)rng() << 32) ^ rng(); }
 //
 // So: present BUSY, DOUT and DOUT_READY for the cycle, settle, capture what
 // the core is driving, clock, and only then decide.
-struct Bus { bool rd, we; uint32_t addr; uint64_t din; uint8_t be; };
+struct Bus { bool rd, we; uint32_t addr; uint64_t din; uint8_t be; uint8_t burst; };
 
 static void tick()
 {
@@ -93,8 +93,13 @@ static void tick()
     }
     dut->eval();
 
+    // THE BURST COUNT IS PART OF THE COMMAND AND IS SAMPLED WITH IT, before
+    // the edge. It used to be read after the edge, which worked only while the
+    // mux left DDRAM_BURSTCNT alone for a few cycles after a command was
+    // taken; the pipelined mux (docs/50) presents the next command in that
+    // same edge, and the bridge model then read the NEXT command's count.
     Bus b{(bool)dut->DDRAM_RD, (bool)dut->DDRAM_WE, (uint32_t)dut->DDRAM_ADDR,
-          dut->DDRAM_DIN, (uint8_t)dut->DDRAM_BE};
+          dut->DDRAM_DIN, (uint8_t)dut->DDRAM_BE, (uint8_t)dut->DDRAM_BURSTCNT};
     bool busy = dut->DDRAM_BUSY;
 
     // THE DISPLAY'S DATA-VALID IS COMBINATIONAL, so it has to be sampled the
@@ -127,7 +132,7 @@ static void tick()
                 printf("      [bridge] WRITE word=%08x din=%016llx be=%02x\n",
                        b.addr, (unsigned long long)b.din, b.be);
         } else {
-            int n = dut->DDRAM_BURSTCNT ? dut->DDRAM_BURSTCNT : 1;
+            int n = b.burst ? b.burst : 1;
             if (getenv("DDR3_DEBUG3"))
                 printf("      [bridge] READ  word=%08x burst=%d -> %016llx\n",
                        b.addr, n, (unsigned long long)(mem.count(b.addr) ? mem[b.addr] : 0));
@@ -442,6 +447,7 @@ int main(int argc, char **argv)
                (unsigned long long)m->issued, (unsigned long long)m->acked,
                (unsigned long long)m->worst_wait);
 
+    const int data_failures = failures;   // before any check adds to it
     auto check = [&](const char *what, bool ok) {
         printf("  %s %s\n", ok ? "ok     " : "FAILED ", what);
         if (!ok) failures++;
@@ -456,17 +462,23 @@ int main(int argc, char **argv)
     check("all four masters made progress",
           m_fbr.acked > 100 && m_ram.acked > 100 &&
           m_prom.acked > 100 && m_fbw.acked > 100);
-    // The display is first in the priority list, so it must never wait longer
-    // than the rasteriser does. This is the property that stops a screen from
-    // tearing whenever REX3 is busy.
-    check("the display port is not starved behind the rasteriser",
-          m_fbr.worst_wait <= m_fbw.worst_wait);
+    // The display must never be starved. Until docs/50 the display was first
+    // in the priority list and one transaction ran at a time, and this checked
+    // that it never waited longer than the rasteriser. The mux is pipelined
+    // now and main memory goes first - the CPU stalls on every transaction and
+    // never has more than one - so a display burst can wait behind a memory
+    // read or two and its own words; what must hold is that the wait stays
+    // BOUNDED, far inside the three line times (~5000 clocks) of slack
+    // fb_linecache keeps. A starved display waits thousands of clocks here.
+    check("the display port is not starved (worst wait under 400 clocks)",
+          m_fbr.worst_wait < 400);
     // A region overlap shows up as one master reading another's data, which
     // the shadows above already catch - but only if the regions were actually
     // exercised far enough apart to alias. 64 MB of RAM against a 16 MB frame
-    // buffer at a 64 MB offset aliases at once if the base is dropped.
+    // buffer at a 64 MB offset aliases at once if the base is dropped. (Counts
+    // data failures only: a failed check above does not make this one fail.)
     check("main memory and the frame buffer did not alias",
-          m_ram.acked > 100 && failures == 0);
+          m_ram.acked > 100 && data_failures == 0);
     // THE ONE HARDWARE FOUND. A held request must not be taken twice.
     check("a held read-modify-write master read back its own writes",
           rmw_done == (uint64_t)RMW_PIXELS && rmw_bad == 0);

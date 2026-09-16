@@ -28,15 +28,18 @@
 //  for an answer nobody had heard - which is exactly the bug the HPC3 DMA
 //  engine had, and it is written up in docs/13-scsi-dma-plan.md.
 //
-//  ONE TRANSACTION AT A TIME. The rasteriser stalls on its own bus and is
-//  latency-tolerant, so a single 64-bit word per transaction is the honest
-//  shape for it. The CPU's ordinary accesses are single words too, but its
-//  CACHE LINE FILLS ARE BURSTS: `ram_burst` asks for 1..4 consecutive words
-//  and the port answers with one `ram_ack` per word, `ram_last` on the final
-//  one. Measured on the board before this existed (docs/39), a line fill was
-//  one full round trip PER WORD - 36 cycles for a 16-byte data line, ~72 for
-//  a 32-byte instruction line - and the round trip, not the word, is what a
-//  DDR3 access costs. A burst pays it once.
+//  PIPELINED SINCE docs/50. Every master still has at most one transaction
+//  outstanding, but the bridge takes a new command while earlier reads are
+//  still answering (the scaler's own Avalon master relies on the same thing),
+//  so the display, the CPU and the rasteriser no longer wait out each other's
+//  round trips - only each other's words, and the display's words come in
+//  short sub-bursts. See `rf_*` and `fbr_*` below. The CPU's CACHE LINE FILLS
+//  ARE BURSTS: `ram_burst` asks for 1..4 consecutive words and the port
+//  answers with one `ram_ack` per word, `ram_last` on the final one. Measured
+//  on the board before that existed (docs/39), a line fill was one full round
+//  trip PER WORD - 36 cycles for a 16-byte data line, ~72 for a 32-byte
+//  instruction line - and the round trip, not the word, is what a DDR3 access
+//  costs. A burst pays it once.
 //
 //  THE DISPLAY IS DIFFERENT AND THE ARITHMETIC IS WHY. A visible line is 1318
 //  pixels of eight bytes each, and it has one line time to arrive. Single-word
@@ -69,15 +72,22 @@ module ddr3_mux #(
     // every debugging session would. 80.5 MB of the 256 is spoken for.
     parameter logic [31:0] BASE_RAM  = 32'h0000_0000,  //  64 MB
     parameter logic [31:0] BASE_FB   = 32'h0400_0000,  //  16 MB
-    parameter logic [31:0] BASE_PROM = 32'h0500_0000   // 512 KB
+    parameter logic [31:0] BASE_PROM = 32'h0500_0000,  // 512 KB
+
+    // The display's bursts go to the bridge as reads of at most FBR_SUB words,
+    // at most FBR_AHEAD of them outstanding at once (docs/50). tb_ddr3 runs a
+    // second build with small values so the splitting is exercised.
+    parameter int FBR_SUB   = 16,
+    parameter int FBR_AHEAD = 2
 ) (
     input  logic        clk,
     input  logic        reset,
 
-    // ---- master 0: the display's serial port, highest priority -----------
-    // First because it is the only one with a deadline. It is still not fast
-    // enough on its own - see the header - but nothing else should ever be
-    // ahead of it in the queue.
+    // ---- master 0: the display's serial port -----------------------------
+    // The only master with a deadline. Second in line since docs/50, behind
+    // main memory, which never has more than one short transaction out; its
+    // bursts go to the bridge as sub-bursts (FBR_SUB) so nothing waits long
+    // behind them either.
     input  logic        fbr_req,      // held until fbr_taken
     input  logic [31:0] fbr_addr,
     input  logic  [7:0] fbr_burst,    // 64-bit words, 1..255
@@ -117,7 +127,8 @@ module ddr3_mux #(
     output logic        prom_ack,
 
     // ---- master 4: the rasteriser's random port --------------------------
-    // Last. REX3 fills the screen one pixel per transaction and will happily
+    // Rotates with the download and the PROM, after main memory and the
+    // display. REX3 fills the screen one pixel per transaction and will happily
     // take every cycle there is; it is the one master that should give way.
     input  logic        fbw_req,
     input  logic        fbw_we,
@@ -137,13 +148,15 @@ module ddr3_mux #(
     input  logic [63:0] bcn_wdata,
 
     // ---- observation only: the performance counters in sgiindy.sv --------
-    // (docs/50). What the port is doing this clock and who is waiting for
-    // it; nothing here feeds back into the scheduling.
-    output logic  [1:0] dbg_tst,      // 0 idle, 1 issuing, 2 waiting for words
-    output logic  [2:0] dbg_cur,      // owner of the transaction in flight
-    output logic  [5:0] dbg_pend,     // requests latched and not yet finished
-    output logic        dbg_first,    // a read is issued, its first word not back
-    output logic        dbg_pick,     // a transaction is being picked this clock
+    // (docs/50). Who is outstanding, who is waiting, and what the bridge took
+    // this clock; nothing here feeds back into the scheduling.
+    output logic  [5:0] dbg_busy,     // masters with a transaction outstanding
+    output logic  [5:0] dbg_pend,     // masters with a request latched, not yet presented
+    output logic        dbg_take,     // the bridge took a command this clock
+    output logic  [2:0] dbg_take_m,   // ...for this master
+    output logic        dbg_take_rd,  // ...and it was a read
+    output logic        dbg_gap,      // reads are owed and no word came back this clock
+    output logic        dbg_cmdwait,  // a command is waiting on DDRAM_BUSY
 
     // ---- the DE10-Nano's DDR3 bridge --------------------------------------
     input  logic        DDRAM_BUSY,
@@ -172,7 +185,6 @@ module ddr3_mux #(
     logic [24:0]            p_addr [NM];   // already a DDR3 word address
     logic [63:0]            p_wdata[NM];
     logic  [7:0]            p_be   [NM];
-    logic  [7:0]            p_burst;      // the display's
     logic  [2:0]            p_rburst;     // the CPU's, 1..4
 
     // A byte offset within a region becomes a word address by dropping the low
@@ -229,60 +241,87 @@ module ddr3_mux #(
         rq_be[M_BCN]    = 8'hFF;
     end
 
-    // ---- the transaction in flight ----------------------------------------
-    typedef enum logic [1:0] { T_IDLE, T_ISSUE, T_WAIT } tstate_t;
-    tstate_t          tst;
-    logic [$clog2(NM)-1:0] cur;
+    // ---- the display's burst, served as sub-bursts ---------------------------
+    // fb_linecache asks for up to 128 words at a time and counts them as they
+    // stream back; that contract is unchanged. What changed (docs/50) is how
+    // the bridge is asked: the burst goes out as FBR_SUB-word reads, each one
+    // presented while the one before it is still answering, never more than
+    // FBR_AHEAD outstanding. The display's stream stays continuous - the next
+    // read's latency runs while the previous read's words arrive - and any
+    // other master's command can be taken between two sub-bursts instead of
+    // waiting out 128 words and a round trip.
+    logic        fbr_act;        // a display burst is being served
+    logic [24:0] fbr_nxt;        // word address of the next sub-burst
+    logic  [7:0] fbr_isl;        // words not yet asked for
+    logic  [8:0] fbr_rxl;        // words not yet delivered
+    logic  [2:0] fbr_out;        // sub-bursts asked for and not finished
+    logic        fbr_first;      // no sub-burst of this burst taken yet
+    wire   [7:0] fbr_n = (fbr_isl < 8'(FBR_SUB)) ? fbr_isl : 8'(FBR_SUB);
 
-    // THE DISPLAY GOES FIRST AND EVERYTHING ELSE TAKES TURNS, and the second
-    // half of that is not politeness. Straight fixed priority was the first
-    // version and the unit test measured what it does: at four masters all
-    // asking, the rasteriser - last in the list - got 62 transactions against
-    // the display's 3707 and waited 5370 cycles for one of them. On hardware
-    // that is a screen that fills at a crawl whenever anything else is using
-    // memory, which is always.
+    // ---- who goes next --------------------------------------------------------
+    // PIPELINED, SO PRIORITY DECIDES ORDER AND NOT WHO WAITS FOR WHOM. Every
+    // master has at most one transaction outstanding - a pulsing master waits
+    // for its acknowledgement before it asks again, the latch below refuses a
+    // master that is still `busy`, and the display's sub-bursts are capped at
+    // FBR_AHEAD - so no master can take turn after turn: while one master's
+    // transaction is outstanding the others are the only candidates. That is
+    // what makes a fixed order safe here, where one transaction at a time made
+    // it starve the rasteriser (62 rasteriser transactions against the
+    // display's 3707 in tb_ddr3 under fixed priority, before the rotation).
     //
-    // So the display keeps absolute priority, because it is the only master
-    // with a deadline, and the other four rotate. `rr` is the last one served
-    // among them, as an index into 1..NM-1.
-    logic [1:0] rr;
+    // The order: MAIN MEMORY FIRST, because the CPU stalls its whole pipeline
+    // on every one of its transactions and never has more than one; then THE
+    // DISPLAY, the only master with a deadline; then the download, the PROM
+    // and the rasteriser, rotating; the beacon only when nobody else is
+    // asking, so observing the machine cannot cost it a clock.
+    logic [1:0]            rr;
     logic [$clog2(NM)-1:0] pick;
     logic                  any;
+    logic         [NM-1:0] busy_m;     // taken or presented, not yet finished
+    logic         [NM-1:0] cand;
+    logic                  cmd_v;
+    logic [$clog2(NM)-1:0] cmd_m;
+    always_comb begin
+        cand = pend & ~busy_m;
+        cand[M_FBR] = fbr_act && (fbr_isl != 8'd0)
+                   && (fbr_out < 3'(FBR_AHEAD))
+                   && !(cmd_v && cmd_m == $clog2(NM)'(M_FBR));
+    end
     always_comb begin
         pick = '0;
         any  = 1'b0;
-        if (pend[M_FBR]) begin
+        if (cand[M_RAM]) begin
+            pick = $clog2(NM)'(M_RAM);
+            any  = 1'b1;
+        end else if (cand[M_FBR]) begin
             pick = $clog2(NM)'(M_FBR);
             any  = 1'b1;
         end else begin
-            // k counts forward from the one after `rr`; scanning k downward
-            // and letting the last assignment win picks the nearest. The
-            // bound is the ROTATING GROUP's size (masters 1..4), not NM-2:
-            // the beacon master below is not in the rotation.
-            for (int k = 3; k >= 0; k--) begin
-                automatic logic [$clog2(NM)-1:0] cand =
-                    $clog2(NM)'(1 + ((rr + k[1:0]) & 2'b11));
-                if (pend[cand]) begin
-                    pick = cand;
+            // DL, PROM, FBW rotate: slot k+1 after `rr` first, scanning
+            // downward so the nearest wins.
+            for (int k = 2; k >= 0; k--) begin
+                automatic logic [1:0] slot = 2'((32'(rr) + k + 1) % 3);
+                automatic logic [$clog2(NM)-1:0] c =
+                    (slot == 2'd0) ? $clog2(NM)'(M_DL)
+                  : (slot == 2'd1) ? $clog2(NM)'(M_PROM)
+                  :                  $clog2(NM)'(M_FBW);
+                if (cand[c]) begin
+                    pick = c;
                     any  = 1'b1;
                 end
             end
-        end
-        // The beacon goes ONLY when nobody else is asking: strictly last, so
-        // the observation cannot cost the observed machine a cycle it would
-        // otherwise have had.
-        if (!any && pend[M_BCN]) begin
-            pick = $clog2(NM)'(M_BCN);
-            any  = 1'b1;
+            if (!any && cand[M_BCN]) begin
+                pick = $clog2(NM)'(M_BCN);
+                any  = 1'b1;
+            end
         end
     end
+    wire [1:0] pick_slot = (pick == $clog2(NM)'(M_DL))   ? 2'd0
+                         : (pick == $clog2(NM)'(M_PROM)) ? 2'd1 : 2'd2;
+    wire       pick_we   = (pick == $clog2(NM)'(M_FBR)) ? 1'b0 : p_we[pick];
 
     logic [63:0] rdata_q;
     logic  [NM-1:0] ack_q;
-
-    // The burst's remaining word count. Non-zero means the display's data is
-    // streaming and every DOUT_READY belongs to it.
-    logic  [8:0] burst_left;
 
     assign ram_rdata  = rdata_q;
     assign prom_rdata = rdata_q;
@@ -294,15 +333,53 @@ module ddr3_mux #(
     assign prom_ack   = ack_q[M_PROM];
     assign fbw_ack    = ack_q[M_FBW];
 
+    // ---- the command in front of the bridge, and the reads behind it -------
+    // `cmd_v`: RD or WE is being presented, for `cmd_m`. The bridge takes it on
+    // a clock where it is not busy, and from that clock on a WRITE is done (it
+    // needs no answer - ordering against a later read of the same address is
+    // the bridge's, as it always was) and a READ is owed words.
+    //
+    // THE BRIDGE ANSWERS READS IN THE ORDER IT TOOK THEM, AND THIS KEEPS THAT
+    // ORDER: `rf_*` is a queue of {master, words} for every read taken and not
+    // yet answered, oldest at `rf_rd`, and each DOUT_READY belongs to the head.
+    // At most FBR_AHEAD display sub-bursts plus one read each for main memory,
+    // the PROM and the rasteriser can be in it.
+    //
+    // WHY NOT ONE TRANSACTION AT A TIME, as this file did until build 28. The
+    // bridge answers a read ~10 clocks after taking it and the display fetches
+    // every line of every frame, holding the port about 41 % of the time. One
+    // transaction at a time meant a CPU cache fill, or a writeback, arriving
+    // during a display burst queued behind the whole burst AND its round trip:
+    // 15-20 clocks waiting for 8-11 held, on every CPU transaction, measured on
+    // the board (docs/50). The scaler's own Avalon master (sys/ascal.vhd)
+    // already relies on the bridge taking commands while reads are owed.
+    logic                  cmd_we;
+    logic  [7:0]           cmd_n;
+
+    localparam int RF = 8;
+    logic [$clog2(NM)-1:0] rf_m [RF];
+    logic  [7:0]           rf_n [RF];
+    logic  [2:0]           rf_rd, rf_wr;
+    logic  [3:0]           rf_cnt;
+
+    wire                  take      = cmd_v && !DDRAM_BUSY;
+    wire                  push      = take && !cmd_we;
+    wire                  rf_head_v = (rf_cnt != 4'd0);
+    wire [$clog2(NM)-1:0] rf_head_m = rf_m[rf_rd];
+    wire                  word      = DDRAM_DOUT_READY && rf_head_v;
+    wire                  word_end  = word && (rf_n[rf_rd] <= 8'd1);   // the head read is done
+    wire                  fbr_word  = word && (rf_head_m == $clog2(NM)'(M_FBR));
+
     // THE DISPLAY DOES NOT GET AN `ack` AND A LATCHED WORD, it gets a stream.
     // `fbr_taken` says the burst was issued so the requester may stop holding
-    // its request; every DOUT_READY while the display owns the bus is one of
-    // its words.
+    // its request; every DOUT_READY the read queue says is the display's is one
+    // of its words.
     // `fbr_taken` IS ASSERTED WHEN THE BURST IS ISSUED, NOT WHEN IT FINISHES,
     // and the difference is the whole handshake. The requester holds its
     // request until this, then counts words; if it only came at the end, the
     // requester would still be waiting to be told to start while its data was
-    // streaming past it.
+    // streaming past it. Sub-bursts do not change it: it comes when the FIRST
+    // sub-burst is taken, which is before any word of the burst can arrive.
     //
     // This was wrong in exactly that way, and the two unit tests did not catch
     // it between them - tb_ddr3 drove the port and never checked when the
@@ -310,28 +387,45 @@ module ddr3_mux #(
     // at issue, which is the contract this file did not implement. Two tests,
     // one on each side, both passing, and the sides disagreeing.
     logic fbr_taken_q;
-    logic first_q;
-    assign dbg_tst   = tst;
-    assign dbg_cur   = cur;
-    assign dbg_pend  = pend;
-    assign dbg_first = first_q;
-    assign dbg_pick  = (tst == T_IDLE) && any;
     assign fbr_dout       = DDRAM_DOUT;
-    assign fbr_dout_valid = DDRAM_DOUT_READY && (tst == T_WAIT) &&
-                            (cur == $clog2(NM)'(M_FBR));
+    assign fbr_dout_valid = fbr_word;
     assign fbr_taken      = fbr_taken_q;
+
+    // observation (docs/50)
+    logic [NM-1:0] busy_obs;
+    always_comb begin
+        busy_obs = busy_m;
+        busy_obs[M_FBR] = fbr_act;
+    end
+    assign dbg_busy    = busy_obs;
+    assign dbg_pend    = pend;
+    assign dbg_take    = take;
+    assign dbg_take_m  = cmd_m;
+    assign dbg_take_rd = push;
+    assign dbg_gap     = rf_head_v && !DDRAM_DOUT_READY;
+    assign dbg_cmdwait = cmd_v && DDRAM_BUSY;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            burst_left     <= 9'd0;
             fbr_taken_q    <= 1'b0;
-            first_q        <= 1'b0;
             pend           <= '0;
             rq_seen        <= '0;
+            busy_m         <= '0;
             ack_q          <= '0;
             ram_last_q     <= 1'b1;
-            tst            <= T_IDLE;
-            cur            <= '0;
+            cmd_v          <= 1'b0;
+            cmd_m          <= '0;
+            cmd_we         <= 1'b0;
+            cmd_n          <= 8'd1;
+            rf_rd          <= 3'd0;
+            rf_wr          <= 3'd0;
+            rf_cnt         <= 4'd0;
+            fbr_act        <= 1'b0;
+            fbr_nxt        <= 25'd0;
+            fbr_isl        <= 8'd0;
+            fbr_rxl        <= 9'd0;
+            fbr_out        <= 3'd0;
+            fbr_first      <= 1'b0;
             rr             <= 2'd0;
             rdata_q        <= 64'h0;
             DDRAM_RD       <= 1'b0;
@@ -382,6 +476,12 @@ module ddr3_mux #(
             // NO SIMULATION SAW THE ORIGINAL. The headless harness has its own
             // one-cycle memory and never instantiates this file, and tb_ddr3
             // drove every master as a pulse. Its phase 3 is REX3's shape now.
+            //
+            // Pipelined, "still in flight" is `busy_m` (presented or taken,
+            // owed an answer) - or, for the display, `fbr_act` - rather than
+            // `pend` (latched, not yet presented): a master is refused while
+            // either is set, exactly as the one-transaction version refused it
+            // while `pend` covered both.
             for (int i = 0; i < NM; i++) begin
                 // Blocked only in the cycle that carries the master's own
                 // acknowledgement, and only when what it is presenting is the
@@ -392,12 +492,23 @@ module ddr3_mux #(
                 // dropping between them: the second would never be taken and
                 // the rasteriser would wait for ever.
                 if (!rq[i]) rq_seen[i] <= 1'b0;
-                else if (!pend[i] && !(rq_seen[i] && ack_q[i]
-                                       && rq_we[i]   == p_we[i]
-                                       && rq_addr[i] == p_addr[i])) begin
-                    pend[i]    <= 1'b1;
+                else if (!pend[i] && !busy_m[i]
+                         && !(i == M_FBR && fbr_act)
+                         && !(rq_seen[i] && ack_q[i]
+                              && rq_we[i]   == p_we[i]
+                              && rq_addr[i] == p_addr[i])) begin
                     rq_seen[i] <= 1'b1;
-                    if (i == M_FBR) p_burst  <= fbr_burst;
+                    if (i == M_FBR) begin
+                        // The display's burst goes straight into service;
+                        // its sub-bursts become candidates from the next clock.
+                        fbr_act   <= 1'b1;
+                        fbr_nxt   <= rq_addr[i];
+                        fbr_isl   <= (fbr_burst == 8'd0) ? 8'd1 : fbr_burst;
+                        fbr_rxl   <= (fbr_burst == 8'd0) ? 9'd1 : {1'b0, fbr_burst};
+                        fbr_first <= 1'b1;
+                    end else begin
+                        pend[i] <= 1'b1;
+                    end
                     if (i == M_RAM) p_rburst <= (ram_we || ram_burst == 3'd0)
                                                 ? 3'd1 : ram_burst;
                     p_we[i]    <= rq_we[i];
@@ -407,70 +518,97 @@ module ddr3_mux #(
                 end
             end
 
-            case (tst)
-                T_IDLE: if (any) begin
-                    cur            <= pick;
-                    burst_left     <= (pick == $clog2(NM)'(M_FBR)) ? {1'b0, p_burst}
-                                    : (pick == $clog2(NM)'(M_RAM)) ? {6'b0, p_rburst}
-                                    :                                 9'd1;
-                    // Only the rotating group advances the pointer; the
-                    // display is not in it and must not push anyone's turn.
-                    if (pick != $clog2(NM)'(M_FBR) &&
-                        pick != $clog2(NM)'(M_BCN)) rr <= 2'(pick - 1);
+            // ---- a word back from the bridge: the oldest read's -------------
+            if (word) begin
+                rdata_q     <= DDRAM_DOUT;
+                rf_n[rf_rd] <= rf_n[rf_rd] - 8'd1;
+                // The CPU takes its burst word by word, each with an ack, the
+                // way the display takes its stream: the requester counts, and
+                // `ram_last` closes the count. The PROM and the rasteriser
+                // read single words.
+                if (rf_head_m == $clog2(NM)'(M_RAM)) begin
+                    ack_q[M_RAM] <= 1'b1;
+                    ram_last_q   <= word_end;
+                end
+                if (word_end) begin
+                    rf_rd <= rf_rd + 3'd1;
+                    if (rf_head_m != $clog2(NM)'(M_FBR)) begin
+                        busy_m[rf_head_m] <= 1'b0;
+                        ack_q[rf_head_m]  <= 1'b1;
+                    end
+                end
+            end
+            if (fbr_word) begin
+                fbr_rxl <= fbr_rxl - 9'd1;
+                if (fbr_rxl <= 9'd1) fbr_act <= 1'b0;
+            end
+            fbr_out <= fbr_out
+                     + ((push && cmd_m == $clog2(NM)'(M_FBR)) ? 3'd1 : 3'd0)
+                     - ((word_end && rf_head_m == $clog2(NM)'(M_FBR)) ? 3'd1 : 3'd0);
+
+            // ---- the bridge takes the command in front of it ---------------
+            // THE BRIDGE TAKES THE REQUEST ON A CYCLE WHERE IT IS NOT BUSY, and
+            // until then RD/WE and the address have to be held exactly as
+            // presented. Dropping them for a cycle does not retry the
+            // transaction, it loses it.
+            if (take) begin
+                cmd_v    <= 1'b0;
+                DDRAM_RD <= 1'b0;
+                DDRAM_WE <= 1'b0;
+                if (cmd_we) begin
+                    // A write needs no answer. Acknowledge it now.
+                    ack_q[cmd_m]  <= 1'b1;
+                    busy_m[cmd_m] <= 1'b0;
+                end else begin
+                    rf_m[rf_wr] <= cmd_m;
+                    rf_n[rf_wr] <= cmd_n;
+                    rf_wr       <= rf_wr + 3'd1;
+                    if (cmd_m == $clog2(NM)'(M_FBR) && fbr_first) begin
+                        fbr_taken_q <= 1'b1;
+                        fbr_first   <= 1'b0;
+                    end
+                end
+            end
+
+            rf_cnt <= rf_cnt + (push ? 4'd1 : 4'd0) - (word_end ? 4'd1 : 4'd0);
+`ifdef DDR3MUX_DEBUG
+            if (take || word)
+                $display("[mux] take=%0d m=%0d we=%0d n=%0d | word=%0d head_m=%0d head_n=%0d end=%0d | rd=%0d wr=%0d cnt=%0d | fbr act=%0d isl=%0d rxl=%0d out=%0d",
+                         take, cmd_m, cmd_we, cmd_n, word, rf_head_m, rf_n[rf_rd], word_end,
+                         rf_rd, rf_wr, rf_cnt, fbr_act, fbr_isl, fbr_rxl, fbr_out);
+`endif
+
+            // ---- and the next command goes in front of it ------------------
+            // The same clock the last one is taken, so a command waits for the
+            // bridge and nothing else. A read needs room in the queue, which
+            // the caps above keep it from ever lacking; the check is a guard.
+            if ((!cmd_v || take) && any
+                && (pick_we || rf_cnt + (push ? 4'd1 : 4'd0) < 4'(RF))) begin
+                cmd_v          <= 1'b1;
+                cmd_m          <= pick;
+                cmd_we         <= pick_we;
+                DDRAM_RD       <= ~pick_we;
+                DDRAM_WE       <=  pick_we;
+                if (pick == $clog2(NM)'(M_FBR)) begin
+                    cmd_n          <= fbr_n;
+                    DDRAM_ADDR     <= {REGION, fbr_nxt};
+                    DDRAM_BURSTCNT <= fbr_n;
+                    DDRAM_DIN      <= 64'h0;
+                    DDRAM_BE       <= 8'hFF;
+                    fbr_nxt        <= fbr_nxt + 25'(fbr_n);
+                    fbr_isl        <= fbr_isl - fbr_n;
+                end else begin
+                    cmd_n          <= (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst} : 8'd1;
                     DDRAM_ADDR     <= {REGION, p_addr[pick]};
-                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_FBR)) ? p_burst
-                                    : (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst}
-                                    :                                 8'd1;
+                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst} : 8'd1;
                     DDRAM_DIN      <= p_wdata[pick];
                     DDRAM_BE       <= p_we[pick] ? p_be[pick] : 8'hFF;
-                    DDRAM_RD       <= ~p_we[pick];
-                    DDRAM_WE       <=  p_we[pick];
-                    tst            <= T_ISSUE;
+                    pend[pick]     <= 1'b0;
+                    busy_m[pick]   <= 1'b1;
+                    if (pick != $clog2(NM)'(M_RAM) && pick != $clog2(NM)'(M_BCN))
+                        rr <= pick_slot;
                 end
-
-                // THE BRIDGE TAKES THE REQUEST ON A CYCLE WHERE IT IS NOT
-                // BUSY, and until then RD/WE and the address have to be held
-                // exactly as presented. Dropping them for a cycle does not
-                // retry the transaction, it loses it.
-                T_ISSUE: if (!DDRAM_BUSY) begin
-                    DDRAM_RD <= 1'b0;
-                    DDRAM_WE <= 1'b0;
-                    if (p_we[cur]) begin
-                        // A write needs no answer. Acknowledge it now: the
-                        // bridge has taken it and ordering against a later
-                        // read of the same address is the bridge's problem,
-                        // which is what makes it a bridge.
-                        pend[cur]  <= 1'b0;
-                        ack_q[cur] <= 1'b1;
-                        tst        <= T_IDLE;
-                    end else begin
-                        if (cur == $clog2(NM)'(M_FBR)) fbr_taken_q <= 1'b1;
-                        tst     <= T_WAIT;
-                        first_q <= 1'b1;
-                    end
-                end
-
-                // A burst returns burst_left words, in order, one per
-                // DOUT_READY. Everything else returns exactly one, so the
-                // same counter serves both.
-                default: if (DDRAM_DOUT_READY) begin
-                    rdata_q    <= DDRAM_DOUT;
-                    first_q    <= 1'b0;
-                    burst_left <= burst_left - 9'd1;
-                    // The CPU takes its burst word by word, each with an
-                    // ack, the way the display takes its stream: the
-                    // requester counts, and `ram_last` closes the count.
-                    if (cur == $clog2(NM)'(M_RAM)) begin
-                        ack_q[M_RAM] <= 1'b1;
-                        ram_last_q   <= (burst_left <= 9'd1);
-                    end
-                    if (burst_left <= 9'd1) begin
-                        pend[cur]  <= 1'b0;
-                        ack_q[cur] <= 1'b1;
-                        tst        <= T_IDLE;
-                    end
-                end
-            endcase
+            end
         end
     end
 

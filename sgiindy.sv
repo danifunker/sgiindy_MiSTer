@@ -735,10 +735,9 @@ fb_fetch_arb u_fetch_arb
 );
 
 // What the DDR3 port is doing, for the performance counters below (docs/50).
-wire [1:0] mx_tst;
-wire [2:0] mx_cur;
-wire [5:0] mx_pend;
-wire       mx_first, mx_pick;
+wire [5:0] mx_busy, mx_pend;
+wire       mx_take, mx_take_rd, mx_gap, mx_cmdwait;
+wire [2:0] mx_take_m;
 
 ddr3_mux u_mem
 (
@@ -785,11 +784,13 @@ ddr3_mux u_mem
 	.bcn_addr  (bcn_addr),
 	.bcn_wdata (bcn_wdata),
 
-	.dbg_tst   (mx_tst),
-	.dbg_cur   (mx_cur),
-	.dbg_pend  (mx_pend),
-	.dbg_first (mx_first),
-	.dbg_pick  (mx_pick),
+	.dbg_busy    (mx_busy),
+	.dbg_pend    (mx_pend),
+	.dbg_take    (mx_take),
+	.dbg_take_m  (mx_take_m),
+	.dbg_take_rd (mx_take_rd),
+	.dbg_gap     (mx_gap),
+	.dbg_cmdwait (mx_cmdwait),
 
 	.DDRAM_BUSY      (DDRAM_BUSY),
 	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
@@ -833,48 +834,41 @@ localparam int BCN_WORDS = 35;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
-// stores goes through ddr3_mux, one transaction at a time: the display's line
-// fetches (absolute priority), the CPU's cache fills and uncached accesses
-// together with the SCSI and MC DMA engines (the RAM master), and the
-// rasteriser's one-pixel transactions. A cache fill measured at 26 clocks on
-// an idle port (docs/39) costs whatever it waits behind on a busy one, and
-// these say how much that is. "/64" counters are 38 bits reporting the top 32.
-//   w29 {clocks the display held the port /64,    clocks RAM held it /64}
-//   w30 {clocks the rasteriser held it /64,       clocks anyone else did /64}
-//   w31 {clocks a RAM request waited unserved /64, a rasteriser request /64}
-//   w32 {RAM transactions,                         rasteriser transactions}
-//   w33 {clocks from a read's issue to its first word /64, reads issued}
-//   w34 {clocks an issue waited on DDRAM_BUSY /64, display bursts}
+// stores goes through ddr3_mux: the display's line fetches, the CPU's cache
+// fills and uncached accesses together with the SCSI and MC DMA engines (the
+// RAM master), and the rasteriser's one-pixel transactions. The mux is
+// pipelined, so "outstanding" clocks of different masters overlap; "waiting"
+// is a request latched and not yet presented to the bridge. "/64" counters
+// are 38 bits reporting the top 32.
+//   w29 {clocks the display had a transaction outstanding /64, clocks RAM did /64}
+//   w30 {clocks the rasteriser did /64,              clocks anyone else did /64}
+//   w31 {clocks a RAM request waited unpresented /64, a rasteriser request /64}
+//   w32 {RAM transactions taken,                      rasteriser transactions taken}
+//   w33 {clocks reads were owed and no word came /64, reads taken}
+//   w34 {clocks a command waited on DDRAM_BUSY /64,   display bursts taken}
 localparam int MX_FBR = 0, MX_RAM = 2, MX_FBW = 4;
 reg [37:0] mx_c_fbr, mx_c_ram, mx_c_fbw, mx_c_oth, mx_q_ram, mx_q_fbw, mx_c_lat, mx_c_bsy;
 reg [31:0] mx_n_ram, mx_n_fbw, mx_n_rd, mx_n_fbr;
-reg  [1:0] mx_tst_q;
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
 		mx_c_fbr <= 38'd0; mx_c_ram <= 38'd0; mx_c_fbw <= 38'd0; mx_c_oth <= 38'd0;
 		mx_q_ram <= 38'd0; mx_q_fbw <= 38'd0; mx_c_lat <= 38'd0; mx_c_bsy <= 38'd0;
 		mx_n_ram <= 32'd0; mx_n_fbw <= 32'd0; mx_n_rd  <= 32'd0; mx_n_fbr <= 32'd0;
-		mx_tst_q <= 2'd0;
 	end else begin
-		mx_tst_q <= mx_tst;
-		if (mx_tst != 2'd0) begin
-			if      (mx_cur == 3'(MX_FBR)) mx_c_fbr <= mx_c_fbr + 38'd1;
-			else if (mx_cur == 3'(MX_RAM)) mx_c_ram <= mx_c_ram + 38'd1;
-			else if (mx_cur == 3'(MX_FBW)) mx_c_fbw <= mx_c_fbw + 38'd1;
-			else                           mx_c_oth <= mx_c_oth + 38'd1;
+		if (mx_busy[MX_FBR]) mx_c_fbr <= mx_c_fbr + 38'd1;
+		if (mx_busy[MX_RAM]) mx_c_ram <= mx_c_ram + 38'd1;
+		if (mx_busy[MX_FBW]) mx_c_fbw <= mx_c_fbw + 38'd1;
+		if (mx_busy[1] | mx_busy[3] | mx_busy[5]) mx_c_oth <= mx_c_oth + 38'd1;
+		if (mx_pend[MX_RAM]) mx_q_ram <= mx_q_ram + 38'd1;
+		if (mx_pend[MX_FBW]) mx_q_fbw <= mx_q_fbw + 38'd1;
+		if (mx_gap)          mx_c_lat <= mx_c_lat + 38'd1;
+		if (mx_cmdwait)      mx_c_bsy <= mx_c_bsy + 38'd1;
+		if (mx_take) begin
+			if      (mx_take_m == 3'(MX_RAM)) mx_n_ram <= mx_n_ram + 32'd1;
+			else if (mx_take_m == 3'(MX_FBW)) mx_n_fbw <= mx_n_fbw + 32'd1;
+			else if (mx_take_m == 3'(MX_FBR)) mx_n_fbr <= mx_n_fbr + 32'd1;
+			if (mx_take_rd)                   mx_n_rd  <= mx_n_rd  + 32'd1;
 		end
-		if (mx_pend[MX_RAM] && !(mx_tst != 2'd0 && mx_cur == 3'(MX_RAM))) mx_q_ram <= mx_q_ram + 38'd1;
-		if (mx_pend[MX_FBW] && !(mx_tst != 2'd0 && mx_cur == 3'(MX_FBW))) mx_q_fbw <= mx_q_fbw + 38'd1;
-		if (mx_first)                     mx_c_lat <= mx_c_lat + 38'd1;
-		if (mx_tst == 2'd1 && DDRAM_BUSY) mx_c_bsy <= mx_c_bsy + 38'd1;
-		// A transaction begins on the clock the mux leaves T_IDLE; its
-		// owner is `cur` from the next clock on, so count on the entry.
-		if (mx_tst == 2'd1 && mx_tst_q == 2'd0) begin
-			if      (mx_cur == 3'(MX_RAM)) mx_n_ram <= mx_n_ram + 32'd1;
-			else if (mx_cur == 3'(MX_FBW)) mx_n_fbw <= mx_n_fbw + 32'd1;
-			else if (mx_cur == 3'(MX_FBR)) mx_n_fbr <= mx_n_fbr + 32'd1;
-		end
-		if (mx_tst == 2'd2 && mx_tst_q == 2'd1) mx_n_rd <= mx_n_rd + 32'd1;
 	end
 end
 
