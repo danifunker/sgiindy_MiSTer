@@ -31,6 +31,54 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260916 — twice the speed: the TLB, the memory port, the instruction cache
+
+`releases/SGIIndy_20260916.rbf`, md5 `aea29ae92655eb59a8fa88549f2c5f31`
+(build 30b, SEED=3; 38,846 ALMs, 47,446 registers, 483 / 553 M10K, core
+clock setup slack +3.091 ns, HDMI PLL +0.143 ns, every domain met). Same
+`releases/boot.rom`.
+
+Build 27 profiled on the board said the machine was CPU- and memory-bound
+rather than waiting on anything, and four changes came out of it (docs/50):
+
+* **The TLB is matched in parallel.** A lookup used to walk the 48 entries one
+  per clock, on every page crossing of every user program, and all 48 before
+  each refill exception. Now two clocks, or one for a miss.
+* **The instruction cache is 16 KB again**, physically indexed.
+* **The DDR3 port is pipelined.** One transaction at a time used to make every
+  CPU cache fill queue behind the display's 128-word line reads; commands now
+  overlap in the bridge, the display reads in 16-word sub-bursts, and main
+  memory goes first. A fill's time on the bus went from ~40 clocks to 24.
+* **A refill of a line the instruction cache already holds is answered from
+  it.** The CPU asked for a DDR3 fill after every instruction TLB walk,
+  cached or not; 78-98 % of those now need no trip at all.
+
+Measured with `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`:
+
+| workload | SGIIndy_20260908_2 | SGIIndy_20260916 |
+|---|---:|---:|
+| launch to the X login screen | 216 s | 125 s |
+| root login to a settled desktop | ~67 s | ~49 s |
+| perl interpreter loop | 44.5 s | 13.5 s |
+| bzip2 -9 of /unix | 215.0 s | 101.9 s |
+| `ls -lR /usr/lib/X11` into the Console | 16.6 s | 8.8 s |
+| 60 x `/bin/ls /` | 8.8 s | 4.9 s |
+| dd 10 MB off the raw disk | 8.1 s | 5.9 s |
+| `xterm -e /bin/true`, warm | 0.77 s (build 28) | 0.51 s |
+
+Tested: `make cpuonly` (728 runs, 0 against expectation), the cpu-tests
+suite (2160 / 3, the known `fpu/vec_cvt_from_l`), the whole-machine IRIX boot
+(console identical to build 28's and 30's), tb_ddr3 in both sub-burst
+shapes, tb_ramarb, tb_linecache, tb_fetcharb; on the board, full perfprobe
+runs of builds 29, 30, 30b and this bitstream - every one booted, logged in,
+ran every workload and shut down, with no display line-cache miss in any
+window. The beacon is version 11 now (one more word, the refill counters);
+the tools in `tools/misterdeploy/` read both.
+
+Perl-like interpreter loops vary from boot to boot on this build (13.5-16 s):
+with a direct-mapped cache their speed depends on where their hot pages land
+in physical memory.
+
 ## SGIIndy_20260908_2 — the CD-ROM cached too
 
 `releases/SGIIndy_20260908_2.rbf`, md5 `28e1b0c662efe8ef9df8eef89d9cf10c`

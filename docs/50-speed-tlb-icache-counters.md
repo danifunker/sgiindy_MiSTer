@@ -401,6 +401,48 @@ path - the test reads Cause before Count in its wait loop, so Count can pass
 the deadline between the two reads and the loop exits with IP7 unseen: one
 check fewer, still PASS, a race in the test).
 
+IRIX gate for 30b: console byte-identical to build 30's run, no PANIC, the
+unclaimed-bus table the same addresses, kinds and counts with every cycle
+number ~12,000 later (the kernel boot's real fills each wait the extra
+clock); 63,971 of 70,732 refills after an instruction TLB walk (90.4 %)
+answered from the cache.
+
+Quartus, 30b: 38,919 ALMs (93 %, the instruction cache 972 ALMs against 1,402)
+and 483 M10K; core clock +3.031 ns but the HDMI PLL -0.141 ns at SEED=2 - that
+domain is the MiSTer scaler's 148.5 MHz output and misses or meets by a tenth
+of a nanosecond from seed to seed on this design whatever the CPU does (build
+28 +0.127, 29 +0.057, 30 -0.016), and a miss there drops pixels at fixed
+screen positions (`scripts/build.sh`). **SEED=3 meets everything:** HDMI PLL
++0.143 ns, core clock +3.091 ns, 38,846 ALMs, 483 M10K;
+`output_files/sgiindy-b30b-seed3.rbf` md5 `aea29ae92655eb59a8fa88549f2c5f31`.
+
+30b (SEED=2 bitstream) on the board, `tests/out/hw/perf-b30b/`:
+
+| workload | build 30 | build 30b |
+|---|---:|---:|
+| launch returned to the X login screen (~11 s polls) | 114 s | 125 s |
+| 60 x `/bin/ls /` | 4.79 s | 4.86 s |
+| perl loop | 16.14 s | 13.67 s |
+| bzip2 -9 -c /unix | 103.73 s | 104.22 s |
+| dd 10 MB off the raw disk | 5.54 s | 5.42 s |
+| `ls -lR /usr/lib/X11` into the Console | 9.32 s | 8.98 s |
+| `xterm -e /bin/true` (cold, then warm) | 2.04 s, 0.49 s | 1.46 s, 0.51 s |
+| `xdpyinfo > /dev/null` | 0.19 s | 0.19 s |
+
+The SEED=3 bitstream (`tests/out/hw/perf-b30b3/`, released as SGIIndy_20260916):
+X login screen 125 s, login ~49 s, 60 x ls 4.89 s, perl 13.46 s, bzip2
+101.94 s, raw disk 5.92 s, scroll 8.77 s, xterm 1.55 s / 0.51 s, xdpyinfo
+0.19 s; no display line-cache misses, no panic.
+
+The same machine within the noise - except perl, whose instruction-cache
+fills went 25.1 -> 9.9 per 1000 between the two runs with nothing in the
+change to account for it. A direct-mapped cache makes an interpreter loop
+hostage to where its hot pages land in physical memory: two lines that
+share an index ping-pong, and a different boot puts them elsewhere. Single
+perl runs are therefore a noisy measure on this cache (builds 28 and 29 both
+read 38.7, so the layout is often stable, but not always), and a second way
+would take most of that sensitivity away along with the misses.
+
 ## 8. The board's card filled up: restores now copy in place
 
 The first build 30 run died restoring the image: `cp: error writing
