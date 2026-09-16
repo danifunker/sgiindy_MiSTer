@@ -330,10 +330,6 @@ architecture arch of cpu is
       return result;
    end function;
 
-   -- SGI: kept in step with cpu_cop0.vhd's constant of the same name. See its
-   -- comment there for what claiming to be an R4600 commits the core to.
-   constant PRESENT_AS_R4600 : boolean := true;
-
    -- register file
    signal regs_address_a               : std_logic_vector(4 downto 0);
    signal regs_data_a                  : std_logic_vector(63 downto 0);
@@ -2951,14 +2947,7 @@ begin
                         end if;
                        
                      when 16#12# => -- COP2
-                        -- SGI: an R4000/R4400 has no coprocessor 2 at all, so
-                        -- every COP2 instruction is Coprocessor Unusable with
-                        -- Cause.CE = 2 whatever Status.CU2 says. The R4300 does
-                        -- have one - a 64-bit data latch with no operations -
-                        -- which is why upstream implements the transfers. A
-                        -- machine claiming to be an R4400 should not.
-                        -- cpu-tests: excep/cop2_unusable.
-                        if (COP2_enable = '0' or PRESENT_AS_R4600) then
+                        if (COP2_enable = '0') then
                            decodeExcType           <= EXCTYPE_DECODE;
                            decodeExcCode           <= x"B";
                            decodeExcCOP            <= "10";

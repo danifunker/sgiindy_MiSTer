@@ -104,6 +104,7 @@ and now stands again, so none of it carries an `-- SGI:` mark any more.
 |---|---|---|
 | `cpu_FPU.vhd` | NaN polarity, all four places: the compare's Invalid test, the arithmetic Invalid-versus-Unimplemented split (both operands), and the default Invalid result (`0x7FFFFFFF` back to `0x7FBFFFFF`, `0x7FF7FFFFFFFFFFFF` for double) | The R4000 family uses the legacy MIPS encoding: a fraction MSB that is SET marks a SIGNALLING NaN. So `0x7FC00000` as an arithmetic operand is Invalid (trap if enabled, else the default quiet NaN `0x7FBFFFFF` and Flag.V), `0x7FA00000` is a quiet NaN the part will not propagate in hardware (Unimplemented Operation, no flag), and a compare signals Invalid on `0x7FC00000` for every predicate but on `0x7FA00000` only for the signalling ones. Identical on both parts. `fpu/snan_operands`, `fpu/qnan_operand`, `fpu/compare_nan`, `fpu/cmp_signalling_qnan`, `fpu/cmp_snan_any_pred`, `fpu/cmp_trap_on_signal` |
 | `cpu.vhd` | The MIPS IV COP1 function codes (0x11 MOVCF, 0x12 MOVZ, 0x13 MOVN, 0x15 RECIP, 0x16 RSQRT) no longer stop at decode with Reserved Instruction; they reach the FPU, whose decoder has no case for them | A COP1 word is a valid coprocessor instruction on a MIPS III part: the CPU hands it to the FPU, which signals Unimplemented Operation (`EXC_FPE`, FCSR Cause.E). Reserved Instruction is only for undecodable main opcodes, so `movci` (SPECIAL) and COP1X (opcode 0x13) keep raising RI. Measured on the R4400; the R4600 is inferred to match. `mips4/recip_rsqrt`, `recip_rsqrt_d`, `fp_cond_move_s`, `fp_cond_move_d` |
+| `cpu.vhd` | COP2 is Coprocessor Unusable only when `Status.CU2` is clear, as upstream has it (the `PRESENT_AS_R4600` copy in this file went with it, its last user) | With CU2 set, both parts take no exception at all for `mfc2`: nothing tells the CPU the coprocessor is absent rather than present and enabled, and the value is undefined. The R4300's data latch upstream reads is as good an undefined value as any. `excep/cop2_unusable` |
 
 ### Presentation — an R4600, all the way down
 
@@ -122,7 +123,6 @@ the cache-geometry report; docs/43-44 the move to R4600.
 | `cpu_FPU.vhd` | `FIR` reports `0x2020` | imp 0x20, revision 2.0 — matches PRId, and is what `hinv` names the FPU from |
 | `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of KI's 32 | An R4600 has 48. Not optional once `PRId` says so: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search was sequential then, so the cost was one address bit and 16 more cycles worst case; since build 28 all 48 are matched at once (see "Speed") |
 | `cpu_cop0.vhd` | `Config` reports 16 KB / 32-byte lines for both caches | TRUE for both since docs/44 (the N64 base's report was under-reported on purpose; see docs/10) |
-| `cpu.vhd` | COP2 is always unusable, `Cause.CE = 2` | An R4600 has no coprocessor 2; the R4300's data latch made `mfc2` succeed |
 
 The cpu-tests suite (`iris/cpu-tests`) selects its expectations by `PRId` and
 had no case for imp 0x20; the build copy used here (`~/cputests`) treats an
