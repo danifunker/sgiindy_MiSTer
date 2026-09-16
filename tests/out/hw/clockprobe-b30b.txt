@@ -1,0 +1,12 @@
+core: aea29ae92655eb59a8fa88549f2c5f31
+MiSTer clock at launch: Wed Sep 16 14:11:01 EDT 2026 Wed Sep 16 18:11:01 UTC 2026 
+host UTC at first Enter:  2026-09-16 18:17:30 (1789582650.609186100)
+host UTC at second Enter: 2026-09-16 18:22:43 (1789582963.926543200)
+host gap: 313.32 s
+---- /root/clock.txt from the image ----
+Mon Aug 31 18:57:34 PDT 2026
+Mon Aug 31 19:02:47 PDT 2026
+#ident	"@(#)sadmin:etc/TIMEZONE	1.2"
+#ident	"$Revision: 1.6 $"
+#	Set timezone environment to default for the machine
+TZ=PST8PDT

@@ -83,7 +83,8 @@ if [ "$BOOT" = 1 ]; then
         rsh "echo 'load_core /media/fat/menu.rbf' > /dev/MiSTer_cmd; for i in \$(seq 1 30); do ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q '$IMG\$' || break; sleep 1; done; cp '$FRESH' '$IMG' && sync" || exit 1
     fi
     rsh "python3 $DBG/fb_poke.py fill 0xE7; python3 $DBG/memclear.py" >/dev/null 2>&1
-    say "launching $(rsh "md5sum /media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE" | cut -c1-32)"
+    RBF_ON_DEVICE="${MISTER_RBF_PATH:-/media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE}"
+    say "launching $(rsh "md5sum $RBF_ON_DEVICE" | cut -c1-32) ($RBF_ON_DEVICE)"
     python tools/misterdeploy/launch_unstable_core.py \
         --host "$MISTER_HOST" --port "$MISTER_HTTP_PORT" \
         --folder "$MISTER_CORE_FOLDER" --core "$RBF_REMOTE" \
