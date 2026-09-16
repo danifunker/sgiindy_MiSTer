@@ -88,12 +88,21 @@ step would put a generated copy in the synthesis path.
 | `cpu.vhd` | opcode 0x33 raises Reserved Instruction instead of decoding as a NOP | 0x33 is LWC3, removed in MIPS III; MIPS IV reuses it for PREF. Software probes for MIPS IV by executing it and catching the trap. `mips4/pref` |
 | `cpu.vhd` | A `cache` op this core does not implement stops at decode instead of being sent to the caches with an unknown code | `cpu_datacache.vhd` answers ANY `CacheCommandEna` by entering COMMANDPROCESS while its stall only covers the seven codes it knows. The IP22 kernel executes about a thousand secondary-cache and I-cache ops per boot; each is safely nothing here, but only if it stops at decode. `error_instr` still counts them (the sim's `instr(unimpl-cache-op)`, informational) |
 | `cpu_instrcache.vhd` | A `cache` command that arrives while the cache is FILLING is latched and retired when the fill ends | It used to be dropped: IRIX's flush loop's own fetches start fills, a fraction of every flush was lost, and the dynamic linker executed a page it had just relocated with the bytes that were there before — `init` died with signal 11 |
-| `cpu_FPU.vhd` | `C.cond.fmt` signals Invalid on a *signalling* NaN, not a quiet one | The mantissa MSB marks a QUIET NaN; upstream tested it the wrong way round. `fpu/compare_nan`, `fpu/cmp_signalling_qnan`, `fpu/cmp_snan_any_pred`, `fpu/cmp_trap_on_signal` |
-| `cpu_FPU.vhd` | Arithmetic on a signalling NaN raises Invalid; a quiet NaN raises Unimplemented | Same polarity, the other side of it. R4000 manual Table 7-2. `fpu/snan_operands` |
-| `cpu_FPU.vhd` | The default Invalid result is a quiet NaN (`0x7FFFFFFF` / `0x7FFF...`) | Upstream delivered `0x7FBFFFFF`, whose quiet bit is clear. `fpu/snan_operands` |
 | `cpu_FPU.vhd` | An exactly-zero sum keeps the operands' sign when they agree | `(-0) + (-0)` was `+0`. IEEE 754 §6.3. `fpu/signed_zero`, `fpu/double_signed_zero` |
 | `cpu_FPU.vhd` | Divide-by-zero is not raised for `inf / 0` | It is only for a finite dividend. `fpu/vec_arith_single`, `fpu/vec_arith_double` - IRIS fails these too |
 | `cpu_FPU.vhd` | comment only: the `cvt.s.l` / `cvt.d.l` 56-bit truncation | Known limitation, diagnosed but not fixed. `fpu/vec_cvt_from_l` |
+
+### Reverted — "corrections" the hardware-validated suite proved wrong
+
+The cpu-tests suite this core was gated on was later run on real Indys (an
+R4400 rev 6.0 and an R5000 rev 1.0, `../iris` commit `5150db0`), and in a few
+places the suite, IRIS and this core had all agreed on the wrong answer. Each
+change below had been made to match those old expectations; upstream was right
+and now stands again, so none of it carries an `-- SGI:` mark any more.
+
+| File | What was reverted | What the silicon does |
+|---|---|---|
+| `cpu_FPU.vhd` | NaN polarity, all four places: the compare's Invalid test, the arithmetic Invalid-versus-Unimplemented split (both operands), and the default Invalid result (`0x7FFFFFFF` back to `0x7FBFFFFF`, `0x7FF7FFFFFFFFFFFF` for double) | The R4000 family uses the legacy MIPS encoding: a fraction MSB that is SET marks a SIGNALLING NaN. So `0x7FC00000` as an arithmetic operand is Invalid (trap if enabled, else the default quiet NaN `0x7FBFFFFF` and Flag.V), `0x7FA00000` is a quiet NaN the part will not propagate in hardware (Unimplemented Operation, no flag), and a compare signals Invalid on `0x7FC00000` for every predicate but on `0x7FA00000` only for the signalling ones. Identical on both parts. `fpu/snan_operands`, `fpu/qnan_operand`, `fpu/compare_nan`, `fpu/cmp_signalling_qnan`, `fpu/cmp_snan_any_pred`, `fpu/cmp_trap_on_signal` |
 
 ### Presentation — an R4600, all the way down
 

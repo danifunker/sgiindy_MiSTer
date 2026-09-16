@@ -324,17 +324,14 @@ begin
 --------------- Combinatorial ---------------------------------------
 ---------------------------------------------------------------------
 
-   -- SGI: signal on a SIGNALLING NaN (mantissa MSB clear), or on any NaN when
-   -- the predicate signals. Upstream tested the mantissa MSB set, which is the
-   -- quiet case - the exact opposite.
    cmp_inputInvalid_a <= '1' when (nanA = '1' and OP(3) = '1') else
-                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '1' and command_op1(51) = '0') else
-                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '0' and command_op1(22) = '0') else 
+                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '1' and command_op1(51) = '1') else
+                         '1' when (nanA = '1' and OP(3) = '0' and bit64 = '0' and command_op1(22) = '1') else 
                          '0';
                          
    cmp_inputInvalid_b <= '1' when (nanB = '1' and OP(3) = '1') else
-                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '1' and command_op2(51) = '0') else
-                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '0' and command_op2(22) = '0') else 
+                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '1' and command_op2(51) = '1') else
+                         '1' when (nanB = '1' and OP(3) = '0' and bit64 = '0' and command_op2(22) = '1') else 
                          '0';
    
    cmp_equal <= '1' when (zeroA = '1' and zeroB = '1') else
@@ -526,10 +523,8 @@ begin
          command_done <= '1';
       end if;
       
-      -- SGI: quiet NaN -> Unimplemented, always traps. Signalling NaN ->
-      -- Invalid, which traps only when the Invalid enable is set.
       if (checkInputs_nan = '1' and nanA = '1') then
-         if ((bit64 = '1' and command_op1(51) = '0') or (bit64 = '0' and command_op1(22) = '0')) then
+         if ((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1')) then
             if (csr_ena_invalidOperation = '1') then
                exceptionFPU <= '1';
                command_done <= '1';
@@ -541,7 +536,7 @@ begin
       end if;      
       
       if (checkInputs2_nan = '1' and nanB = '1') then
-         if ((bit64 = '1' and command_op2(51) = '0') or (bit64 = '0' and command_op2(22) = '0')) then   -- SGI: quiet-bit polarity, see above
+         if ((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')) then
             if (csr_ena_invalidOperation = '1') then
                exceptionFPU <= '1';
                command_done <= '1';
@@ -808,10 +803,8 @@ begin
                if (
                      (checkInputs_dn   = '1' and dnA = '1') or 
                      (checkInputs2_dn  = '1' and dnB = '1') or
-                     -- SGI: the Unimplemented path is the QUIET NaN one; the
-                     -- signalling case falls through to Invalid below.
-                     (checkInputs_nan  = '1' and nanA = '1' and ((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1'))) or
-                     (checkInputs2_nan = '1' and nanB = '1' and ((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')))
+                     (checkInputs_nan  = '1' and nanA = '1' and not((bit64 = '1' and command_op1(51) = '1') or (bit64 = '0' and command_op1(22) = '1'))) or
+                     (checkInputs2_nan = '1' and nanB = '1' and not((bit64 = '1' and command_op2(51) = '1') or (bit64 = '0' and command_op2(22) = '1')))
                   ) then
                   csr_cause_unimplemented <= '1';
                   exception_inputInvalid  <= '1';
@@ -925,9 +918,9 @@ begin
          if (outputInvalid_1 = '1') then
             
             if (bit64Out = '1') then
-               FPUWriteData <= x"7FFFFFFFFFFFFFFF";   -- SGI: quiet bit set
+               FPUWriteData <= x"7FF7FFFFFFFFFFFF";
             else
-               FPUWriteData <= 32x"0" & x"7FFFFFFF";  -- SGI: quiet bit set
+               FPUWriteData <= 32x"0" & x"7FBFFFFF";
             end if;
             
             csr_cause_invalidOperation <= '1';
