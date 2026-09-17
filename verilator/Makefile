@@ -184,6 +184,22 @@ tb_eeprom:
 	   tb_eeprom.sv $(RTL)/sgi/eeprom_93c56.sv
 	./obj_dir_tbee/tb_eeprom
 
+# --- the HPC3 register file against a shadow of the spec's map ---------------
+# rtl/sgi/sgi_hpc3.sv is the decode plus the storage behind it: descriptor
+# pairs, control groups, gen, cfgdma, cfgpio. The bench keeps its own copy of
+# what the map says every access does - including the two blocks whose stride
+# puts one register in both halves of a doubleword - and does not check the
+# acknowledge's latency, so a version whose storage is an M10K a clock further
+# away passes the same stimulus as one made of flip-flops.
+#   make -C verilator tb_hpc3
+#   make -C verilator tb_hpc3 HPC3=/tmp/sgi_hpc3_old.sv   (another version of it)
+HPC3 ?= $(RTL)/sgi/sgi_hpc3.sv
+tb_hpc3:
+	$V --binary --timing $(TBC_W) --unroll-count 2048 --unroll-stmts 20000 --top-module tb_hpc3 --Mdir ./obj_dir_tbhpc3 -o tb_hpc3 \
+	   tb_hpc3.sv $(HPC3) $(RTL)/sgi/hpc3_scsi_dma.sv $(RTL)/sgi/hal2.sv
+	./obj_dir_tbhpc3/tb_hpc3
+
+
 # The bench in the shape sgi_scsi.sv instantiates since build 27: the CD slot
 # cached with a 64-sector window and multi-block on (CACHE_CD = 1, SECT2 = 64,
 # MB_CD = 1).
