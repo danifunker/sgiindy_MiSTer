@@ -33,10 +33,11 @@
 //  DO is high-Z between transfers and the MC's input floats high.
 //
 //  Contents are volatile: there is no backing store on the FPGA side yet, so
-//  the array powers up erased and anything the PROM writes is lost at reset.
-//  That is a deliberate gap. Two words' contents actually matter and neither
-//  can be left erased: CACHSZ_PAGES, a parameter, and the Ethernet address,
-//  which is a runtime input because it differs per board.
+//  the array powers up erased, and what the PROM writes survives a reset but
+//  not a reload of the core. That is a deliberate gap. Two words' contents
+//  actually matter and neither can be left erased: CACHSZ_PAGES, a parameter,
+//  and the Ethernet address, which is a runtime input because it differs per
+//  board.
 //============================================================================
 
 module eeprom_93c56 #(
@@ -109,7 +110,6 @@ module eeprom_93c56 #(
     } state_t;
 
     state_t      state;
-    logic [15:0] mem [0:127];
     logic [15:0] shifter;
     logic  [4:0] bit_count;
     logic  [1:0] opcode;
@@ -128,149 +128,215 @@ module eeprom_93c56 #(
     wire  [7:0] addr_now = {shifter[6:0],  di};
     wire [15:0] data_now = {shifter[14:0], di};
 
+    // ---- the array: ONE M10K, not 2,048 flip-flops ------------------------
+    //
+    // Until build 37 this was read asynchronously - `shifter <= mem[addr_now]`
+    // in the clock the address completed - and written from four places, the
+    // reset among them. Quartus cannot put that in a memory block and says
+    // nothing about it: build 36's fit report had this module at 1,982 ALMs
+    // and 2,132 registers, 5 % of the device, for 2 Kbit of storage.
+    //
+    // So the array now has exactly the shape memory inference wants
+    // (quartus-ram-inference in the project notes; sgi_ds1386.sv's NVRAM is
+    // the same fix): one write port and one registered read, both in the one
+    // clocked process below and nothing else in it. What that costs the
+    // protocol is one clock, twice, and neither is visible to the CPU:
+    //
+    //  * a READ's word lands in `shifter` one clock after its address does
+    //    (`load_pending`). The first data bit leaves on the next SK rising
+    //    edge, and SK is a bit in an MC register that software stores to -
+    //    DI, then SK low, then SK high, three bus writes apart - so the word
+    //    is there thousands of clocks before it is needed;
+    //  * every store reaches the array one clock after the SK edge or bulk
+    //    step that makes it (`wr_pend`), and nothing can read that word
+    //    sooner than a whole command later.
+    //
+    // The Ethernet address used to be three stores inside the reset. It is
+    // now written in the three clocks after reset releases (`seeding`), as
+    // sgi_ds1386.sv does: the PROM is millions of clocks from its first
+    // Microwire command by then.
+    logic [15:0] mem [0:127];
+    logic [15:0] mem_q;
+    logic        wr_pend;
+    logic  [6:0] wr_addr;
+    logic [15:0] wr_data;
+
+    always_ff @(posedge clk) begin
+        if (wr_pend) mem[wr_addr] <= wr_data;
+        mem_q <= mem[addr_now[6:0]];
+    end
+
     // Power-up contents. Quartus turns an initial block over an inferred
     // memory into its power-up value and Verilator runs it at time zero, so
     // this is the erased state of a real part plus the one word this core has
-    // to answer differently.
+    // to answer differently. It is a POWER-UP value only: nothing clears the
+    // array at reset - the flip-flop version did not either - so what the
+    // PROM writes survives a reset and is lost when the core is loaded again.
     integer i;
     initial begin
         for (i = 0; i < 128; i = i + 1) mem[i] = 16'hFFFF;
         mem[8'h11] = CACHSZ_PAGES;
     end
 
+    logic       load_pending;    // a READ's word is in mem_q this clock
+    logic       seeding;         // writing the Ethernet address after reset
+    logic [1:0] seed_idx;
+
     always_ff @(posedge clk) begin
-        sk_q <= sk;
-        cs_q <= cs;
+        sk_q    <= sk;
+        cs_q    <= cs;
+        wr_pend <= 1'b0;
 
         if (reset) begin
-            // The Ethernet address, seeded from the runtime input. This array
-            // is flip-flops - Quartus reports it uninferred because the read
-            // is asynchronous - so three stores in one cycle cost nothing and
-            // need no sequencer, unlike the same job in sgi_ds1386.sv.
-            //
-            // The PROM does NOT read the address from here: the same six
-            // bytes were put in this part first and `printenv` still showed
-            // no eaddr. It is set because IRIS sets both and a machine whose
-            // two copies disagree is a trap for whoever reads them next.
-            mem[8'h7D]   <= mac_addr[47:32];
-            mem[8'h7E]   <= mac_addr[31:16];
-            mem[8'h7F]   <= mac_addr[15:0];
+            // The PROM does NOT read the Ethernet address from here: the same
+            // six bytes were put in this part first and `printenv` still
+            // showed no eaddr. It is set because IRIS sets both and a machine
+            // whose two copies disagree is a trap for whoever reads them next.
+            seeding      <= 1'b1;
+            seed_idx     <= 2'd0;
+            load_pending <= 1'b0;
             state        <= S_STANDBY;
             do_out       <= 1'b1;
             write_enable <= 1'b0;
             sk_q         <= 1'b0;
             cs_q         <= 1'b0;
-        end else if (state == S_BULK) begin
-            // ERAL/WRAL, one word per clock so the array stays a single-write-
-            // port memory rather than 2048 flops. Nothing the PROM does gets
-            // here, but leaving the opcodes silently unimplemented would be a
-            // worse trap than 128 clocks of fill.
-            mem[bulk_addr[6:0]] <= bulk_val;
-            bulk_addr           <= bulk_addr + 8'd1;
-            if (bulk_addr == 8'd127) state <= S_IDLE;
-        end else if (cs != cs_q) begin
-            if (cs) begin
-                state  <= S_IDLE;
-            end else begin
-                state  <= S_STANDBY;
-                do_out <= 1'b1;          // idle high - see the header
+        end else begin
+            if (seeding) begin
+                wr_pend  <= 1'b1;
+                wr_addr  <= 7'h7D + {5'd0, seed_idx};
+                wr_data  <= (seed_idx == 2'd0) ? mac_addr[47:32]
+                          : (seed_idx == 2'd1) ? mac_addr[31:16]
+                          :                      mac_addr[15:0];
+                seed_idx <= seed_idx + 2'd1;
+                if (seed_idx == 2'd2) seeding <= 1'b0;
             end
-        end else if (cs && sk_rise) begin
-            case (state)
-                S_STANDBY: ;             // CS low: nothing happens
 
-                S_IDLE:
-                    // A leading 1 opens a command; leading zeroes are ignored,
-                    // which is how the part tolerates being clocked while idle.
-                    if (di) begin
-                        state     <= S_OPCODE;
-                        bit_count <= 5'd0;
-                        shifter   <= 16'd0;
-                    end
+            if (load_pending) begin
+                shifter      <= mem_q;
+                load_pending <= 1'b0;
+            end
 
-                S_OPCODE: begin
-                    shifter   <= {shifter[14:0], di};
-                    bit_count <= bit_count + 5'd1;
-                    if (bit_count == 5'd1) begin
-                        opcode    <= {shifter[0], di};
-                        state     <= S_ADDRESS;
-                        bit_count <= 5'd0;
-                        shifter   <= 16'd0;
-                    end
+            if (state == S_BULK) begin
+                // ERAL/WRAL, one word per clock so the array keeps its single
+                // write port. Nothing the PROM does gets here, but leaving the
+                // opcodes silently unimplemented would be a worse trap than
+                // 128 clocks of fill.
+                wr_pend   <= 1'b1;
+                wr_addr   <= bulk_addr[6:0];
+                wr_data   <= bulk_val;
+                bulk_addr <= bulk_addr + 8'd1;
+                if (bulk_addr == 8'd127) state <= S_IDLE;
+            end else if (cs != cs_q) begin
+                if (cs) begin
+                    state  <= S_IDLE;
+                end else begin
+                    state  <= S_STANDBY;
+                    do_out <= 1'b1;          // idle high - see the header
                 end
+            end else if (cs && sk_rise) begin
+                case (state)
+                    S_STANDBY: ;             // CS low: nothing happens
 
-                S_ADDRESS: begin
-                    shifter   <= {shifter[14:0], di};
-                    bit_count <= bit_count + 5'd1;
-                    if (bit_count == 5'd7) begin
-                        address <= addr_now;
-                        case (opcode)
-                            OP_READ: begin
-                                // Load the word now; it starts shifting out on
-                                // the next edge, behind the dummy zero the
-                                // part emits as soon as the address lands.
-                                shifter   <= mem[addr_now[6:0]];
-                                bit_count <= 5'd0;
-                                do_out    <= 1'b0;
-                                state     <= S_DATA_OUT;
-                            end
-                            OP_WRITE: begin
-                                bit_count <= 5'd0;
-                                shifter   <= 16'd0;
-                                state     <= write_enable ? S_DATA_IN : S_IDLE;
-                            end
-                            OP_ERASE: begin
-                                if (write_enable) mem[addr_now[6:0]] <= 16'hFFFF;
-                                state <= S_IDLE;
-                            end
-                            OP_CTRL: begin
-                                // The sub-command is the top two address bits;
-                                // the rest are don't-care.
-                                bit_count <= 5'd0;
-                                shifter   <= 16'd0;
-                                bulk_addr <= 8'd0;
-                                bulk_val  <= 16'hFFFF;
-                                state     <= S_IDLE;
-                                case (addr_now[7:6])
-                                    2'b00: write_enable <= 1'b0;            // WRDS
-                                    2'b01: if (write_enable) state <= S_DATA_IN;
-                                    2'b10: if (write_enable) state <= S_BULK; // ERAL
-                                    2'b11: write_enable <= 1'b1;            // WREN
-                                endcase
-                            end
-                        endcase
-                    end
-                end
+                    S_IDLE:
+                        // A leading 1 opens a command; leading zeroes are
+                        // ignored, which is how the part tolerates being
+                        // clocked while idle.
+                        if (di) begin
+                            state     <= S_OPCODE;
+                            bit_count <= 5'd0;
+                            shifter   <= 16'd0;
+                        end
 
-                S_DATA_IN: begin
-                    shifter   <= {shifter[14:0], di};
-                    bit_count <= bit_count + 5'd1;
-                    if (bit_count == 5'd15) begin
-                        state <= S_IDLE;
-                        if (opcode == OP_WRITE) begin
-                            mem[address[6:0]] <= data_now;
-                        end else begin                                // WRAL
-                            bulk_addr <= 8'd0;
-                            bulk_val  <= data_now;
-                            state     <= S_BULK;
+                    S_OPCODE: begin
+                        shifter   <= {shifter[14:0], di};
+                        bit_count <= bit_count + 5'd1;
+                        if (bit_count == 5'd1) begin
+                            opcode    <= {shifter[0], di};
+                            state     <= S_ADDRESS;
+                            bit_count <= 5'd0;
+                            shifter   <= 16'd0;
                         end
                     end
-                end
 
-                S_DATA_OUT: begin
-                    // bit_count 0 was consumed emitting the dummy zero, so
-                    // this edge presents D15 and the sixteenth presents D0.
-                    if (bit_count < 5'd16) begin
-                        do_out    <= shifter[4'd15 - bit_count[3:0]];
+                    S_ADDRESS: begin
+                        shifter   <= {shifter[14:0], di};
                         bit_count <= bit_count + 5'd1;
-                    end else begin
-                        do_out <= 1'b1;
-                        state  <= S_IDLE;
+                        if (bit_count == 5'd7) begin
+                            address <= addr_now;
+                            case (opcode)
+                                OP_READ: begin
+                                    // The word is read at addr_now on this
+                                    // edge and loaded on the next clock; it
+                                    // starts shifting out on the next SK
+                                    // edge, behind the dummy zero the part
+                                    // emits as soon as the address lands.
+                                    load_pending <= 1'b1;
+                                    bit_count    <= 5'd0;
+                                    do_out       <= 1'b0;
+                                    state        <= S_DATA_OUT;
+                                end
+                                OP_WRITE: begin
+                                    bit_count <= 5'd0;
+                                    shifter   <= 16'd0;
+                                    state     <= write_enable ? S_DATA_IN : S_IDLE;
+                                end
+                                OP_ERASE: begin
+                                    wr_pend <= write_enable;
+                                    wr_addr <= addr_now[6:0];
+                                    wr_data <= 16'hFFFF;
+                                    state   <= S_IDLE;
+                                end
+                                OP_CTRL: begin
+                                    // The sub-command is the top two address
+                                    // bits; the rest are don't-care.
+                                    bit_count <= 5'd0;
+                                    shifter   <= 16'd0;
+                                    bulk_addr <= 8'd0;
+                                    bulk_val  <= 16'hFFFF;
+                                    state     <= S_IDLE;
+                                    case (addr_now[7:6])
+                                        2'b00: write_enable <= 1'b0;            // WRDS
+                                        2'b01: if (write_enable) state <= S_DATA_IN;
+                                        2'b10: if (write_enable) state <= S_BULK; // ERAL
+                                        2'b11: write_enable <= 1'b1;            // WREN
+                                    endcase
+                                end
+                            endcase
+                        end
                     end
-                end
 
-                S_BULK: ;                // handled above, before the SK gate
-            endcase
+                    S_DATA_IN: begin
+                        shifter   <= {shifter[14:0], di};
+                        bit_count <= bit_count + 5'd1;
+                        if (bit_count == 5'd15) begin
+                            state <= S_IDLE;
+                            if (opcode == OP_WRITE) begin
+                                wr_pend <= 1'b1;
+                                wr_addr <= address[6:0];
+                                wr_data <= data_now;
+                            end else begin                                // WRAL
+                                bulk_addr <= 8'd0;
+                                bulk_val  <= data_now;
+                                state     <= S_BULK;
+                            end
+                        end
+                    end
+
+                    S_DATA_OUT: begin
+                        // bit_count 0 was consumed emitting the dummy zero, so
+                        // this edge presents D15 and the sixteenth presents D0.
+                        if (bit_count < 5'd16) begin
+                            do_out    <= shifter[4'd15 - bit_count[3:0]];
+                            bit_count <= bit_count + 5'd1;
+                        end else begin
+                            do_out <= 1'b1;
+                            state  <= S_IDLE;
+                        end
+                    end
+
+                    S_BULK: ;                // handled above, before the SK gate
+                endcase
+            end
         end
     end
 

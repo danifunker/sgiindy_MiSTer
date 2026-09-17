@@ -173,6 +173,17 @@ tb_ds1386:
 	   tb_ds1386.sv $(RTL)/sgi/sgi_ds1386.sv
 	./obj_dir_tbrtc/tb_ds1386
 
+# --- the 93C56 configuration EEPROM (build 37) --------------------------------
+# rtl/sgi/eeprom_93c56.sv driven the way the PROM drives it, against a shadow
+# copy: power-up contents, WREN/WRITE/WRDS and the ready poll, every word at
+# three host speeds, ERASE, WRAL/ERAL, reset, and a random mix. The array is an
+# M10K since build 37 (registered read, one registered write port).
+#   make -C verilator tb_eeprom
+tb_eeprom:
+	$V --binary --timing $(TBC_W) --top-module tb_eeprom --Mdir ./obj_dir_tbee -o tb_eeprom \
+	   tb_eeprom.sv $(RTL)/sgi/eeprom_93c56.sv
+	./obj_dir_tbee/tb_eeprom
+
 # The bench in the shape sgi_scsi.sv instantiates since build 27: the CD slot
 # cached with a 64-sector window and multi-block on (CACHE_CD = 1, SECT2 = 64,
 # MB_CD = 1).
