@@ -49,9 +49,9 @@
 //  the corpus's own draw modes through both and compares the frame buffers.
 //
 //  STILL NOT BUILT: YFLIP and SWAPENDIAN (no shape in the corpus sets
-//  either), the anti-aliased line's coverage weighting (A_LINE draws as a
-//  fractional line - the AWEIGHT tables are read only for the endpoint
-//  filter), and BACKBLEND's second source. Each is accepted, read back, and
+//  either) and the anti-aliased line's per-pixel coverage weighting - A_LINE
+//  draws as a fractional line, and the AWEIGHT tables are read for the
+//  endpoint filter and nothing else. Both are accepted, read back and
 //  ignored.
 //============================================================================
 
