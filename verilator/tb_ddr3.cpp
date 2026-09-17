@@ -54,8 +54,16 @@ static Vddr3_mux *dut;
 static std::map<uint32_t, uint64_t> mem;      // word address -> data
 static std::mt19937 rng(12345);
 
-struct Pending { int delay; uint64_t data; };
+struct Pending { int delay; uint64_t data; bool first; bool ram; uint64_t take; };
 static std::deque<Pending> read_pipe;
+
+// What ddr3_mux's latency counters (dbg_rdlat, build 37) must report, worked
+// out from the model: a read's latency is the clocks from the edge that took it
+// to the clock its first word is presented; "clean" reads were taken with
+// nothing owed; "ahead" is what a main-memory read was taken behind.
+static uint64_t x_lat_ram = 0, x_n_ram = 0, x_ahead = 0;
+static uint64_t x_lat_clean = 0, x_n_clean = 0;
+static std::deque<bool> x_clean_q;               // per queued read, in order
 static uint64_t clk_count = 0;
 static bool     s_fbr_valid = false;
 static uint64_t s_fbr_dout  = 0;
@@ -86,8 +94,15 @@ static void tick()
         if (read_pipe.front().delay > 0) {
             read_pipe.front().delay--;
         } else {
-            dut->DDRAM_DOUT = read_pipe.front().data;
+            const Pending &f = read_pipe.front();
+            dut->DDRAM_DOUT = f.data;
             dut->DDRAM_DOUT_READY = 1;
+            if (f.first) {
+                uint64_t lat = clk_count - f.take;
+                if (f.ram) x_lat_ram += lat;
+                if (x_clean_q.front()) { x_lat_clean += lat; x_n_clean++; }
+                x_clean_q.pop_front();
+            }
             read_pipe.pop_front();
         }
     }
@@ -138,9 +153,14 @@ static void tick()
                        b.addr, n, (unsigned long long)(mem.count(b.addr) ? mem[b.addr] : 0));
             if (getenv("DDR3_DEBUG"))
                 printf("      [bridge] read addr=%08x burst=%d\n", b.addr, n);
+            // A main-memory word address: region offset below 64 MB.
+            bool ram = ((b.addr & 0x1FFFFFFu) < 0x0800000u);
+            if (ram) { x_n_ram++; x_ahead += read_pipe.size(); }
+            x_clean_q.push_back(read_pipe.empty());
             for (int w = 0; w < n; w++)
                 read_pipe.push_back({(w == 0 ? 2 + (int)(rng() % 6) : 0),
-                                     mem.count(b.addr + w) ? mem[b.addr + w] : 0});
+                                     mem.count(b.addr + w) ? mem[b.addr + w] : 0,
+                                     w == 0, ram, clk_count});
         }
     }
     clk_count++;
@@ -448,6 +468,24 @@ int main(int argc, char **argv)
                (unsigned long long)m->worst_wait);
 
     const int data_failures = failures;   // before any check adds to it
+
+    // The latency counters, against the model's own bookkeeping. /64 fields
+    // report bits 37:6 of a 38-bit count, so the expectation is shifted the
+    // same way.
+    uint64_t w0 = dut->dbg_rdlat[0], w1 = dut->dbg_rdlat[1], w2 = dut->dbg_rdlat[2];
+    printf("\nread latency counters: RAM reads %llu (model %llu), %.2f clocks take to first word, "
+           "%.2f words ahead; reads taken clean %llu (model %llu), %.2f clocks; RAM burst gaps x64 %llu\n",
+           (unsigned long long)(w0 & 0xFFFFFFFF), (unsigned long long)x_n_ram,
+           x_n_ram ? (double)x_lat_ram / x_n_ram : 0.0, x_n_ram ? (double)x_ahead / x_n_ram : 0.0,
+           (unsigned long long)(w2 & 0xFFFFFFFF), (unsigned long long)x_n_clean,
+           x_n_clean ? (double)x_lat_clean / x_n_clean : 0.0,
+           (unsigned long long)(w1 & 0xFFFFFFFF));
+    bool counters_ok = (w0 & 0xFFFFFFFF) == (x_n_ram & 0xFFFFFFFF)
+                    && (w0 >> 32) == ((x_lat_ram >> 6) & 0xFFFFFFFF)
+                    && (w1 >> 32) == ((x_ahead >> 6) & 0xFFFFFFFF)
+                    && (w1 & 0xFFFFFFFF) == 0
+                    && (w2 & 0xFFFFFFFF) == (x_n_clean & 0xFFFFFFFF)
+                    && (w2 >> 32) == ((x_lat_clean >> 6) & 0xFFFFFFFF);
     auto check = [&](const char *what, bool ok) {
         printf("  %s %s\n", ok ? "ok     " : "FAILED ", what);
         if (!ok) failures++;
@@ -484,6 +522,7 @@ int main(int argc, char **argv)
           rmw_done == (uint64_t)RMW_PIXELS && rmw_bad == 0);
     check("two identical held reads back to back both completed",
           pairs == 200);
+    check("the read latency counters agree with the model", counters_ok);
 
     printf(failures ? "\nDDR3MUX: FAIL\n" : "\nDDR3MUX: PASS\n");
     delete dut;

@@ -480,7 +480,7 @@ wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
-wire [63:0] perf_bcn [9];   // CPU performance counters (docs/50)
+wire [63:0] perf_bcn [10];  // CPU performance counters (docs/50; w9 build 37)
 
 sgi_indy u_core
 (
@@ -742,6 +742,7 @@ fb_fetch_arb u_fetch_arb
 // What the DDR3 port is doing, for the performance counters below (docs/50).
 wire [5:0] mx_busy, mx_pend;
 wire       mx_take, mx_take_rd, mx_gap, mx_cmdwait;
+wire [63:0] mx_rdlat [3];   // a RAM read's latency, split (build 37)
 wire [2:0] mx_take_m;
 
 ddr3_mux u_mem
@@ -796,6 +797,7 @@ ddr3_mux u_mem
 	.dbg_take_rd (mx_take_rd),
 	.dbg_gap     (mx_gap),
 	.dbg_cmdwait (mx_cmdwait),
+	.dbg_rdlat   (mx_rdlat),
 
 	.DDRAM_BUSY      (DDRAM_BUSY),
 	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
@@ -837,7 +839,12 @@ ddr3_mux u_mem
 // bcnread.py --perf turns two readings into a workload's breakdown.
 // ver=11 adds word 35: instruction cache fills requested after an instruction
 // TLB walk, and fill requests the cache answered from a line it already held.
-localparam int BCN_WORDS = 36;
+// ver=12 (build 37) adds words 36-39: a main-memory read's latency split into
+// the bridge's and the queue's (ddr3_mux dbg_rdlat - clocks from take to first
+// word, words owed ahead at take, gaps inside a burst, and the bridge alone on
+// reads taken with nothing owed), and the clocks a CPU access waited behind a
+// DMA transaction with the DMA transaction count (sgi_indy w9).
+localparam int BCN_WORDS = 40;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
@@ -897,7 +904,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h0B, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0C, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -933,6 +940,10 @@ assign bcn_src[32] = { mx_n_ram,       mx_n_fbw };
 assign bcn_src[33] = { mx_c_lat[37:6], mx_n_rd };
 assign bcn_src[34] = { mx_c_bsy[37:6], mx_n_fbr };
 assign bcn_src[35] = perf_bcn[8];
+assign bcn_src[36] = mx_rdlat[0];
+assign bcn_src[37] = mx_rdlat[1];
+assign bcn_src[38] = mx_rdlat[2];
+assign bcn_src[39] = perf_bcn[9];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin

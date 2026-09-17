@@ -167,6 +167,14 @@ module ddr3_mux #(
     output logic        dbg_take_rd,  // ...and it was a read
     output logic        dbg_gap,      // reads are owed and no word came back this clock
     output logic        dbg_cmdwait,  // a command is waiting on DDRAM_BUSY
+    // Where a main-memory read's latency goes (build 37), three beacon words;
+    // see the accounting block at the end.
+    //   [0] {clocks from a RAM read's take to its first word /64, RAM reads taken}
+    //   [1] {words owed to earlier reads when a RAM read was taken /64,
+    //        clocks a RAM burst's words stopped coming after its first /64}
+    //   [2] {clocks from take to first word, reads taken with nothing owed /64,
+    //        reads taken with nothing owed}
+    output logic [63:0] dbg_rdlat [3],
 
     // ---- the DE10-Nano's DDR3 bridge --------------------------------------
     input  logic        DDRAM_BUSY,
@@ -367,6 +375,7 @@ module ddr3_mux #(
     logic  [7:0]           cmd_n;
 
     localparam int RF = 8;
+    logic [15:0] ob_now;          // observation only: a clock count, see the end
     logic [$clog2(NM)-1:0] rf_m [RF];
     logic  [7:0]           rf_n [RF];
     logic  [2:0]           rf_rd, rf_wr;
@@ -430,6 +439,7 @@ module ddr3_mux #(
             rf_rd          <= 3'd0;
             rf_wr          <= 3'd0;
             rf_cnt         <= 4'd0;
+            ob_now         <= 16'd0;
             fbr_act        <= 1'b0;
             fbr_nxt        <= 25'd0;
             fbr_isl        <= 8'd0;
@@ -581,6 +591,7 @@ module ddr3_mux #(
             end
 
             rf_cnt <= rf_cnt + (push ? 4'd1 : 4'd0) - (word_end ? 4'd1 : 4'd0);
+            ob_now <= ob_now + 16'd1;
 `ifdef DDR3MUX_DEBUG
             if (take || word)
                 $display("[mux] take=%0d m=%0d we=%0d n=%0d | word=%0d head_m=%0d head_n=%0d end=%0d | rd=%0d wr=%0d cnt=%0d | fbr act=%0d isl=%0d rxl=%0d out=%0d",
@@ -621,5 +632,70 @@ module ddr3_mux #(
             end
         end
     end
+
+    // ---- observation: a main-memory read's latency, split (build 37) --------
+    // docs/50 measured the bridge answering a read 9.7 clocks after taking it,
+    // with one transaction at a time; since the mux is pipelined a read also
+    // waits for every word owed to reads taken before it, most of them the
+    // display's. A line fill costs ~20 clocks on the bus on the board and ~8 in
+    // the simulator. These say how much of the difference is the bridge and how
+    // much is the queue:
+    //   * each queued read keeps the clock it was taken (ob_t) and whether its
+    //     first word is still to come; the head's first word closes it.
+    //   * `ob_owed` counts the words every queued read is still owed, so a RAM
+    //     read's take can add up what it is behind.
+    //   * a read taken with nothing owed at all measures the bridge alone
+    //     (ob_clean) - any master's, since the bridge does not know whose.
+    //   * a RAM burst whose words stop coming after the first adds its gaps.
+    // Nothing here feeds back into the scheduling. A 16-bit clock stamp wraps
+    // after 1.3 ms, far beyond any latency the queue can reach.
+    logic [15:0]   ob_t [RF];
+    logic [RF-1:0] ob_first, ob_clean;
+    logic  [7:0]   ob_owed;
+    logic [37:0]   ob_lat_ram, ob_ahead, ob_gap_ram, ob_lat_clean;
+    logic [31:0]   ob_n_ram, ob_n_clean;
+    wire   [7:0]   ob_owed_now = ob_owed - (word ? 8'd1 : 8'd0);
+    wire  [15:0]   ob_lat      = ob_now - ob_t[rf_rd];
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            ob_first     <= '0;
+            ob_clean     <= '0;
+            ob_owed      <= 8'd0;
+            ob_lat_ram   <= '0;
+            ob_ahead     <= '0;
+            ob_gap_ram   <= '0;
+            ob_lat_clean <= '0;
+            ob_n_ram     <= '0;
+            ob_n_clean   <= '0;
+        end else begin
+            ob_owed <= ob_owed_now + (push ? cmd_n : 8'd0);
+            if (push) begin
+                ob_t[rf_wr]     <= ob_now;
+                ob_first[rf_wr] <= 1'b1;
+                ob_clean[rf_wr] <= (ob_owed_now == 8'd0);
+                if (cmd_m == $clog2(NM)'(M_RAM)) begin
+                    ob_n_ram <= ob_n_ram + 32'd1;
+                    ob_ahead <= ob_ahead + 38'(ob_owed_now);
+                end
+            end
+            if (word && ob_first[rf_rd]) begin
+                ob_first[rf_rd] <= 1'b0;
+                if (rf_head_m == $clog2(NM)'(M_RAM))
+                    ob_lat_ram <= ob_lat_ram + 38'(ob_lat);
+                if (ob_clean[rf_rd]) begin
+                    ob_lat_clean <= ob_lat_clean + 38'(ob_lat);
+                    ob_n_clean   <= ob_n_clean + 32'd1;
+                end
+            end
+            if (rf_head_v && !DDRAM_DOUT_READY && !ob_first[rf_rd]
+                && rf_head_m == $clog2(NM)'(M_RAM))
+                ob_gap_ram <= ob_gap_ram + 38'd1;
+        end
+    end
+
+    assign dbg_rdlat[0] = { ob_lat_ram[37:6],   ob_n_ram };
+    assign dbg_rdlat[1] = { ob_ahead[37:6],     ob_gap_ram[37:6] };
+    assign dbg_rdlat[2] = { ob_lat_clean[37:6], ob_n_clean };
 
 endmodule

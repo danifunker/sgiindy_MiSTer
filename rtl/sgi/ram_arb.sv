@@ -113,7 +113,11 @@ module ram_arb (
     output logic  [7:0] ram_be,
     output logic  [2:0] ram_burst,
     input  logic        ram_ack,
-    input  logic        ram_last
+    input  logic        ram_last,
+
+    // ---- observation only (build 37) ------------------------------------
+    output logic        dbg_cpu_wait,   // a CPU access is waiting for the port
+    output logic        dbg_dma_go      // a DMA transaction is issued
 );
 
     // Whether this port has a transaction outstanding, and whose it is. Both
@@ -168,5 +172,10 @@ module ram_arb (
     assign cpu_last    = ram_last;
     assign dma_ack     = ram_ack &  owner_dma;
     assign dma_granted = dma_go;
+
+    // A CPU access that arrived while a transaction held the port - the DMA
+    // engines' (the CPU never overlaps its own) - and the clocks it waited.
+    assign dbg_cpu_wait = (cpu_req | cpu_wait) & inflight;
+    assign dbg_dma_go   = dma_go;
 
 endmodule
