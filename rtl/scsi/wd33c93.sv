@@ -170,11 +170,25 @@ module wd33c93 #(
     //               window and drops when the resuming Select-and-Transfer is
     //               accepted, so the bit reads 0 for exactly the stretch the
     //               driver services the pause.
+    //
+    //             * And a polled TRANSFER INFO: set while one runs (pio_xfer),
+    //               clear once it has finished (pio_done) until the next
+    //               command other than NEGATE ACK. do_trinfo, which IRIX and
+    //               the PROM share (/unix 0x880b0b44, boot.rom 0x9fc1d10c),
+    //               reads bit 5 right after its last byte and resets the SCSI
+    //               bus if it is set - and the target is still connected
+    //               then, by design, waiting for the next phase. On the part
+    //               the bit means "a Level II command is executing", and that
+    //               is what it says here for this command.
     // bit 6 LCI - the last command was ignored (issued while CIP)
     // bit 7 INT - an interrupt is pending. Reading SCSI_STATUS clears it, and
     //             that read is what a driver uses to find out what happened.
     logic dbr, cip, lci, int_pending;
-    wire [7:0] asr = {int_pending, lci, scsi_bsy && !sat_paused, cip,
+    // A polled TRANSFER INFO is executing / has finished. See bit 5 above and
+    // ST_XFER below.
+    logic pio_xfer, pio_done;
+    wire [7:0] asr = {int_pending, lci,
+                      pio_xfer || (scsi_bsy && !sat_paused && !pio_done), cip,
                       3'b000, dbr};
 
     // ---- commands ---------------------------------------------------------
@@ -188,6 +202,9 @@ module wd33c93 #(
     localparam logic [7:0] C_SEL_ATN_XFER = 8'h08;
     localparam logic [7:0] C_SEL_XFER     = 8'h09;
     localparam logic [7:0] C_TRANSFER_INFO= 8'h20;
+    // The same with the Single Byte Transfer bit: one byte, whatever the
+    // count register says. IRIX's ack_msgin (/unix 0x880b0934) issues it.
+    localparam logic [7:0] C_XFER_INFO_SBT= 8'hA0;
 
     // ---- SCSI Status Register values --------------------------------------
     // Only the ones this stage can produce. The full list, with the IRIX
@@ -203,6 +220,16 @@ module wd33c93 #(
     localparam logic [7:0] S_XFER_MSG_IN    = 8'h1F;
     localparam logic [7:0] S_XFER_CMD_OUT   = 8'h1A;  // target wants COMMAND
     localparam logic [7:0] S_XFER_MSG_OUT  = 8'h1E;
+    // The 0x18 group as a base: TRANSFER INFO finished its count and the
+    // target is asking for the phase in the low three bits.
+    localparam logic [7:0] S_XFER_DONE      = 8'h18;
+    // TRANSFER INFO took the last byte of a MESSAGE IN and is holding ACK, so
+    // the driver can raise ATN to reject the message before the target sees
+    // the byte acknowledged. NEGATE ACK lets go. IRIS's TRANSFER_PAUSE.
+    localparam logic [7:0] S_XFER_PAUSED    = 8'h20;
+    // TRANSFER INFO with bytes still to go and the target asking for a
+    // different phase: 0x48 | the new phase.
+    localparam logic [7:0] S_UNEXPECTED     = 8'h48;
     // "Service required": the target has asked for a phase and the chip is not
     // in a command that handles it, so it hands the question to the driver.
     // The BASE IS 0x88, NOT 0x80, and the low three bits are the phase:
@@ -289,7 +316,7 @@ module wd33c93 #(
         ST_XFER,            // wait for REQ in the current phase
         ST_XFER_ACK,        // data taken or presented; raise ACK
         ST_XFER_REL,        // wait for the target to drop REQ
-        ST_DONE,
+        ST_DONE,            // count done: wait for the target's next phase
         // Select-and-Transfer: the chip's automatic mode, and the only one
         // this machine's driver uses. One state per bus phase, walked without
         // the driver in the loop except to feed or drain data bytes.
@@ -301,7 +328,10 @@ module wd33c93 #(
         ST_SAT_REL,
         ST_SAT_DIN,         // DATA IN: let the target's byte settle first
         ST_SAT_DMA,         // a data byte is with the HPC3 DMA engine
-        ST_SAT_END
+        ST_SAT_END,
+        // Appended, so every state above keeps the number the beacon reports.
+        ST_XFER_DBR,        // TRANSFER INFO: DBR up, waiting for the driver
+        ST_NACK             // NEGATE ACK: wait for the target to move on
     } state_t;
 
     state_t state;
@@ -379,6 +409,42 @@ module wd33c93 #(
     // True while a DMA data phase is running, so that leaving the phase can be
     // reported to the engine as an end of transfer exactly once.
     logic       dma_in_data;
+    // ---- polled TRANSFER INFO ----------------------------------------------
+    // ONE BYTE PER DBR HANDSHAKE, AND THE DRIVER IN THE LOOP FOR EVERY ONE.
+    // For each REQ the chip raises DBR and waits: the driver writes the DATA
+    // register (towards the target) or reads it (from the target), and only
+    // then is the byte acknowledged. When the count is used up the chip waits
+    // for the target's next phase and interrupts with 0x18 | that phase. The
+    // last byte of a MESSAGE IN is the exception: ACK stays up and 0x20 says
+    // so, and NEGATE ACK releases it.
+    //
+    // This model used to send the count's worth of whatever the DATA register
+    // held the moment the command was written, with no DBR at all, and
+    // interrupt before the driver's loop had started. The loop in do_trinfo
+    // (/unix 0x880b09e0, and the same code in the PROM at 0x9fc1cf8c) reads
+    // any interrupt pending right after the command as stale and discards
+    // it, then polls ASR for DBR 700 times with us_delay(7) between polls -
+    // 4.9 ms - and falls into ABORT and DISCONNECT. That is IRIX's synchronous
+    // transfer negotiation (_sync_setup: IDENTIFY + SDTR out, then either the
+    // target's answer or, as here, COMMAND phase and an INQUIRY to finish the
+    // connection), and a negotiation that fails that way leaves the target
+    // marked "not negotiated", so the kernel negotiated again in front of
+    // nearly EVERY command: us_delay was 20 % of the board's boot and 11 % of
+    // a login (docs/53).
+    logic        pio_sbt;       // single byte transfer: the count is one
+    logic  [2:0] pio_phase;     // the phase the transfer runs in
+    logic [23:0] pio_left;      // bytes still to move
+    logic  [3:0] pio_settle;    // clocks before REQ and the phase are believed
+    logic        pio_ack_held;  // ACK is up after a MESSAGE IN's last byte
+    // A target needs a few clocks after ACK falls to take the byte and move
+    // to its next phase (scsi.v advances on a registered edge of ACK, and
+    // changes phase on the clock after), and until then it still shows REQ in
+    // the old one. Nothing polled is in a hurry: the driver's own accesses
+    // take tens of clocks each.
+    localparam int PIO_SETTLE = 12;
+    wire         pio_to_target = (pio_phase == PH_DATA_OUT) ||
+                                 (pio_phase == PH_COMMAND)  ||
+                                 (pio_phase == PH_MSG_OUT);
     // Select-and-Transfer's IDENTIFY is ONE byte, and this is what stops it
     // being two. A target needs a clock to leave MESSAGE OUT after the last
     // ACK falls; the sequencer is back in ST_SAT_PHASE before that, sees
@@ -423,8 +489,6 @@ module wd33c93 #(
                           : (cdb_group == 3'd0)                      ? 4'd6
                           : cdb_size_ok                              ? cdb_size_reg
                           :                                            4'd6;
-    wire        to_target = (phase == PH_DATA_OUT) || (phase == PH_COMMAND)
-                          || (phase == PH_MSG_OUT);
 
     assign scsi_dout = data_latch;
     assign irq       = int_pending;
@@ -538,10 +602,20 @@ module wd33c93 #(
             sat_paused  <= 1'b0;
             rst_timer   <= 9'd0;
             din_ahead_n <= 2'd0;
+            pio_xfer    <= 1'b0;
+            pio_done    <= 1'b0;
+            pio_sbt     <= 1'b0;
+            pio_phase   <= 3'd0;
+            pio_left    <= 24'd0;
+            pio_settle  <= 4'd0;
+            pio_ack_held <= 1'b0;
         end else if (ce) begin
             bsy_q   <= scsi_bsy;
             dma_eop <= 1'b0;
             if (rst_timer != 9'd0) rst_timer <= rst_timer - 9'd1;
+            // A finished polled transfer only matters while its connection
+            // lasts; see ASR bit 5.
+            if (!scsi_bsy) pio_done <= 1'b0;
             // Bytes taken ahead belong to the DATA IN loop they were taken in.
             // Anything else - a pause, a reset, a new command, a phase change
             // (ST_SAT_PHASE drops them below) - throws them away.
@@ -572,6 +646,9 @@ module wd33c93 #(
                 dma_req     <= 1'b0;
                 dma_in_data <= 1'b0;
                 sat_paused  <= 1'b0;
+                pio_xfer    <= 1'b0;
+                pio_done    <= 1'b0;
+                pio_ack_held <= 1'b0;
                 rst_timer   <= RST_HOLD[8:0];
             end
 
@@ -625,6 +702,10 @@ module wd33c93 #(
                                 end else begin
                                     reg_file[R_COMMAND] <= din;
                                     lci <= 1'b0;
+                                    // Any command but NEGATE ACK ends what a
+                                    // finished polled transfer says about
+                                    // ASR bit 5; see the ASR.
+                                    if (din != C_NEGATE_ACK) pio_done <= 1'b0;
                                     case (din)
                                         C_RESET: begin
                                             // A SOFTWARE RESET IS NOT A POWER-ON
@@ -669,6 +750,8 @@ module wd33c93 #(
                                             dma_req     <= 1'b0;
                                             dma_in_data <= 1'b0;
                                             sat_paused  <= 1'b0;
+                                            pio_xfer    <= 1'b0;
+                                            pio_ack_held <= 1'b0;
                                         end
                                         C_SELECT, C_SELECT_ATN: begin
                                             scsi_atn  <= (din == C_SELECT_ATN);
@@ -676,9 +759,29 @@ module wd33c93 #(
                                             sel_timer <= 16'h0;
                                             state     <= ST_SEL_ASSERT;
                                         end
-                                        C_TRANSFER_INFO: begin
-                                            cip   <= 1'b1;
-                                            state <= ST_XFER;
+                                        C_TRANSFER_INFO, C_XFER_INFO_SBT: begin
+                                            // NOT CIP: CIP is the chip still
+                                            // interpreting a command, and the
+                                            // drivers' command routine spins
+                                            // on it right after the write
+                                            // (wd93cmd_lci, /unix 0x880b3728)
+                                            // - while this command cannot
+                                            // finish until that same driver
+                                            // hands it bytes. Bit 5 says it
+                                            // is executing. See pio_xfer.
+                                            pio_xfer     <= 1'b1;
+                                            pio_sbt      <= din[7];
+                                            pio_left     <= (din[7] || xfer_count == 24'd0)
+                                                            ? 24'd1 : xfer_count;
+                                            pio_phase    <= phase;
+                                            pio_settle   <= PIO_SETTLE[3:0];
+                                            // Continuing past a MESSAGE IN
+                                            // pause without NEGATE ACK lets
+                                            // go of ACK as NEGATE ACK would.
+                                            pio_ack_held <= 1'b0;
+                                            scsi_ack     <= 1'b0;
+                                            dbr          <= 1'b0;
+                                            state        <= ST_XFER;
                                         end
                                         C_SEL_XFER, C_SEL_ATN_XFER: begin
                                             // RESUME, NOT SELECTION, when a
@@ -746,12 +849,38 @@ module wd33c93 #(
                                                 state     <= ST_SAT_SEL;
                                             end
                                         end
-                                        C_NEGATE_ACK: scsi_ack <= 1'b0;
+                                        C_NEGATE_ACK: begin
+                                            scsi_ack <= 1'b0;
+                                            // After a MESSAGE IN pause the
+                                            // target moves on once ACK falls
+                                            // - off the bus after COMMAND
+                                            // COMPLETE, or to a new phase -
+                                            // and the driver waits for the
+                                            // interrupt that says which
+                                            // (do_inquiry, /unix 0x880b0d9c:
+                                            // wait_scintr, then 0x85).
+                                            if (pio_ack_held) begin
+                                                pio_ack_held <= 1'b0;
+                                                pio_settle   <= PIO_SETTLE[3:0];
+                                                state        <= ST_NACK;
+                                            end
+                                        end
                                         C_ASSERT_ATN: scsi_atn <= 1'b1;
                                         C_DISCONNECT: begin
                                             scsi_sel <= 1'b0;
                                             scsi_ack <= 1'b0;
                                             scsi_atn <= 1'b0;
+                                            // A polled transfer or its wait
+                                            // ends with it; nothing else here
+                                            // changes what the sequencer does.
+                                            pio_xfer <= 1'b0;
+                                            pio_ack_held <= 1'b0;
+                                            if (state == ST_XFER     || state == ST_XFER_DBR ||
+                                                state == ST_XFER_ACK || state == ST_XFER_REL ||
+                                                state == ST_DONE     || state == ST_NACK) begin
+                                                dbr   <= 1'b0;
+                                                state <= ST_IDLE;
+                                            end
                                             // Phase 0, not 0x43: IRIS uses
                                             // command_phase::DISCONNECTED here
                                             // (wd33c93a.rs:1778) and the PROM's
@@ -767,6 +896,9 @@ module wd33c93 #(
                                             scsi_sel <= 1'b0;
                                             scsi_ack <= 1'b0;
                                             sat_paused <= 1'b0;
+                                            pio_xfer <= 1'b0;
+                                            pio_ack_held <= 1'b0;
+                                            dbr      <= 1'b0;
                                         end
                                         default: begin
                                             // Select-and-Transfer and the
@@ -895,109 +1027,170 @@ module wd33c93 #(
                     end
                 end
 
-                // One byte per REQ. The driver either wrote the byte into the
-                // data register before issuing TRANSFER INFO (to-target
-                // phases) or reads it out afterwards (from-target phases);
-                // DBR is what tells it which way round it is.
+                // ---- polled TRANSFER INFO: one DBR handshake a byte ---------
+                // See pio_xfer for the contract and why it is this one. Every
+                // wait below starts with pio_settle, so REQ and the phase are
+                // the target's answer to the last byte, not its question
+                // about it.
                 ST_XFER: begin
 `ifdef MSG_DEBUG
-                    $display("[INI] XFER bsy=%b req=%b phase=%b cnt=%0d atn=%b", scsi_bsy, scsi_req, phase, xfer_count, scsi_atn);
+                    $display("[INI] XFER bsy=%b req=%b phase=%b left=%0d atn=%b", scsi_bsy, scsi_req, phase, pio_left, scsi_atn);
 `endif
-                    if (!scsi_bsy) begin
+                    if (pio_settle != 4'd0) begin
+                        pio_settle <= pio_settle - 4'd1;
+                    end else if (!scsi_bsy) begin
                         // The target let go of the bus mid-transfer. Still a
                         // clean disconnect as far as the driver is concerned,
                         // so the phase has to say so - see CP_DISCONNECT_OK.
-                        cip <= 1'b0;
                         reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
                         reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
                         int_pending <= 1'b1;
-                        state <= ST_IDLE;
+                        pio_xfer    <= 1'b0;
+                        pio_done    <= 1'b1;
+                        state       <= ST_IDLE;
                     end else if (scsi_req) begin
-                        if (!to_target) data_latch <= scsi_din;
+                        if (phase != pio_phase) begin
+                            // Bytes still to go and the target has moved on.
+                            reg_file[R_SCSI_STATUS] <= S_UNEXPECTED | {5'b0, phase};
+                            int_pending <= 1'b1;
+                            pio_xfer    <= 1'b0;
+                            pio_done    <= 1'b1;
+                            state       <= ST_IDLE;
+                        end else begin
+                            if (!pio_to_target) data_latch <= scsi_din;
+                            dbr   <= 1'b1;
+                            state <= ST_XFER_DBR;
+                        end
+                    end
+                end
+
+                // DBR is up: the driver writes the DATA register (towards the
+                // target) or reads it (from the target), and either access
+                // drops DBR in the register block above. A byte from the
+                // target is re-taken every clock until then, so the driver
+                // reads the settled one.
+                ST_XFER_DBR: begin
+                    if (!scsi_bsy) begin
+                        dbr <= 1'b0;
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
+                        reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
+                        int_pending <= 1'b1;
+                        pio_xfer    <= 1'b0;
+                        pio_done    <= 1'b1;
+                        state       <= ST_IDLE;
+                    end else if (!dbr) begin
                         // A message ends by the initiator negating ATN before
                         // it acknowledges the last byte - that is how the
                         // target knows how long the message was without
                         // parsing it. ACK goes up in the next state, so
                         // dropping ATN here is in time.
-                        if ((phase == PH_MSG_OUT) && (xfer_count <= 24'd1)) begin
+                        if ((pio_phase == PH_MSG_OUT) && (pio_left <= 24'd1)) begin
                             scsi_atn <= 1'b0;
                             // AND RECORD THAT THE MESSAGE WENT OUT. The
                             // Command Phase register is how a driver knows
                             // where in the connection the chip is, and 0x20 is
                             // "IDENTIFY sent, COMMAND phase next" - the value
                             // IRIS reports here (command_phase::IDENTIFY_SENT
-                            // beside REQ_CMD_PHASE, src/wd33c93a.rs). This
-                            // model never produced 0x20 at all: it went from
-                            // 0x10 SELECTED straight to 0x30 COMMAND_START as
-                            // the CDB began, so the one moment the driver asks
-                            // about after negotiating had no answer.
-                            // docs/13-scsi-dma-plan.md records that the
-                            // missing piece after MESSAGE OUT was on the
-                            // initiator side and unidentified. This is a
-                            // candidate for it.
+                            // beside REQ_CMD_PHASE, src/wd33c93a.rs).
                             reg_file[R_CMD_PHASE] <= CP_IDENTIFY_SENT;
                         end
                         state <= ST_XFER_ACK;
+                    end else if (!pio_to_target) begin
+                        data_latch <= scsi_din;
                     end
                 end
 
-                // The same rule on the polled path. Its window is one cycle
-                // rather than tens - the REQ test is in the state before this
-                // one - so it has never been seen to fire, but a one-cycle
-                // race that corrupts a disk silently is not worth keeping for
-                // the sake of a cycle. See the note on ST_SAT_ACK.
-                ST_XFER_ACK: if (scsi_req) begin
-                    scsi_ack <= 1'b1;
-                    state    <= ST_XFER_REL;
+                // ACK only in answer to a REQ that is still there, and in the
+                // phase the byte belongs to. See the note on ST_SAT_ACK.
+                ST_XFER_ACK: begin
+                    if (!scsi_bsy) begin
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
+                        reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
+                        int_pending <= 1'b1;
+                        pio_xfer    <= 1'b0;
+                        pio_done    <= 1'b1;
+                        state       <= ST_IDLE;
+                    end else if (scsi_req) begin
+                        if (phase != pio_phase) begin
+                            reg_file[R_SCSI_STATUS] <= S_UNEXPECTED | {5'b0, phase};
+                            int_pending <= 1'b1;
+                            pio_xfer    <= 1'b0;
+                            pio_done    <= 1'b1;
+                            state       <= ST_IDLE;
+                        end else begin
+                            scsi_ack <= 1'b1;
+                            state    <= ST_XFER_REL;
+                        end
+                    end
                 end
 
                 ST_XFER_REL: begin
                     if (!scsi_req) begin
-                        scsi_ack <= 1'b0;
-                        // Count down. Reaching zero ends the command and
-                        // raises the interrupt whose status says which phase
-                        // the target is asking for next - that is how a
-                        // driver walks COMMAND -> DATA -> STATUS -> MESSAGE.
-                        if (xfer_count <= 24'd1) begin
-                            {reg_file[R_COUNT_MSB],
-                             reg_file[R_COUNT_2ND],
-                             reg_file[R_COUNT_LSB]} <= 24'd0;
-                            cip <= 1'b0;
-                            dbr <= !to_target;
-                            state <= ST_DONE;
-                        end else begin
+                        pio_left <= pio_left - 24'd1;
+                        if (!pio_sbt && xfer_count != 24'd0)
                             {reg_file[R_COUNT_MSB],
                              reg_file[R_COUNT_2ND],
                              reg_file[R_COUNT_LSB]} <= xfer_count - 24'd1;
-                            dbr   <= !to_target;
-                            state <= ST_XFER;
+                        if (pio_left <= 24'd1 && pio_phase == PH_MSG_IN) begin
+                            // THE LAST BYTE OF A MESSAGE IN KEEPS ACK UP. The
+                            // driver may reject the message by raising ATN
+                            // before the target sees it acknowledged, so the
+                            // chip stops here and says so; NEGATE ACK is the
+                            // driver's go-ahead.
+                            reg_file[R_SCSI_STATUS] <= S_XFER_PAUSED;
+                            int_pending  <= 1'b1;
+                            pio_ack_held <= 1'b1;
+                            pio_xfer     <= 1'b0;
+                            pio_done     <= 1'b1;
+                            state        <= ST_IDLE;
+                        end else begin
+                            scsi_ack   <= 1'b0;
+                            pio_settle <= PIO_SETTLE[3:0];
+                            state      <= (pio_left <= 24'd1) ? ST_DONE : ST_XFER;
                         end
                     end
                 end
 
+                // THE COUNT IS DONE; THE INTERRUPT SAYS WHAT THE TARGET WANTS
+                // NEXT, so the driver has to wait for the target to ask. It
+                // used to be raised the clock the last ACK fell, from whatever
+                // the phase lines still showed. 0x18 | phase, or a disconnect.
                 ST_DONE: begin
-                    case (phase)
-                        PH_DATA_OUT: reg_file[R_SCSI_STATUS] <= S_XFER_DATA_OUT;
-                        PH_DATA_IN:  reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;
-                        PH_COMMAND:  reg_file[R_SCSI_STATUS] <= S_XFER_CMD_OUT;
-                        PH_STATUS:   reg_file[R_SCSI_STATUS] <= S_XFER_STATUS_IN;
-                        // A completed MESSAGE OUT normally does not land here:
-                        // the target moves to COMMAND as the last ACK falls,
-                        // so `phase` is already PH_COMMAND by now and the arm
-                        // above is the one taken. Command Phase was set to
-                        // 0x20 back where ATN was dropped.
-                        PH_MSG_OUT:  reg_file[R_SCSI_STATUS] <= S_XFER_MSG_OUT;
-                        PH_MSG_IN:   reg_file[R_SCSI_STATUS] <= S_XFER_MSG_IN;
-                        default:     reg_file[R_SCSI_STATUS] <= S_XFER_DATA_IN;
-                    endcase
-                    int_pending <= 1'b1;
-                    // ST_IDLE, not the phase-reporting state. A real chip does
-                    // report the next phase the target asks for after a
-                    // completed TRANSFER INFO, and that was tried here; it
-                    // changed nothing this machine does and it puts an extra
-                    // interrupt into every PIO transfer, so it is left out
-                    // until something needs it.
-                    state <= ST_IDLE;
+                    if (pio_settle != 4'd0) begin
+                        pio_settle <= pio_settle - 4'd1;
+                    end else if (!scsi_bsy) begin
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
+                        reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
+                        int_pending <= 1'b1;
+                        pio_xfer    <= 1'b0;
+                        pio_done    <= 1'b1;
+                        state       <= ST_IDLE;
+                    end else if (scsi_req) begin
+                        reg_file[R_SCSI_STATUS] <= S_XFER_DONE | {5'b0, phase};
+                        int_pending <= 1'b1;
+                        pio_xfer    <= 1'b0;
+                        pio_done    <= 1'b1;
+                        state       <= ST_IDLE;
+                    end
+                end
+
+                // NEGATE ACK after a MESSAGE IN pause: the target now either
+                // leaves the bus - 0x85, what do_inquiry waits for after
+                // COMMAND COMPLETE - or asks for a new phase, which is service
+                // required, 0x88 | phase, exactly as after a plain SELECT.
+                ST_NACK: begin
+                    if (pio_settle != 4'd0) begin
+                        pio_settle <= pio_settle - 4'd1;
+                    end else if (!scsi_bsy) begin
+                        reg_file[R_CMD_PHASE]   <= CP_DISCONNECT_OK;
+                        reg_file[R_SCSI_STATUS] <= S_DISCONNECT;
+                        int_pending <= 1'b1;
+                        state       <= ST_IDLE;
+                    end else if (scsi_req) begin
+                        reg_file[R_SCSI_STATUS] <= S_SERVICE_REQ | {5'b0, phase};
+                        int_pending <= 1'b1;
+                        state       <= ST_IDLE;
+                    end
                 end
 
                 // ---- Select-and-Transfer -------------------------------
@@ -1378,5 +1571,51 @@ module wd33c93 #(
             endcase
         end
     end
+
+// One line per register access, accepted command, raised interrupt, sequencer
+// state change and bus change - except inside a DMA data phase, where it would
+// be a line a byte, and except repeated ASR reads of an unchanged value, which
+// is what a driver's polling loop is. Build with +define+WD_TRACE; silent and
+// free without it. This is what shows a driver waiting out a timeout.
+`ifdef WD_TRACE
+    logic [63:0] tr_cyc;
+    state_t      tr_state;
+    logic  [7:0] tr_asr;
+    logic  [5:0] tr_bus;
+    logic        tr_int;
+    wire         tr_data_loop = dma_in_data && (phase == PH_DATA_IN || phase == PH_DATA_OUT);
+    wire   [5:0] tr_bus_now   = {scsi_bsy, scsi_req, scsi_ack, phase};
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            tr_cyc <= 64'd0; tr_state <= ST_IDLE; tr_asr <= 8'hFF; tr_bus <= 6'd0; tr_int <= 1'b0;
+        end else if (ce) begin
+            tr_cyc <= tr_cyc + 64'd1;
+            if (sel && we && !is_data)
+                $display("[WD %0d] W AR <- %02x", tr_cyc, din);
+            if (sel && we && is_data)
+                $display("[WD %0d] W reg %02x <- %02x%s", tr_cyc, ar, din,
+                         (ar == R_COMMAND && (cip || int_pending) && din != C_RESET) ? " (LCI)" : "");
+            if (sel && !we && is_data)
+                $display("[WD %0d] R reg %02x -> %02x", tr_cyc, ar, read_indirect(ar));
+            if (sel && !we && !is_data) begin
+                if (asr != tr_asr)
+                    $display("[WD %0d] R ASR -> %02x", tr_cyc, asr);
+                tr_asr <= asr;
+            end
+            if (int_pending && !tr_int)
+                $display("[WD %0d] INT status %02x phase %02x count %0d", tr_cyc,
+                         reg_file[R_SCSI_STATUS], reg_file[R_CMD_PHASE], xfer_count);
+            tr_int <= int_pending;
+            if (state != tr_state && !tr_data_loop)
+                $display("[WD %0d] state %0d -> %0d  bus bsy=%b req=%b ack=%b ph=%0d atn=%b dbr=%b cip=%b",
+                         tr_cyc, tr_state, state, scsi_bsy, scsi_req, scsi_ack, phase, scsi_atn, dbr, cip);
+            tr_state <= state;
+            if (tr_bus_now != tr_bus && !tr_data_loop)
+                $display("[WD %0d] bus bsy=%b req=%b ack=%b ph=%0d din=%02x", tr_cyc,
+                         scsi_bsy, scsi_req, scsi_ack, phase, scsi_din);
+            tr_bus <= tr_bus_now;
+        end
+    end
+`endif
 
 endmodule
