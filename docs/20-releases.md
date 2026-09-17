@@ -31,6 +31,76 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260917 — loads behind loads, a dirty line in one write, 3,000 ALMs back
+
+`releases/SGIIndy_20260917.rbf`, md5 `93c2b5e47d6194ac9c858b3455e920cf`
+(build 38, SEED=5; 37,235 ALMs, 45,749 registers, 483 / 553 M10K, core
+clock setup slack +1.401 ns, HDMI PLL +0.178 ns, no negative slack in any
+check). Same `releases/boot.rom`. Built late on 2026-09-16 and tested on the
+board that night. Details in [52-fill-latency-area-writebacks.md](52-fill-latency-area-writebacks.md).
+
+### What changed
+
+* **A load no longer stalls behind another load or a store.** Since
+  SGIIndy_20260916 a load let the next instruction run in the same clock only
+  when that instruction was not a memory access; now it may be an integer
+  load or store too (30.5 % of loads in IRIX's kernel are followed by such a
+  load). The data cache checks that its RAM holds a load's own word before
+  answering, and a stalled load is released only by its own read - the
+  cpu-tests suite caught the second one.
+* **A dirty data cache line goes back to memory as one transaction.** Its four
+  words used to be four trips through the CPU's memory FIFO, the SGI bus and
+  the DDR3 mux; they are one now, written to the bridge back to back.
+* **Two clocks off an instruction cache fill, one off every main-memory
+  access.** An instruction line no longer waits a clock that only data lines
+  need, and the DDR3 mux presents a main-memory request in the clock it
+  arrives instead of the one after.
+* **3,000 ALMs back.** The configuration EEPROM's 2 Kbit and the RAMDAC's
+  control table had been built from flip-flops (1,982 and 1,056 ALMs); both
+  are block RAM now. The device is at 89 % with everything above, from 93 %.
+* **The beacon is version 12**: four more words, a main-memory read's latency
+  split into the bridge's own and the queue's. `tools/misterdeploy/` reads
+  every version.
+
+### Measured
+
+With `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`. The
+board had slowed down between SGIIndy_20260916's measurement and this one -
+the same build 36 bitstream re-run the same night took 113 s to X and 94.6 s
+for bzip2 (docs/52 §4) - so both columns here are that night:
+
+| workload | SGIIndy_20260916 (build 36), re-run | this file (build 38) |
+|---|---:|---:|
+| launch to the X login screen (11 s polls) | 113 s | **102 s** |
+| bzip2 -9 of /unix | 94.6 s | **85.0 s** |
+| 60 x `/bin/ls /` | 5.09 s | **3.97 s** |
+| `ls -lR /usr/lib/X11` into the Console | 8.18 s | **7.74 s** |
+| dd 10 MB off the raw disk | 4.18 s | **3.96 s** |
+| `xterm -e /bin/true`, warm | 0.47 s | **0.41 s** |
+| perl interpreter loop | 11.2 s | 12.4 s (see below) |
+| clocks per instruction, boot / login | 1.60 / 1.72 | **1.54 / 1.63** |
+| instruction / data cache line fill, clocks on the bus | 20.4 / 20.9 | **18.5 / 20.2** |
+
+### Tested
+
+Build 38, in the simulator: `make cpuonly` (728 runs, 0 against
+expectation); the R4600 cpu-tests suite 2409 / 0 over 250 tests (iris
+`1be0c05`, adding load and store right-behind-a-load tests in every cache
+state, with evictions and TLB walks); tb_ddr3 at sub-burst sizes 4 and 3 with
+line writes read back and the latency counters checked against the bridge
+model; tb_ramarb at latencies 1 and 60; tb_linecache, tb_fetcharb and the new
+tb_eeprom. The EEPROM and RAMDAC rewrites were run A/B against the old models
+(5.36 M and 1.03 M clocks, no difference). On the board, this bitstream: the
+suite as the PROM **2415 / 0** over 255 tests; `diskcheck` PASS; a full
+perfprobe run with no display line-cache miss in any window and the desktop
+intact after every workload; no SCSI notice in either boot's SYSLOG. Build 37
+(this minus the line write, the instruction-fill tag and the mux change) passed
+the same board tests.
+
+Perl-like interpreter loops still vary from run to run with where their hot
+pages land in the direct-mapped instruction cache: the re-run build 36's
+window had half the instruction fills of every other run that night.
+
 ## SGIIndy_20260916 — twice the speed, a CPU checked against real Indys, the MiSTer's clock
 
 `releases/SGIIndy_20260916.rbf`, md5 `91980dc9a94ab0f1a052f614e6a1cf6f`
