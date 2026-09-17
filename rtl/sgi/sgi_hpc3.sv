@@ -104,13 +104,61 @@ module sgi_hpc3 (
         BLK_WRONLY
     } blk_t;
 
-    // 16 DMA sub-blocks of 0x2000: PBUS channels 0-7 then hd0, hd1, enetr,
-    // enetx and the four IRIX-only descriptor-pointer windows above them.
-    logic [31:0] dma_desc [0:31];      // {sub-block, word}
-    logic [31:0] dma_ctrl [0:127];     // {sub-block, register 0..7}
-    logic [31:0] gen      [0:7];
-    logic [31:0] cfgdma   [0:7];
-    logic [31:0] cfgpio   [0:15];
+    // ---- the store -------------------------------------------------------
+    // EVERY REGISTER THAT IS PLAIN STORAGE LIVES IN ONE 256-WORD MEMORY, and
+    // it is a memory rather than 6,144 flip-flops because that is what those
+    // flip-flops cost: 3,637 ALMs of build 41's fit, a tenth of the device,
+    // for a register file nothing reads twice a second.
+    //
+    //   0x00-0x1F  descriptor pairs   {sub-block, word}
+    //   0x20-0x27  gen                {addr[4:3], word}
+    //   0x28-0x2F  cfgdma             channel 0..7
+    //   0x30-0x3F  cfgpio             channel 0..15
+    //   0x80-0xFF  control groups     {sub-block, register 0..7}
+    //
+    // TWO COPIES, BECAUSE ONE BUS CYCLE READS TWO REGISTERS. A doubleword
+    // covers the register at +0 and the one at +4 and the CPU may address
+    // either, so the read is two ports; a memory has one. Both copies take
+    // every write, and each answers one half. They are 2 M10Ks against 483
+    // already in use.
+    //
+    // A read now lands a clock after its address instead of in the same
+    // clock, and a partial write costs one more on top - the byte that is not
+    // written has to be merged against the word as it is, which is the same
+    // read. The bus waits for `ack` however long it takes (r4300_bus holds its
+    // request in S_BUSY), nothing here has a deadline, and one PIO access to
+    // these registers per boot phase is the traffic. SCSI channel 0, HAL2 and
+    // the write-only ports are NOT in the store and still answer in the clock
+    // after `sel`, which is what matters: the channel's registers are read on
+    // every disk interrupt, and reading its control port clears one.
+    localparam int ST_N = 256;
+    logic [31:0] st0 [0:ST_N-1];       // answers the +0 half
+    logic [31:0] st1 [0:ST_N-1];       // answers the +4 half
+    logic  [7:0] st_ra0, st_ra1, st_wa;
+    logic [31:0] st_q0, st_q1, st_wd;
+    logic        st_we;
+
+    always_ff @(posedge clk) begin
+        if (st_we) begin
+            st0[st_wa] <= st_wd;
+            st1[st_wa] <= st_wd;
+        end
+        st_q0 <= st0[st_ra0];
+        st_q1 <= st1[st_ra1];
+    end
+
+    // Power-up contents: Quartus turns this into the M10K's initial value and
+    // the simulator runs it at time zero. (Starting the line with the
+    // simulator's own name after `//` would make it read the sentence as a
+    // directive.) The reset sweep below is what clears the store again on a
+    // warm reset, as the `for` loops used to.
+    integer ini;
+    initial begin
+        for (ini = 0; ini < ST_N; ini = ini + 1) begin
+            st0[ini] = 32'h0;
+            st1[ini] = 32'h0;
+        end
+    end
 
     // ---- decode ----------------------------------------------------------
     blk_t blk;
@@ -236,23 +284,44 @@ module sgi_hpc3 (
     // ioc_rd in sgi_ioc.sv is the same shape for the same reason. Anything
     // that cases a sized expression against differently sized items, in a
     // function called with constants, will crash Quartus the same way.
+    // WHICH BLOCKS ARE IN THE STORE. SCSI channel 0's sub-block is not: the
+    // engine owns those registers. Neither are HAL2's file, the write-only
+    // PBUS ports or an address this module does not claim.
+    wire stored = (blk == BLK_GEN) || (blk == BLK_CFGDMA) || (blk == BLK_CFGPIO)
+               || (((blk == BLK_DESC) || (blk == BLK_CTRL)) && !scsi0_blk);
+
+    // The store's index for the register this access's half w addresses. An
+    // if/else chain for the same reason hpc3_rd below is one.
+    function automatic logic [7:0] st_idx(input logic w);
+        if (blk == BLK_CTRL)        st_idx = {1'b1, sub, ctrl_reg(w)};
+        else if (blk == BLK_DESC)   st_idx = {3'b000, sub, w};
+        else if (blk == BLK_GEN)    st_idx = {5'b00100, addr[4:3], w};
+        else if (blk == BLK_CFGDMA) st_idx = {5'b00101, addr[11:9]};
+        else                        st_idx = {4'b0011, addr[11:8]};   // BLK_CFGPIO
+    endfunction
+
+    assign st_ra0 = st_idx(1'b0);
+    assign st_ra1 = st_idx(1'b1);
+
+    // What a stored half reads: the word out of the store, except for the two
+    // halves of intstat. 0x1FBB0000 and 0x1FBB000C are generated, not stored;
+    // 0x1FBB0004 and 0x1FBB0008 are storage. The store still holds a word for
+    // the generated pair and a write still lands in it - nothing reads it, and
+    // keeping the write unconditional keeps the write port's address one
+    // function of the address.
+    function automatic logic [31:0] st_rd(input logic w, input logic [31:0] q);
+        if (blk == BLK_GEN)
+            st_rd = ({addr[4:3], w} == 3'd0) ? {27'h0, intstat[4:0]}
+                  : ({addr[4:3], w} == 3'd3) ? {22'h0, intstat[9:5], 5'h0}
+                  :                            q;
+        else st_rd = q;
+    endfunction
+
     function automatic logic [31:0] hpc3_rd(input logic w);
-        if (blk == BLK_DESC)
-            hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
-                                : dma_desc[{sub, w}];
-        else if (blk == BLK_CTRL)
-            hpc3_rd = scsi0_blk ? (w ? scsi0_rd1 : scsi0_rd0)
-                                : dma_ctrl[{sub, ctrl_reg(w)}];
-        // 0x1FBB0000 and 0x1FBB000C are the two halves of intstat and are
-        // generated, not stored; 0x1FBB0004 and 0x1FBB0008 are storage.
-        else if (blk == BLK_GEN)
-            hpc3_rd = ({addr[4:3], w} == 3'd0) ? {27'h0, intstat[4:0]}
-                    : ({addr[4:3], w} == 3'd3) ? {22'h0, intstat[9:5], 5'h0}
-                    :                            gen[{addr[4:3], w}];
-        else if (blk == BLK_CFGDMA)
-            hpc3_rd = cfgdma[addr[11:9]];
-        else if (blk == BLK_CFGPIO)
-            hpc3_rd = cfgpio[addr[11:8]];
+        // Only the blocks that are not in the store reach this: SCSI channel
+        // 0's registers, HAL2's revision, and everything else as zero.
+        if ((blk == BLK_DESC) || (blk == BLK_CTRL))
+            hpc3_rd = w ? scsi0_rd1 : scsi0_rd0;
         // HAL2 ANSWERS ITS REVISION REGISTER AND NOTHING ELSE, and that
         // is enough to be listed. There is no audio path behind this and
         // there is not meant to be yet: `hinv` prints the audio line out
@@ -311,6 +380,25 @@ module sgi_hpc3 (
         end
     end
 
+    // The same two things for a stored access, a clock later: what the halves
+    // read, and what a write leaves behind once the bytes it does not carry
+    // are merged against that. `sel` is long gone by then - the bus holds the
+    // address, the write enables and the data until the acknowledge - so these
+    // are the enables without it.
+    logic [31:0] st_rdv [0:1];
+    logic [31:0] st_wv  [0:1];
+    wire         acc_wr0 = we && (|be[7:4]);
+    wire         acc_wr1 = we && (|be[3:0]);
+    always_comb begin
+        st_rdv[0] = st_rd(1'b0, st_q0);
+        st_rdv[1] = st_rd(1'b1, st_q1);
+        for (int w = 0; w < 2; w++)
+            for (int b = 0; b < 4; b++)
+                st_wv[w][24 - 8*b +: 8] =
+                    be[7 - 4*w - b] ? wdata[56 - 32*w - 8*b +: 8]
+                                    : st_rdv[w][24 - 8*b +: 8];
+    end
+
     // ---- HAL2 -------------------------------------------------------------
     // The audio processor's register file. It used to be a constant here -
     // REV and nothing else - and the PROM's init at 0xBFC00BD0 wrote IAR and
@@ -337,41 +425,102 @@ module sgi_hpc3 (
         .rdata  (hal2_rdata)
     );
 
-    integer i;
+    //------------------------------------------------------------------
+    // The store's one access at a time
+    //------------------------------------------------------------------
+    // A stored access takes the clock after `sel` to read both halves out of
+    // the memories, and answers at the end of it. A write of ONE half is made
+    // in that same clock, from the merge above. A write of BOTH - a 64-bit
+    // store covering the register at +0 and the one at +4 - needs the write
+    // port twice, so the second half waits one clock more; it is the +4 half
+    // that goes second, which is also the one that wins when both halves
+    // address the same register. THAT IS NOT A CORNER CASE: cfgdma's stride is
+    // 0x200 and cfgpio's 0x100, so a doubleword there covers one register
+    // twice, and the flip-flop version's `for` loop left the +4 half's value
+    // behind for exactly the same reason.
+    //
+    // ST_CLR is the reset sweep, 256 clocks of zeros through the write port,
+    // in place of the `for` loops this replaces. A stored access that arrives
+    // while it runs is remembered in `pend` and served when it is over; the
+    // blocks outside the store are answered throughout, as they are in every
+    // other state.
+    typedef enum logic [1:0] { ST_IDLE, ST_ACC, ST_WR1, ST_CLR } st_t;
+    st_t         ststate;
+    logic  [7:0] clr_idx, idx1_r;
+    logic [31:0] wv1_r;
+    logic        pend;
+
+    always_comb begin
+        st_we = 1'b0;
+        st_wa = 8'h00;
+        st_wd = 32'h0;
+        if (ststate == ST_CLR) begin
+            st_we = 1'b1;
+            st_wa = clr_idx;
+        end
+        else if (ststate == ST_ACC) begin
+            if (acc_wr0) begin
+                st_we = 1'b1; st_wa = st_idx(1'b0); st_wd = st_wv[0];
+            end
+            else if (acc_wr1) begin
+                st_we = 1'b1; st_wa = st_idx(1'b1); st_wd = st_wv[1];
+            end
+        end
+        else if (ststate == ST_WR1) begin
+            st_we = 1'b1; st_wa = idx1_r; st_wd = wv1_r;
+        end
+    end
+
     always_ff @(posedge clk) begin
-        ack   <= 1'b0;
-        rdata <= 64'h0;
+        ack <= 1'b0;
 
         if (reset) begin
-            for (i = 0; i < 32;  i = i + 1) dma_desc[i] <= 32'h0;
-            for (i = 0; i < 128; i = i + 1) dma_ctrl[i] <= 32'h0;
-            for (i = 0; i < 8;   i = i + 1) gen[i]      <= 32'h0;
-            for (i = 0; i < 8;   i = i + 1) cfgdma[i]   <= 32'h0;
-            for (i = 0; i < 16;  i = i + 1) cfgpio[i]   <= 32'h0;
+            ststate <= ST_CLR;
+            clr_idx <= 8'h00;
+            pend    <= 1'b0;
+            rdata   <= 64'h0;
         end else begin
-            for (int w = 0; w < 2; w++) begin
-                if (wr_en[w]) begin
-                    case (blk)
-                        // SCSI channel 0's registers live in the engine, so
-                        // the arrays must not shadow them.
-                        BLK_DESC:   if (!scsi0_blk) dma_desc[{sub, w[0]}]           <= wval[w];
-                        BLK_CTRL:   if (!scsi0_blk) dma_ctrl[{sub, ctrl_reg(w[0])}] <= wval[w];
-                        BLK_GEN:    gen[{addr[4:3], w[0]}]           <= wval[w];
-                        BLK_CFGDMA: cfgdma[addr[11:9]]               <= wval[w];
-                        BLK_CFGPIO: cfgpio[addr[11:8]]               <= wval[w];
-                        // HAL2 has its own register file above and takes its
-                        // write from `hal2_we`. The three write-only PBUS
-                        // registers still accept and discard: nothing reads
-                        // them back.
-                        default:    ;
-                    endcase
-                end
-            end
-
-            if (sel && claimed) begin
+            // The blocks that are not in the store answer in the clock after
+            // `sel`, whatever the store is doing - including during the reset
+            // sweep. HAL2 takes its write from `hal2_we` and the three
+            // write-only PBUS registers accept and discard; nothing reads
+            // them back.
+            if (sel && claimed && !stored) begin
                 rdata <= {hpc3_rd(1'b0), hpc3_rd(1'b1)};
                 ack   <= 1'b1;
             end
+            if (sel && stored && (ststate != ST_IDLE)) pend <= 1'b1;
+
+            case (ststate)
+                ST_CLR: begin
+                    clr_idx <= clr_idx + 8'd1;
+                    if (&clr_idx) ststate <= ST_IDLE;
+                end
+
+                ST_IDLE:
+                    if (pend || (sel && stored)) begin
+                        ststate <= ST_ACC;
+                        pend    <= 1'b0;
+                    end
+
+                ST_ACC: begin
+                    // Both halves are out of the memories now, and the write
+                    // above is taking the first of them.
+                    rdata  <= {st_rdv[0], st_rdv[1]};
+                    idx1_r <= st_idx(1'b1);
+                    wv1_r  <= st_wv[1];
+                    if (acc_wr0 && acc_wr1) ststate <= ST_WR1;
+                    else begin
+                        ack     <= 1'b1;
+                        ststate <= ST_IDLE;
+                    end
+                end
+
+                ST_WR1: begin
+                    ack     <= 1'b1;
+                    ststate <= ST_IDLE;
+                end
+            endcase
         end
     end
 
