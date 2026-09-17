@@ -239,7 +239,7 @@ module sgi_indy #(
     output logic        dbg_retire,
     // The CPU performance counters (docs/50), nine beacon words. See the
     // block that builds them for the layout.
-    output logic [63:0] dbg_perf_bcn [10],
+    output logic [63:0] dbg_perf_bcn [11],
     // The instruction cache's access stream (simulator --itrace; the board
     // leaves it unconnected). See cpu.vhd's dbg_ifetch.
     output logic [32:0] dbg_ifetch,
@@ -322,6 +322,9 @@ module sgi_indy #(
     logic [63:0] fill_data;
     logic  [9:0] cpu_perf;      // the CPU's fill/bus events, for the counters
 
+    // Register 31 at retirement, for the profiler's caller view (w10 below).
+    logic [31:0] dbg_ra;
+
     r4300_wrap u_cpu (
         .clk              (clk),
         .ce               (ce),
@@ -348,6 +351,7 @@ module sgi_indy #(
         .dbg_exc_bad      (dbg_exc_bad),
         .dbg_rpc          (dbg_rpc),
         .dbg_retire       (dbg_retire),
+        .dbg_ra           (dbg_ra),
         .dbg_perf         (cpu_perf),
         .dbg_ifetch       (dbg_ifetch),
         .dbg_dfetch       (dbg_dfetch),
@@ -1012,6 +1016,10 @@ module sgi_indy #(
     assign dbg_perf_bcn[7] = { pc_memreq,          pc_bus[37:6] };
     assign dbg_perf_bcn[8] = { pc_irefills,        pc_icached };
     assign dbg_perf_bcn[9] = { pc_arb_wait[37:6],  pc_dma_n };
+    // w10 {register 31 at retirement, the PC last retired}: sampled beside
+    // word 10's PC, the caller of a leaf routine (prof.py, profan.py). Not a
+    // counter; beacon ver 13.
+    assign dbg_perf_bcn[10] = { dbg_ra, dbg_rpc };
 
     // VDMA beacon words (docs/33): the MC engine, the descriptor, and the
     // Newport's view of what arrived - enough to say from the board which

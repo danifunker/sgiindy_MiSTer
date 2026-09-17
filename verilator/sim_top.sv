@@ -116,7 +116,7 @@ module sim_top
     output wire [39:0] int2_state
 );
 
-    wire [63:0] perf_bcn [10];
+    wire [63:0] perf_bcn [11];
     assign perf0 = perf_bcn[0]; assign perf1 = perf_bcn[1];
     assign perf2 = perf_bcn[2]; assign perf3 = perf_bcn[3];
     assign perf4 = perf_bcn[4]; assign perf5 = perf_bcn[5];

@@ -158,6 +158,10 @@ entity cpu is
       -- The RETIRING instruction's PC and a one-clock strobe. See dbg_pc2.
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
       dbg_retire            : out std_logic := '0';
+      -- SGI: register 31 as the retiring instructions have left it - after a
+      -- JAL, the return address. A profiler sample inside a leaf routine
+      -- (us_delay, bcopy) then names its caller (docs/53).
+      dbg_ra                : out std_logic_vector(31 downto 0) := (others => '0');
       -- SGI: what the memory side of the pipeline is doing, for the
       -- performance counters in sgi_indy.sv (docs/50). Bit 0 an instruction
       -- cache fill requested, 1 a data cache fill requested, 2 a data cache
@@ -1073,6 +1077,7 @@ architecture arch of cpu is
    signal dbg_pc3                      : unsigned(63 downto 0) := (others => '0');
    signal dbg_pc4                      : unsigned(63 downto 0) := (others => '0');
    signal dbg_retire_i                 : std_logic := '0';
+   signal dbg_ra_i                     : unsigned(31 downto 0) := (others => '0');   -- SGI
    signal dbg_exc_code_u               : unsigned(4 downto 0);    -- SGI
    signal dbg_exc_epc_u                : unsigned(31 downto 0);   -- SGI
    signal dbg_exc_bad_u                : unsigned(31 downto 0);   -- SGI
@@ -4935,6 +4940,9 @@ begin
 -- synthesis translate_on
                dbg_pc4              <= dbg_pc3;   -- SGI
                dbg_retire_i         <= '1';       -- SGI: exactly one per instruction
+               if (writebackWriteEnable = '1' and writebackTarget = 31) then   -- SGI
+                  dbg_ra_i          <= writebackData(31 downto 0);
+               end if;
                
                -- export
                if (writebackWriteEnable = '1') then 
@@ -5206,6 +5214,7 @@ begin
    COP0_usable  <= '1' when (privilegeMode = "00" or COP0_enable = '1') else '0';   -- SGI
    dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
    dbg_retire   <= dbg_retire_i;
+   dbg_ra       <= std_logic_vector(dbg_ra_i);   -- SGI
    dbg_perf(0)  <= instrcache_request;
    dbg_perf(1)  <= datacache_request;
    dbg_perf(2)  <= datacache_wb_ena;

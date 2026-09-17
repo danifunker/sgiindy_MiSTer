@@ -79,6 +79,8 @@ entity r4300_wrap is
       dbg_exc_bad       : out std_logic_vector(31 downto 0);
       dbg_rpc           : out std_logic_vector(31 downto 0);
       dbg_retire        : out std_logic;
+      -- Register 31 at retirement; see cpu.vhd's port of the same name.
+      dbg_ra            : out std_logic_vector(31 downto 0);
       -- Fill/writeback/bus-transaction events for the performance counters;
       -- see cpu.vhd's port of the same name.
       dbg_perf          : out std_logic_vector(9 downto 0);
@@ -300,6 +302,7 @@ begin
       dbg_exc_bad           => dbg_exc_bad,
       dbg_rpc               => dbg_rpc,
       dbg_retire            => dbg_retire,
+      dbg_ra                => dbg_ra,
       dbg_perf              => dbg_perf,
       dbg_ifetch            => dbg_ifetch,
       dbg_dfetch            => dbg_dfetch,

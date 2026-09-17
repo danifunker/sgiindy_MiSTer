@@ -13,11 +13,14 @@ user text segment) and the stall bits say HOW (advancing, or held on a fetch
 or on a data access). No fit is needed; the beacon refreshes every 1344
 clocks (~37 kHz), far above any rate this can sample at.
 
-Each record is <d Q Q Q Q>: seconds since the start, then beacon words 0
-(heartbeat), 10 (PC/cop0), 13 (REX3 VDMA beat counters) and 15 (display line
-cache counters). A full snapshot of every beacon word is written at the start and at
-the end, so the disk-time counters (words 16-20) and the performance
-counters (21-34 from ver 10, 35 from ver 11) bracket the window too.
+Each record is <d Q Q Q Q Q>: seconds since the start, then beacon words 0
+(heartbeat), 10 (PC/cop0), 13 (REX3 VDMA beat counters), 15 (display line
+cache counters) and 40 (from ver 13: register 31 at retirement and the PC
+last retired - a sample inside a leaf routine names its caller). A full
+snapshot of every beacon word is written at the start and at the end, so the
+disk-time counters (words 16-20) and the performance counters (21-34 from ver
+10, 35 from ver 11) bracket the window too. SGIPROF3 is this record; SGIPROF2
+captures (no word 40) still read.
 tools/misterdeploy/profan.py reads the file on the host.
 
     prof.py --out /tmp/p.bin --secs 60                # one minute at ~1 kHz
@@ -38,9 +41,9 @@ import struct
 import time
 
 BASE = 0x35800000
-NWORDS = 40          # the beacon since ver 12 (build 37); older fits leave the rest stale
+NWORDS = 41          # the beacon since ver 13 (build 39); older fits leave the rest stale
 IDLE_DEFAULT = "0x88012adc-0x88012b64,0x8802befc-0x8802bfa0"
-HDR = b"SGIPROF2"    # followed by <I nwords>, then the snapshot
+HDR = b"SGIPROF3"    # followed by <I nwords>, then the snapshot
 
 
 def parse_ranges(s):
@@ -74,7 +77,7 @@ def main():
     def snap():
         return struct.unpack_from("<%dQ" % NWORDS, m, 0)
 
-    rec = struct.Struct("<dQQQQ")
+    rec = struct.Struct("<dQQQQQ")
     period = 1.0 / a.hz
     trail = collections.deque()
     trail_idle = 0
@@ -95,7 +98,8 @@ def main():
             w10 = struct.unpack_from("<Q", m, 80)[0]
             w13 = struct.unpack_from("<Q", m, 104)[0]
             w15 = struct.unpack_from("<Q", m, 120)[0]
-            f.write(rec.pack(t, w0, w10, w13, w15))
+            w40 = struct.unpack_from("<Q", m, 320)[0]
+            f.write(rec.pack(t, w0, w10, w13, w15, w40))
             pc = w10 >> 32
             is_idle = 0
             for lo, hi in idle:

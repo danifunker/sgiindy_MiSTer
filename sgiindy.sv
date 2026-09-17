@@ -481,7 +481,7 @@ wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
-wire [63:0] perf_bcn [10];  // CPU performance counters (docs/50; w9 build 37)
+wire [63:0] perf_bcn [11];  // CPU performance counters (docs/50; w9 build 37; w10 ver 13)
 
 sgi_indy u_core
 (
@@ -847,7 +847,10 @@ ddr3_mux u_mem
 // word, words owed ahead at take, gaps inside a burst, and the bridge alone on
 // reads taken with nothing owed), and the clocks a CPU access waited behind a
 // DMA transaction with the DMA transaction count (sgi_indy w9).
-localparam int BCN_WORDS = 40;
+// ver=13 (build 39) adds word 40: {the CPU's register 31 at retirement, the
+// PC last retired} (sgi_indy perf w10). prof.py samples it beside word 10, and
+// a sample in a leaf routine - us_delay, bcopy - names its caller (docs/53).
+localparam int BCN_WORDS = 41;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
@@ -907,7 +910,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h0C, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0D, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -947,6 +950,7 @@ assign bcn_src[36] = mx_rdlat[0];
 assign bcn_src[37] = mx_rdlat[1];
 assign bcn_src[38] = mx_rdlat[2];
 assign bcn_src[39] = perf_bcn[9];
+assign bcn_src[40] = perf_bcn[10];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
