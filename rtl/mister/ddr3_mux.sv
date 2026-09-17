@@ -305,8 +305,23 @@ module ddr3_mux #(
     logic         [NM-1:0] cand;
     logic                  cmd_v;
     logic [$clog2(NM)-1:0] cmd_m;
+    // A MAIN-MEMORY REQUEST GOES IN FRONT OF THE BRIDGE IN THE CLOCK IT ARRIVES
+    // (build 38), not a clock later out of the latch. `ram_arrive` is exactly
+    // the condition under which the latch loop below would take it; when main
+    // memory is then the pick - it always is, it goes first - the command is
+    // loaded from the port itself (`ram_now`) and the latch's `pend` is
+    // cleared on the same edge that would have set it. The CPU and the DMA
+    // engines each wait for their acknowledgement, so nearly every request
+    // arrives to an idle main-memory slot: a clock off every transaction.
+    wire ram_arrive = rq[M_RAM] && !pend[M_RAM] && !busy_m[M_RAM]
+                      && !(rq_seen[M_RAM] && ack_q[M_RAM]
+                           && rq_we[M_RAM] == p_we[M_RAM]
+                           && rq_addr[M_RAM] == p_addr[M_RAM]);
+    wire [2:0] rq_rburst = (ram_we || ram_burst == 3'd0) ? 3'd1 : ram_burst;
+
     always_comb begin
         cand = pend & ~busy_m;
+        cand[M_RAM] = (pend[M_RAM] | ram_arrive) & ~busy_m[M_RAM];
         cand[M_FBR] = fbr_act && (fbr_isl != 8'd0)
                    && (fbr_out < 3'(FBR_AHEAD))
                    && !(cmd_v && cmd_m == $clog2(NM)'(M_FBR));
@@ -342,7 +357,9 @@ module ddr3_mux #(
     end
     wire [1:0] pick_slot = (pick == $clog2(NM)'(M_DL))   ? 2'd0
                          : (pick == $clog2(NM)'(M_PROM)) ? 2'd1 : 2'd2;
-    wire       pick_we   = (pick == $clog2(NM)'(M_FBR)) ? 1'b0 : p_we[pick];
+    wire       ram_now   = (pick == $clog2(NM)'(M_RAM)) && !pend[M_RAM];
+    wire       pick_we   = (pick == $clog2(NM)'(M_FBR)) ? 1'b0
+                         : ram_now ? ram_we : p_we[pick];
 
     logic [63:0] rdata_q;
     logic  [NM-1:0] ack_q;
@@ -652,17 +669,20 @@ module ddr3_mux #(
                     fbr_nxt        <= fbr_nxt + 25'(fbr_n);
                     fbr_isl        <= fbr_isl - fbr_n;
                 end else begin
-                    cmd_n          <= (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst} : 8'd1;
-                    DDRAM_ADDR     <= {REGION, p_addr[pick]};
-                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_RAM)) ? {5'b0, p_rburst} : 8'd1;
-                    DDRAM_DIN      <= p_wdata[pick];
-                    DDRAM_BE       <= p_we[pick] ? p_be[pick] : 8'hFF;
+                    cmd_n          <= (pick == $clog2(NM)'(M_RAM))
+                                      ? {5'b0, ram_now ? rq_rburst : p_rburst} : 8'd1;
+                    DDRAM_ADDR     <= {REGION, ram_now ? rq_addr[M_RAM] : p_addr[pick]};
+                    DDRAM_BURSTCNT <= (pick == $clog2(NM)'(M_RAM))
+                                      ? {5'b0, ram_now ? rq_rburst : p_rburst} : 8'd1;
+                    DDRAM_DIN      <= ram_now ? ram_wdata : p_wdata[pick];
+                    DDRAM_BE       <= pick_we ? (ram_now ? ram_be : p_be[pick]) : 8'hFF;
                     pend[pick]     <= 1'b0;
                     busy_m[pick]   <= 1'b1;
-                    wl_left        <= (pick == $clog2(NM)'(M_RAM) && p_we[M_RAM] && p_wline)
+                    wl_left        <= (pick == $clog2(NM)'(M_RAM) && pick_we
+                                       && (ram_now ? (ram_burst == 3'd4) : p_wline))
                                       ? 2'd3 : 2'd0;
-                    wl_data        <= p_wdata3;
-                    wl_addr        <= p_addr[M_RAM] + 25'd1;
+                    wl_data        <= ram_now ? ram_wdata3 : p_wdata3;
+                    wl_addr        <= (ram_now ? rq_addr[M_RAM] : p_addr[M_RAM]) + 25'd1;
                     if (pick != $clog2(NM)'(M_RAM) && pick != $clog2(NM)'(M_BCN))
                         rr <= pick_slot;
                 end
