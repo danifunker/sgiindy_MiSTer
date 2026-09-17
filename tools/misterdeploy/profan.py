@@ -207,7 +207,9 @@ def main():
     if (end and start and len(start) >= 36 and ((start[1] >> 48) & 0xFFFF) == 0xBEC0
             and ((start[1] >> 40) & 0xFF) >= 10):
         import perfdiff
-        last = 37 if (len(start) >= 37 and ((start[1] >> 40) & 0xFF) >= 11) else 36
+        ver = (start[1] >> 40) & 0xFF
+        last = (41 if (len(start) >= 41 and ver >= 12)
+                else 37 if (len(start) >= 37 and ver >= 11) else 36)
         words = lambda snap: " ".join("%d %d" % (w >> 32, w & 0xFFFFFFFF) for w in snap[22:last])
         ra = perfdiff.parse_line("perf %.3f beat=%d %s" % (start[0], start[1] & 0xFFFFFFFF, words(start)))
         rb = perfdiff.parse_line("perf %.3f beat=%d %s" % (end[0], end[1] & 0xFFFFFFFF, words(end)))

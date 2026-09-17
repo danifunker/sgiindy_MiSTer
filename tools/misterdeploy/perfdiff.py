@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Two performance-counter readings -> what the machine did between them.
 
-The counters are beacon words 21-34 (ver 10, docs/50) and 35 (ver 11):
-sgi_indy.sv counts the CPU's clocks and events, sgiindy.sv the DDR3 port's.
-`bcnread.py --perf` on the board prints one reading as a line of 28 integers
-(30 from ver 11); give this two of them
+The counters are beacon words 21-34 (ver 10, docs/50), 35 (ver 11) and 36-39
+(ver 12, build 37): sgi_indy.sv counts the CPU's clocks and events, sgiindy.sv
+and ddr3_mux.sv the DDR3 port's. `bcnread.py --perf` on the board prints one
+reading as a line of 28 integers (30 from ver 11, 38 from ver 12); give this
+two of them
 (or two files holding one each, or a file holding many - the first and last
 are used).
 
@@ -45,16 +46,21 @@ NAMES = [
     "lat_x64", "n_rd",
     "bsy_x64", "n_fbr",
     "irefills", "icached",   # ver 11
+    "latram_x64", "n_ramrd",       # ver 12: w36 ddr3_mux dbg_rdlat[0]
+    "ahead_x64", "gapram_x64",     #         w37 dbg_rdlat[1]
+    "latclean_x64", "n_clean",     #         w38 dbg_rdlat[2]
+    "arbwait_x64", "n_dma",        #         w39 sgi_indy dbg_perf_bcn[9]
 ]
 
 
 def parse_line(line):
-    m = re.search(r"perf\s+([\d.]+)\s+beat=(\d+)\s+((?:\d+\s*){28,30})", line)
+    m = re.search(r"perf\s+([\d.]+)\s+beat=(\d+)\s+((?:\d+\s*){28,38})", line)
     if not m:
         return None
     vals = [int(x) for x in m.group(3).split()]
     d = dict(zip(NAMES, vals))
     d["has_w35"] = len(vals) >= 30
+    d["has_w36"] = len(vals) >= 38
     for k in NAMES[len(vals):]:
         d[k] = 0
     d["t"] = float(m.group(1))
@@ -117,6 +123,15 @@ def report(a, b):
                % (d["n_ram"], per(x("own_ram_x64"), d["n_ram"]), per(x("q_ram_x64"), d["n_ram"])))
     out.append("  rasteriser: %d transactions, %.1f clocks held and %.1f clocks queued each"
                % (d["n_fbw"], per(x("own_fbw_x64"), d["n_fbw"]), per(x("q_fbw_x64"), d["n_fbw"])))
+    if a.get("has_w36") and b.get("has_w36"):
+        out.append("  RAM reads: %d, %.1f clocks from the bridge taking one to its first word, "
+                   "behind %.1f words owed to earlier reads; %.2f clocks of gaps inside a burst"
+                   % (d["n_ramrd"], per(x("latram_x64"), d["n_ramrd"]),
+                      per(x("ahead_x64"), d["n_ramrd"]), per(x("gapram_x64"), d["n_ramrd"])))
+        out.append("  the bridge alone (reads taken with nothing owed): %d reads, %.1f clocks to the first word"
+                   % (d["n_clean"], per(x("latclean_x64"), d["n_clean"])))
+        out.append("  CPU accesses held behind a DMA transaction: %.2f s in all; DMA transactions %d"
+                   % (x("arbwait_x64") / CLK_HZ, d["n_dma"]))
     out.append("  reads: %d, %.1f clocks from issue to the first word; display bursts %d; "
                "%.1f clocks waiting on DDRAM_BUSY per transaction"
                % (d["n_rd"], per(x("lat_x64"), d["n_rd"]), d["n_fbr"],

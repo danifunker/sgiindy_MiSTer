@@ -38,7 +38,7 @@ import struct
 import time
 
 BASE = 0x35800000
-NWORDS = 36          # the beacon since ver 11 (docs/50); older fits leave the rest stale
+NWORDS = 40          # the beacon since ver 12 (build 37); older fits leave the rest stale
 IDLE_DEFAULT = "0x88012adc-0x88012b64,0x8802befc-0x8802bfa0"
 HDR = b"SGIPROF2"    # followed by <I nwords>, then the snapshot
 
