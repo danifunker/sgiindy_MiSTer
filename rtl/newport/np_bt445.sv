@@ -95,11 +95,18 @@ module np_bt445 #(
         endcase
     end
 
-    // Nine fixed indices, which synthesises as nine registers rather than as a
-    // memory read - that is correct and does not stop the array inferring.
-    assign curs_color1 = {ctrl[8'h13], ctrl[8'h12], ctrl[8'h11]};
-    assign curs_color2 = {ctrl[8'h16], ctrl[8'h15], ctrl[8'h14]};
-    assign curs_color3 = {ctrl[8'h19], ctrl[8'h18], ctrl[8'h17]};
+    // THE CURSOR COLOURS ARE THEIR OWN REGISTERS, written alongside `ctrl`.
+    // They used to be nine fixed-index reads of the array - `{ctrl[8'h13],
+    // ctrl[8'h12], ctrl[8'h11]}` and so on - and an array with nine reads and
+    // a write is not a memory block: build 36's fit had this module at 1,056
+    // ALMs and 2,103 registers, `ctrl`'s 2,048 bits as flip-flops, while
+    // `gamma` beside it (one read, one write) was an M10K all along. Nothing
+    // connects these outputs yet (newport.sv), so Quartus drops the shadows;
+    // what matters is that the array keeps one read.
+    logic [23:0] curs1, curs2, curs3;
+    assign curs_color1 = curs1;
+    assign curs_color2 = curs2;
+    assign curs_color3 = curs3;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -117,6 +124,18 @@ module np_bt445 #(
                     3'd2: begin
                         if (set_is_ctrl) begin
                             ctrl[addr] <= wdata;
+                            case (addr)
+                                8'h11: curs1[7:0]   <= wdata;
+                                8'h12: curs1[15:8]  <= wdata;
+                                8'h13: curs1[23:16] <= wdata;
+                                8'h14: curs2[7:0]   <= wdata;
+                                8'h15: curs2[15:8]  <= wdata;
+                                8'h16: curs2[23:16] <= wdata;
+                                8'h17: curs3[7:0]   <= wdata;
+                                8'h18: curs3[15:8]  <= wdata;
+                                8'h19: curs3[23:16] <= wdata;
+                                default: ;
+                            endcase
                             addr <= addr + 8'd1;
                         end else begin
                             case (rgb_ctr)
