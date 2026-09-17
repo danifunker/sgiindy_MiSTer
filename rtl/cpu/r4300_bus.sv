@@ -155,15 +155,23 @@ module r4300_bus
     logic [2:0] aoff;     // byte offset of the request within its doubleword
     assign bus_aoff = aoff;
 
-    // The two mem_size values that mean "line fill"; anything else is "001".
+    // The mem_size values that mean "line fill"; anything else is "001".
     localparam logic [2:0] SZ_DLINE = 3'b010;   // 16 bytes, two beats
     localparam logic [2:0] SZ_ILINE = 3'b100;   // 32 bytes, four beats
+    // 32 bytes, four beats, for the INSTRUCTION cache (build 38): done in the
+    // clock of its last beat, without S_FILLEND. That clock exists for the data
+    // cache, which answers out of the line in the very clock it sees ram_done;
+    // the instruction cache reads the line a clock later (its fill_done is
+    // registered), after port A's last write - see S_FILLEND below.
+    localparam logic [2:0] SZ_ILINE_X = 3'b101;
+    logic       fill_noend;  // this fill is an instruction line
 
     logic       is_fill;
     logic [1:0] fill_beat;   // beat in flight
     logic [1:0] fill_last;   // index of the last beat of this line
 
-    assign is_fill = mem_rnw && (mem_size == SZ_DLINE || mem_size == SZ_ILINE);
+    assign is_fill = mem_rnw && (mem_size == SZ_DLINE || mem_size == SZ_ILINE
+                                 || mem_size == SZ_ILINE_X);
 
     // A data cache line written back as one transaction: cpu.vhd tags it with
     // the line size on a write. Its words carry the cache's half swap like
@@ -207,12 +215,13 @@ module r4300_bus
                             // within one is zero for all of them.
                             aoff       <= 3'b000;
                             bus_be     <= 8'hFF;
-                            bus_addr   <= (mem_size == SZ_ILINE)
+                            bus_addr   <= (mem_size != SZ_DLINE)
                                             ? {mem_address[31:5], 5'b00000}
                                             : {mem_address[31:4], 4'b0000};
                             fill_beat  <= 2'd0;
-                            fill_last  <= (mem_size == SZ_ILINE) ? 2'd3 : 2'd1;
-                            bus_burst  <= (mem_size == SZ_ILINE) ? 3'd4 : 3'd2;
+                            fill_last  <= (mem_size != SZ_DLINE) ? 2'd3 : 2'd1;
+                            bus_burst  <= (mem_size != SZ_DLINE) ? 3'd4 : 3'd2;
+                            fill_noend <= (mem_size == SZ_ILINE_X);
                             // Safe to raise here: no device answers in the
                             // cycle it is asked, so the first beat cannot
                             // arrive before this has been taken and dropped.
@@ -258,7 +267,14 @@ module r4300_bus
                         // reads mem_dataRead for a fill. Driven anyway so a
                         // trace of the last beat is not stale data.
                         mem_dataRead    <= bswap64(bus_rdata);
-                        if (fill_beat == fill_last) begin
+                        if (fill_beat == fill_last && fill_noend) begin
+                            // An instruction line: mem_done with the last
+                            // beat's fill_data_ready. The cache writes the
+                            // beat on the next edge and reads the line on the
+                            // clock after it (see SZ_ILINE_X).
+                            mem_done  <= 1'b1;
+                            state     <= S_IDLE;
+                        end else if (fill_beat == fill_last) begin
                             // One clock of daylight before mem_done; see the
                             // ordering note at the top of this file.
                             state     <= S_FILLEND;

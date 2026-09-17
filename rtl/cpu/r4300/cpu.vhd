@@ -2012,7 +2012,10 @@ begin
                         end if;
 
                         if (writefifo_Dout(104) = '0' and writefifo_Dout(107) = '1') then
-                           mem_size          <= "100";
+                           -- SGI: "101", an INSTRUCTION line: r4300_bus finishes
+                           -- it without the clock of daylight a data line needs
+                           -- (see S_FILLEND there).
+                           mem_size          <= "101";
                            instrcache_active  <= '1';
                         end if;
 
