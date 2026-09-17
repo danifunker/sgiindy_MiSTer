@@ -251,6 +251,11 @@ def main():
               "DATA %.2f s for %.2f MB, cache hits %d misses %d"
               % (d(16, 63, 32), d(16, 31, 0), sec(d(17, 31, 0)), sec(d(20, 63, 32)),
                  d(19, 63, 32) / 1e6, d(18, 63, 32), d(18, 31, 0)))
+        if ((start[1] >> 40) & 0xFF) >= 14 and len(s) >= 43:
+            # ver 14: DATA-phase clocks by whose turn it was (sgi_scsi dbg_stat 5-6)
+            print("  DATA IN waiting on the initiator %.2f s, on the target %.2f s; "
+                  "DATA OUT on the initiator %.2f s, on the target %.2f s"
+                  % (sec(d(41, 63, 32)), sec(d(41, 31, 0)), sec(d(42, 63, 32)), sec(d(42, 31, 0))))
 
     if a.series > 0:
         print("\n  time series (%.0f s buckets): idle / kernel / user %%, and of busy: run / fetch / exec %%" % a.series)

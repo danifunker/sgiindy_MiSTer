@@ -250,7 +250,7 @@ module sgi_indy #(
     // the top's beacon writer. Pure observation.
     output logic [63:0] dbg_scsi_bcn [7],
     // SGI: the disk-time counters (docs/49), five words from sgi_scsi.
-    output logic [63:0] dbg_scsi_stat [5],
+    output logic [63:0] dbg_scsi_stat [7],
     // The HPC3 SCSI0 DMA channel's live state (docs/29), a separate beacon
     // word - the engine lives in sgi_hpc3, not sgi_scsi.
     output logic [63:0] dbg_hpc3_dma,

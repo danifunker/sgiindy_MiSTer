@@ -50,7 +50,7 @@ _m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_m)
 
 BASE = 0x35800000
-NWORDS = 40
+NWORDS = 43
 CLK_HZ = 50_000_000          # clk_sys; the x64 counters are in units of 64 cycles
 PHASES = ["IDLE", "CMD_IN", "DATA_OUT", "DATA_IN", "STATUS", "MSG_IN", "TB", "MSG_OUT"]
 DSTATES = ["IDLE", "FETCH_LO", "FETCH_LO_W", "FETCH_HI", "FETCH_HI_W", "EVAL",

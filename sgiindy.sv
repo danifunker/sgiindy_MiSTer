@@ -477,7 +477,7 @@ wire        txda, txdb;
 
 // SCSI debug beacon words out of the core (docs/28), to the writer below.
 wire [63:0] scsi_bcn [7];
-wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
+wire [63:0] scsi_stat [7];  // the disk-time counters (docs/49; 5-6 ver 14, docs/53)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
@@ -850,7 +850,10 @@ ddr3_mux u_mem
 // ver=13 (build 39) adds word 40: {the CPU's register 31 at retirement, the
 // PC last retired} (sgi_indy perf w10). prof.py samples it beside word 10, and
 // a sample in a leaf routine - us_delay, bcopy - names its caller (docs/53).
-localparam int BCN_WORDS = 41;
+// ver=14 (build 40) adds words 41-42: DATA-phase clocks split by whose turn it
+// is - {DATA IN waiting on the initiator /64, DATA IN waiting on the target /64}
+// and the same for DATA OUT (sgi_scsi dbg_stat 5-6, docs/53).
+localparam int BCN_WORDS = 43;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
@@ -910,7 +913,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h0D, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0E, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -951,6 +954,8 @@ assign bcn_src[37] = mx_rdlat[1];
 assign bcn_src[38] = mx_rdlat[2];
 assign bcn_src[39] = perf_bcn[9];
 assign bcn_src[40] = perf_bcn[10];
+assign bcn_src[41] = scsi_stat[5];
+assign bcn_src[42] = scsi_stat[6];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin
