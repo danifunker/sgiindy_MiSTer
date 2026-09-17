@@ -271,6 +271,12 @@ about a third.
 | `cpu.vhd`, `r4300_wrap.vhd` | A dirty line's four staged beats are issued as ONE write FIFO entry (the FIFO is 300 bits: beats 1..3 in 299:108, `(107) = '1'` with `(105) = '0'` tags it) and presented as `mem_size "100"` on a write with words 1..3 on the new `mem_dataWrite3`; the staging queue pops all four at once; `datacache_active` follows `(105)` so a line write is not counted as a fill | Each beat was its own transaction through memstate, `r4300_bus.sv`, `ram_arb.sv` and `ddr3_mux.sv` - ~7 clocks a word on the board, 28 a line, with the evicting fill queued behind all four. `ddr3_mux.sv` writes the four words back to back and acknowledges once |
 | `cpu.vhd` | An instruction line fill is tagged `mem_size "101"` | `r4300_bus.sv` finishes it without S_FILLEND, which only the data cache needs (it answers out of the line in the clock it sees `ram_done`; the instruction cache's `fill_done` is registered) |
 
+### Who called it (docs/53)
+
+| File | Change | Why |
+|---|---|---|
+| `cpu.vhd`, `r4300_wrap.vhd` | `dbg_ra` port: register 31 as the retiring instructions leave it (written at retirement when the writeback target is 31) | The beacon profiler samples the PC; inside a leaf routine (`us_delay`, `bcopy`) r31 is the caller's return address, so `profan.py` can name who spent the time. A register and a wire; nothing reads it inside the CPU |
+
 ### The memory path — no clock-domain crossing
 
 KI runs `cpu.vhd`'s clk93 at 75 MHz against a 50 MHz clk1x bridge and moved
