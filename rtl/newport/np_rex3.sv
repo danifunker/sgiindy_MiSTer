@@ -535,11 +535,13 @@ module np_rex3 #(
         // The second write of an auxiliary pixel: its window-ID nibble into
         // the drawing slot's spare byte. Returns to `dr_after`.
         DR_CID,
-        // The fractional-endpoint correction of an F_LINE or an A_LINE. Its
-        // own state because it wants two multiplies and a conditional step,
-        // and putting that in DR_SETUP's cycle would price every flat block
-        // at the cost of a line nobody drew.
-        DR_FRACT
+        // The fractional-endpoint correction of an F_LINE or an A_LINE, in
+        // three clocks: the products, then the decision and the step, then
+        // the pixel count from where the step left the position. Its own
+        // states because putting any of it in DR_SETUP's cycle would price
+        // every flat block at the cost of a line nobody drew - and because
+        // all of it in ONE cycle was build 43's critical path.
+        DR_FRACT, DR_FRACT2, DR_FRACT3
     } dr_state_t;
 
     dr_state_t   dr, dr_after;
@@ -842,31 +844,43 @@ module np_rex3 #(
     wire signed [17:0] fr_dy  = fr_swap ? fr_dxa : fr_dya;
     wire signed [23:0] fr_tx  = ($signed({6'b0, fr_dx}) * $signed({18'b0, fr_yf})) >>> 4;
     wire signed [23:0] fr_ty  = ($signed({6'b0, fr_dy}) * $signed({18'b0, fr_xf})) >>> 4;
-    wire signed [31:0] fr_d   = bres_d + {{14{fr_dy[17]}}, fr_dy} - {{14{fr_dx[17]}}, fr_dx}
-                              + (({{8{fr_tx[23]}}, fr_tx} - {{8{fr_ty[23]}}, fr_ty}) <<< 1);
-    wire signed [31:0] fr_major = oct_ymajor ? {{14{fr_dy[17]}}, fr_dy}
-                                             : {{14{fr_dx[17]}}, fr_dx};
-    wire signed [31:0] fr_e   = fr_d - (fr_major <<< 1);
-    wire fr_takes_step = (fr_e > 32'sd0);
     wire signed [16:0] fr_x2 = cx + incrx2;
     wire signed [16:0] fr_y2 = cy - incry2;
 
-    // THE PIXEL COUNT IS TAKEN AFTER THE CORRECTION, NOT BEFORE IT. The
-    // correction can move the start a whole pixel along the major axis, and
-    // the walk then has one fewer to go: counting from the pre-correction
-    // position drew one pixel past the end of every line whose fractional
-    // endpoints happened to step.
-    wire signed [16:0] fr_cx = (fr_takes_step &&  oct_ymajor) ? fr_x2 : cx;
-    wire signed [16:0] fr_cy = (fr_takes_step && !oct_ymajor) ? fr_y2 : cy;
-    wire signed [16:0] fr_rdx = cx_end - fr_cx;
-    wire signed [16:0] fr_rdy = cy_end - fr_cy;
-    wire signed [16:0] fr_radx = fr_rdx[16] ? -fr_rdx : fr_rdx;
-    wire signed [16:0] fr_rady = fr_rdy[16] ? -fr_rdy : fr_rdy;
-    wire signed [16:0] fr_rmaj = (fr_radx > fr_rady) ? fr_radx : fr_rady;
-    wire [16:0] fr_full  = {1'b0, fr_rmaj[15:0]} + 17'd1;
-    wire [16:0] fr_count = line_step_one ? 17'd1
-                         : ((dm0_length32 && (fr_full > 17'd32)) ? 17'd32
-                                                                 : fr_full);
+    // THE CORRECTION TAKES THREE CLOCKS, AND THAT IS WHY. Written as one
+    // expression it is: two coordinate subtractions and their absolute
+    // values, a fold through the octant, two multiplies, four adds, a
+    // comparison, a conditional step, and then - because the step can move
+    // the start a whole pixel along the major axis - another subtraction,
+    // absolute value, maximum, increment and clamp to get the pixel count.
+    // Build 43's first fit put all of that between two flip-flops and missed
+    // the core clock by 5.48 ns on that path alone, with every one of the
+    // four hundred worst paths in the design ending at `line_left`.
+    //
+    // So: stage one folds the fractions and takes the two products, stage two
+    // makes the decision and moves the position, stage three counts the
+    // pixels from where the position ended up. Three clocks once per
+    // fractional line primitive is not a cost anything can measure.
+    logic signed [23:0] frq_tx, frq_ty;
+    logic signed [17:0] frq_dx, frq_dy, frq_maj;
+
+    wire signed [31:0] fr2_d = bres_d
+                             + {{14{frq_dy[17]}}, frq_dy} - {{14{frq_dx[17]}}, frq_dx}
+                             + (({{8{frq_tx[23]}}, frq_tx} - {{8{frq_ty[23]}}, frq_ty}) <<< 1);
+    wire signed [31:0] fr2_e = fr2_d - ({{14{frq_maj[17]}}, frq_maj} <<< 1);
+    wire fr_takes_step = (fr2_e > 32'sd0);
+
+    // Stage three: the pixel count, from the settled position. Every input
+    // here is a register, which is the whole point of the split.
+    wire signed [16:0] pc_dx  = cx_end - cx;
+    wire signed [16:0] pc_dy  = cy_end - cy;
+    wire signed [16:0] pc_adx = pc_dx[16] ? -pc_dx : pc_dx;
+    wire signed [16:0] pc_ady = pc_dy[16] ? -pc_dy : pc_dy;
+    wire signed [16:0] pc_maj = (pc_adx > pc_ady) ? pc_adx : pc_ady;
+    wire [16:0] pc_full  = {1'b0, pc_maj[15:0]} + 17'd1;
+    wire [16:0] pc_count = line_step_one ? 17'd1
+                         : ((dm0_length32 && (pc_full > 17'd32)) ? 17'd32
+                                                                 : pc_full);
 
     // A_LINE's endpoint filter: a sub-pixel endpoint whose AWEIGHT entry is
     // zero contributes nothing, so the line skips it. The weight tables are
@@ -1733,6 +1747,8 @@ module np_rex3 #(
             slopered <= 32'h0; slopealpha <= 32'h0; slopegrn <= 32'h0; slopeblue <= 32'h0;
             slopered1 <= 32'h0; wrmask <= 32'h0; colorx <= 32'h0;
             patbit <= 5'd31; line_left <= 17'd0;
+            frq_tx <= 24'd0; frq_ty <= 24'd0;
+            frq_dx <= 18'd0; frq_dy <= 18'd0; frq_maj <= 18'd0;
             skip_first_r <= 1'b0; skip_last_r <= 1'b0;
             xfrac <= 11'd0; yfrac <= 11'd0;
             xefrac <= 11'd0; yefrac <= 11'd0;
@@ -2120,8 +2136,16 @@ module np_rex3 #(
                 // fraction is gone, so a DOSETUP line never filters its first
                 // endpoint however the weights are set.
                 DR_FRACT: begin
-                    bresd <= fr_takes_step ? {5'b0, fr_e[26:0]} : {5'b0, fr_d[26:0]};
-                    line_left <= fr_count;
+                    frq_dx  <= fr_dx;
+                    frq_dy  <= fr_dy;
+                    frq_tx  <= fr_tx;
+                    frq_ty  <= fr_ty;
+                    frq_maj <= oct_ymajor ? fr_dy : fr_dx;
+                    dr      <= DR_FRACT2;
+                end
+
+                DR_FRACT2: begin
+                    bresd <= fr_takes_step ? {5'b0, fr2_e[26:0]} : {5'b0, fr2_d[26:0]};
                     if (fr_takes_step && oct_ymajor) begin
                         cx     <= fr_x2;
                         xstart <= {5'b0, fr_x2[15:0], 11'b0};
@@ -2134,7 +2158,12 @@ module np_rex3 #(
                     end else begin
                         ystart <= {5'b0, cy[15:0], 11'b0};
                     end
-                    dr <= first_pixel_state;
+                    dr <= DR_FRACT3;
+                end
+
+                DR_FRACT3: begin
+                    line_left <= pc_count;
+                    dr        <= first_pixel_state;
                 end
 
                 // One pixel per clock. The position advances every cycle
