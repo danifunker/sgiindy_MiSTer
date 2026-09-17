@@ -436,7 +436,21 @@ linecachetest:
 rex3test:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3 --top-module np_rex3 	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vnp_rex3 $(RTL)/newport/np_rex3.sv tb_rex3.cpp
 
-.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest rex3test all clean
+# --- the rasteriser against IRIS's rasteriser -------------------------------
+# tb_rex3.cpp asks whether the writes reach memory; this asks whether they are
+# the RIGHT writes, against a transcription of iris/src/rex3_generic.rs. It
+# runs every non-host draw shape in IRIS's own corpus of what a real IRIX
+# desktop asked REX3 for, then a field-level random walk over the modes.
+# Regenerate rex3_corpus.h from a newer IRIS with:
+#   python3 ../tools/rex3_corpus.py --iris ../../iris -o rex3_corpus.h
+#   make rex3draw
+#   REX3D_CASES=20000 ./obj_dir_rex3draw/Vnp_rex3draw
+#   REX3D_SEED=7 REX3D_VERBOSE=1 ./obj_dir_rex3draw/Vnp_rex3draw
+rex3draw:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3draw --top-module np_rex3 -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnp_rex3draw $(RTL)/newport/np_rex3.sv tb_rex3draw.cpp
+	./obj_dir_rex3draw/Vnp_rex3draw
+
+.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest rex3test rex3draw all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal
