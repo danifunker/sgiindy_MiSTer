@@ -123,6 +123,8 @@ module sgi_indy #(
     // and is then answered with one `ram_ack` per word, `ram_last` on the
     // final one. See rtl/cpu/r4300_bus.sv and rtl/mister/ddr3_mux.sv.
     output logic  [2:0] ram_burst,
+    // A line write's words 1..3 (build 38); see rtl/cpu/r4300_bus.sv.
+    output logic [191:0] ram_wdata3,
     input  logic [63:0] ram_rdata,
     input  logic        ram_ack,
     input  logic        ram_last,
@@ -314,6 +316,7 @@ module sgi_indy #(
     logic [31:0] mem_address;
     logic  [7:0] mem_writeMask;
     logic [63:0] mem_dataWrite, mem_dataRead;
+    logic [191:0] mem_dataWrite3;       // a line write's words 1..3 (build 38)
     logic  [2:0] mem_size;
     logic        fill_grant, fill_data_ready;
     logic [63:0] fill_data;
@@ -356,6 +359,7 @@ module sgi_indy #(
         .mem_size         (mem_size),
         .mem_writeMask    (mem_writeMask),
         .mem_dataWrite    (mem_dataWrite),
+        .mem_dataWrite3   (mem_dataWrite3),
         .mem_dataRead     (mem_dataRead),
         .mem_done         (mem_done),
 
@@ -367,6 +371,7 @@ module sgi_indy #(
     logic        bus_req, bus_we, bus_ack;
     logic [31:0] bus_addr;
     logic [63:0] bus_wdata, bus_rdata;
+    logic [191:0] bus_wdata3;
     logic  [7:0] bus_be;
     logic  [2:0] bus_aoff;
     logic  [2:0] bus_burst;
@@ -382,6 +387,7 @@ module sgi_indy #(
         .mem_size      (mem_size),
         .mem_writeMask (mem_writeMask),
         .mem_dataWrite (mem_dataWrite),
+        .mem_dataWrite3(mem_dataWrite3),
         .mem_dataRead  (mem_dataRead),
         .mem_done      (mem_done),
         .fill_grant      (fill_grant),
@@ -394,6 +400,7 @@ module sgi_indy #(
         .bus_be        (bus_be),
         .bus_aoff      (bus_aoff),
         .bus_burst     (bus_burst),
+        .bus_wdata3    (bus_wdata3),
         .bus_rdata     (bus_rdata),
         .bus_ack       (bus_ack),
         .bus_last      (bus_last)
@@ -531,6 +538,7 @@ module sgi_indy #(
         .cpu_wdata  (bus_wdata),
         .cpu_be     (bus_be),
         .cpu_burst  (bus_burst),
+        .cpu_wdata3 (bus_wdata3),
         .cpu_ack    (cpu_ram_ack),
         .cpu_last   (cpu_ram_last),
 
@@ -548,6 +556,7 @@ module sgi_indy #(
         .ram_wdata  (ram_wdata),
         .ram_be     (ram_be),
         .ram_burst  (ram_burst),
+        .ram_wdata3 (ram_wdata3),
         .ram_ack    (ram_ack),
         .ram_last   (ram_last),
 

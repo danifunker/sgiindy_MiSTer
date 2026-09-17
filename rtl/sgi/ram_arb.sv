@@ -88,6 +88,9 @@ module ram_arb (
     // like the address. The port answers one `cpu_ack` per word and marks
     // the final one with `cpu_last`; a write is one word, one ack.
     input  logic  [2:0] cpu_burst,
+    // A line write's words 1..3 (build 38): with cpu_we and cpu_burst = 4,
+    // part of the payload and held like the rest of it.
+    input  logic [191:0] cpu_wdata3,
     output logic        cpu_ack,
     output logic        cpu_last,
 
@@ -112,6 +115,7 @@ module ram_arb (
     output logic [63:0] ram_wdata,
     output logic  [7:0] ram_be,
     output logic  [2:0] ram_burst,
+    output logic [191:0] ram_wdata3,
     input  logic        ram_ack,
     input  logic        ram_last,
 
@@ -167,6 +171,7 @@ module ram_arb (
     assign ram_be    = dma_go ? dma_be    : cpu_be;
     // The DMA engines move one word per transaction and have no burst input.
     assign ram_burst = dma_go ? 3'd1      : cpu_burst;
+    assign ram_wdata3 = cpu_wdata3;          // read only with the CPU's burst
 
     assign cpu_ack     = ram_ack & ~owner_dma;
     assign cpu_last    = ram_last;

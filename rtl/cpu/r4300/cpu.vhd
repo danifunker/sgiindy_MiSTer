@@ -189,6 +189,10 @@ entity cpu is
       mem_size              : out unsigned(2 downto 0) := (others => '0');
       mem_writeMask         : out std_logic_vector(7 downto 0) := (others => '0'); 
       mem_dataWrite         : out std_logic_vector(63 downto 0) := (others => '0');
+      -- SGI: words 1..3 of a data cache line written back in one transaction
+      -- (mem_size "100" with mem_rnw '0'); word 0 is mem_dataWrite. See the
+      -- write FIFO scheduler's line write.
+      mem_dataWrite3        : out std_logic_vector(191 downto 0) := (others => '0');
       mem_dataRead          : in  std_logic_vector(63 downto 0); 
       mem_done              : in  std_logic;
       rdram_granted2x       : in  std_logic;
@@ -508,9 +512,9 @@ architecture arch of cpu is
    signal mem_finished_read            : std_logic := '0';
    signal mem_finished_dataRead        : std_logic_vector(63 downto 0);
           
-   signal writefifo_Din                : std_logic_vector(107 downto 0) := (others => '0');   -- SGI: 108 bits, no sequence tag (see below)
+   signal writefifo_Din                : std_logic_vector(299 downto 0) := (others => '0');   -- SGI: 108 bits + a line write's words 1..3, no sequence tag (see below)
    signal writefifo_wr                 : std_logic := '0';
-   signal writefifo_Dout               : std_logic_vector(107 downto 0);   -- SGI
+   signal writefifo_Dout               : std_logic_vector(299 downto 0);   -- SGI
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
    signal writefifo_Full               : std_logic;
@@ -1680,16 +1684,16 @@ begin
                datacache_wb_fifo_wrptr <= datacache_wb_fifo_wrptr + 1;
             end if;
 
-            if (datacache_wb_fifo_pop = '1') then
-               datacache_wb_fifo_rdptr <= datacache_wb_fifo_rdptr + 1;
-            end if;
+            -- SGI: a pop takes the whole line - all four beats go out as one
+            -- write FIFO entry - so the read pointer moves by four, which on a
+            -- two-bit pointer is where it already is.
 
             if (datacache_wb_ena = '1' and datacache_wb_fifo_pop = '0') then
                if (datacache_wb_fifo_count < 4) then
                   datacache_wb_fifo_count <= datacache_wb_fifo_count + 1;
                end if;
             elsif (datacache_wb_ena = '0' and datacache_wb_fifo_pop = '1') then
-               datacache_wb_fifo_count <= datacache_wb_fifo_count - 1;
+               datacache_wb_fifo_count <= 0;
             end if;
             
             -- Cache refill requests are one-cycle pulses. Preserve them when
@@ -1731,7 +1735,17 @@ begin
                   writefifo_issue_pending <= '0';
                   writefifo_issue_wb      <= '0';
                end if;
-            elsif (datacache_wb_fifo_count > 0) then
+            elsif (datacache_wb_fifo_count = 4) then
+               -- SGI: A DIRTY LINE GOES BACK AS ONE TRANSACTION (build 38).
+               -- Its four beats used to be four write FIFO entries, and each
+               -- paid the whole trip - FIFO, memstate, r4300_bus, ram_arb,
+               -- ddr3_mux's latch and command, the acknowledgement back - ~7
+               -- clocks a word, 28 a line, with the fill that caused it waiting
+               -- behind all four. Now the line is issued once it is staged:
+               -- beat 0 where a write always was, beats 1..3 in bits 299:108,
+               -- and (107) = '1' with (105) = '0' saying so. Four consecutive
+               -- beats of one line are consecutive words, so only beat 0's
+               -- address travels. ddr3_mux writes the four words back to back.
                if (writefifo_schedule_ready = '1') then
                   writefifo_issue_pending      <= '1';
                   writefifo_issue_wb           <= '1';
@@ -1741,13 +1755,19 @@ begin
                      datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr))(95 downto 64);
                   writefifo_Din(103 downto 96) <= x"FF";
                   writefifo_Din(104)           <= '1';
-                   writefifo_Din(105)           <= '0';
-                   writefifo_Din(106)           <= '1';
-                   writefifo_Din(107)           <= '0';
+                  writefifo_Din(105)           <= '0';
+                  writefifo_Din(106)           <= '1';
+                  writefifo_Din(107)           <= '1';
+                  writefifo_Din(171 downto 108) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 1))(63 downto 0);
+                  writefifo_Din(235 downto 172) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 2))(63 downto 0);
+                  writefifo_Din(299 downto 236) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 3))(63 downto 0);
                end if;
-            elsif (datacache_wb_ena = '1') then
-               -- Reserve this scheduler cycle while the first unacknowledged
-               -- writeback beat is captured into the staging queue.
+            elsif (datacache_wb_fifo_count > 0 or datacache_wb_ena = '1') then
+               -- Reserve the scheduler while the line's four beats are
+               -- captured into the staging queue.
                null;
              elsif (datacache_request_latched = '1') then
                 if (writefifo_schedule_ready = '1') then
@@ -1860,7 +1880,7 @@ begin
    generic map
    (
       SIZE              => 8,
-      DATAWIDTH         => 108, -- SGI: 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache - KI's read sequence tag went with its scoreboard
+      DATAWIDTH         => 300, -- SGI: 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache (with r/w = write: a line write), 192 bits of a line write's words 1..3 - KI's read sequence tag went with its scoreboard
       NEARFULLDISTANCE  => 4
    )
    port map
@@ -1907,7 +1927,7 @@ begin
 
    process(clk93)
       variable held_valid : boolean := false;
-      variable held_data  : std_logic_vector(115 downto 0) := (others => '0');
+      variable held_data  : std_logic_vector(299 downto 0) := (others => '0');
    begin
       if rising_edge(clk93) then
          if reset_93 = '1' then
@@ -1972,6 +1992,7 @@ begin
                         mem_request       <= '1';
                         memoryMuxStage4   <= '1';
                         mem_dataWrite     <= writefifo_Dout(63 downto 0);
+                        mem_dataWrite3    <= writefifo_Dout(299 downto 108);   -- SGI: a line write's words 1..3
                         mem_address       <= unsigned(writefifo_Dout(95 downto 64));
                         mem_writeMask     <= writefifo_Dout(103 downto 96);
                         memoryMuxStage4   <= writefifo_Dout(104);
@@ -1984,7 +2005,10 @@ begin
                            -- The KI data cache fills a 32-byte line as four
                            -- 64-bit DDR words (see cpu_datacache.vhd).
                            mem_size          <= "100";
-                           datacache_active  <= '1';
+                           -- SGI: a fill, not a line write (105 = '0'): the
+                           -- fill counters and the cache's fill window follow
+                           -- datacache_active.
+                           datacache_active  <= writefifo_Dout(105);
                         end if;
 
                         if (writefifo_Dout(104) = '0' and writefifo_Dout(107) = '1') then

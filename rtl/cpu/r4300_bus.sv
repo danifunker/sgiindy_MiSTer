@@ -108,6 +108,7 @@ module r4300_bus
     input  logic  [2:0] mem_size,
     input  logic  [7:0] mem_writeMask,
     input  logic [63:0] mem_dataWrite,
+    input  logic [191:0] mem_dataWrite3,  // a line write's words 1..3
     output logic [63:0] mem_dataRead,
     output logic        mem_done,
 
@@ -130,6 +131,12 @@ module r4300_bus
     // Doublewords wanted, 1..4; held with the rest of the payload until the
     // first bus_ack. See "CACHE LINE FILLS" above for the contract.
     output logic  [2:0] bus_burst,
+    // A LINE WRITE (build 38): a request with bus_we and bus_burst = 4 writes
+    // four consecutive doublewords - bus_wdata at bus_addr, then
+    // bus_wdata3[63:0], [127:64] and [191:128] - and is acknowledged once. Only
+    // main memory is asked for one: the data cache writes a dirty line back
+    // to where it filled it from.
+    output logic [191:0] bus_wdata3,
     input  logic [63:0] bus_rdata,
     input  logic        bus_ack,
     // With bus_ack: this is the responder's final word for the request. A
@@ -157,6 +164,14 @@ module r4300_bus
     logic [1:0] fill_last;   // index of the last beat of this line
 
     assign is_fill = mem_rnw && (mem_size == SZ_DLINE || mem_size == SZ_ILINE);
+
+    // A data cache line written back as one transaction: cpu.vhd tags it with
+    // the line size on a write. Its words carry the cache's half swap like
+    // every writeback beat did (req64), undone here word by word.
+    wire is_wline = !mem_rnw && (mem_size == SZ_ILINE);
+    function automatic logic [63:0] wline_word(input logic [63:0] w);
+        wline_word = bswap64({w[31:0], w[63:32]});
+    endfunction
 
     // Write-side half swap, exactly as memorymux.vhd and cpu_datacache.vhd do it.
     logic        swap_halves;
@@ -203,6 +218,16 @@ module r4300_bus
                             // arrive before this has been taken and dropped.
                             fill_grant <= 1'b1;
                             state      <= S_FILL;
+                        end else if (is_wline) begin
+                            aoff       <= 3'b000;
+                            bus_addr   <= {mem_address[31:5], 5'b00000};
+                            bus_burst  <= 3'd4;
+                            bus_be     <= 8'hFF;
+                            bus_wdata  <= wline_word(mem_dataWrite);
+                            bus_wdata3 <= {wline_word(mem_dataWrite3[191:128]),
+                                           wline_word(mem_dataWrite3[127:64]),
+                                           wline_word(mem_dataWrite3[63:0])};
+                            state      <= S_BUSY;
                         end else begin
                             aoff      <= mem_address[2:0];
                             bus_addr  <= {mem_address[31:3], 3'b000};

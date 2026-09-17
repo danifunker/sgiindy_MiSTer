@@ -182,6 +182,10 @@ struct Master {
 };
 
 static Master m_fbr{"fbr"}, m_ram{"ram"}, m_prom{"prom"}, m_fbw{"fbw"};
+// Line writes (build 38): the line to read back next, and how many were
+// written and read back.
+static int64_t  ram_verify_line = -1;
+static uint64_t ram_lines = 0, ram_lines_checked = 0;
 static int failures = 0;
 
 static void fail(const char *what, uint32_t a, uint64_t want, uint64_t got)
@@ -262,23 +266,54 @@ int main(int argc, char **argv)
             } else if (m == &m_ram) {
                 // THE CPU'S PORT READS BURSTS SINCE docs/39: a line fill is
                 // one request for 2 or 4 words, answered a word at a time
-                // with ram_last on the final one. Writes stay single.
-                m->is_write = (rng() % 2) == 0;
+                // with ram_last on the final one. SINCE BUILD 38 A WRITE MAY
+                // BE A LINE: four words (ram_wdata, then ram_wdata3's three)
+                // in one request, acknowledged once - the data cache writing
+                // a dirty line back. A line just written is read back as a
+                // line next, so every one of them is checked.
+                int port_burst;
                 m->got = 0;
-                if (m->is_write) {
-                    uint64_t v = garbage();
-                    m->shadow[a] = v;
-                    m->burst = 1;
-                    dut->ram_wdata = v; dut->ram_be = 0xFF;
+                if (ram_verify_line >= 0) {
+                    m->is_write = false;
+                    a = (uint32_t)ram_verify_line;
+                    ram_verify_line = -1;
+                    m->burst = 4;
                 } else {
+                    m->is_write = (rng() % 2) == 0;
+                    m->burst = 1;
+                }
+                port_burst = m->burst;
+                if (m->is_write) {
+                    bool line = (rng() % 3) == 0;
+                    uint64_t v = garbage();
+                    dut->ram_wdata = v; dut->ram_be = 0xFF;
+                    if (line) {
+                        a &= ~(uint32_t)31;
+                        port_burst = 4;
+                        m->shadow[a] = v;
+                        for (int w = 1; w < 4; w++) {
+                            uint64_t vw = garbage();
+                            m->shadow[a + 8u * w] = vw;
+                            dut->ram_wdata3[2 * (w - 1)]     = (uint32_t)vw;
+                            dut->ram_wdata3[2 * (w - 1) + 1] = (uint32_t)(vw >> 32);
+                        }
+                        ram_verify_line = a;
+                        ram_lines++;
+                    } else {
+                        m->shadow[a] = v;
+                    }
+                } else if (m->burst != 4 || port_burst != 4 || a % 32) {
                     static const int bursts[4] = {1, 2, 4, 4};
                     m->burst = bursts[rng() % 4];
+                    port_burst = m->burst;
                     a &= ~(uint32_t)(m->burst * 8 - 1);      // line-aligned
-                    m->addr = a;
-                    m->expect = m->shadow.count(a) ? m->shadow[a] : 0;
+                } else {
+                    ram_lines_checked++;
                 }
+                m->addr = a;
+                if (!m->is_write) m->expect = m->shadow.count(a) ? m->shadow[a] : 0;
                 dut->ram_addr = a; dut->ram_we = m->is_write; dut->ram_req = 1;
-                dut->ram_burst = m->burst;
+                dut->ram_burst = port_burst;
             } else {
                 m->is_write = (rng() % 2) == 0;
                 if (m->is_write) {
@@ -523,6 +558,10 @@ int main(int argc, char **argv)
     check("two identical held reads back to back both completed",
           pairs == 200);
     check("the read latency counters agree with the model", counters_ok);
+    printf("  (%llu RAM line writes, %llu read back as lines)\n",
+           (unsigned long long)ram_lines, (unsigned long long)ram_lines_checked);
+    check("RAM line writes happened and were read back as lines",
+          ram_lines > 100 && ram_lines_checked + 2 >= ram_lines);
 
     printf(failures ? "\nDDR3MUX: FAIL\n" : "\nDDR3MUX: PASS\n");
     delete dut;

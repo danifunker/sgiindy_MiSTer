@@ -124,6 +124,10 @@ module ddr3_mux #(
     // Words per READ, 1..4 (0 reads as 1; a write is always one word). Held
     // with the rest of the payload until the transaction is taken.
     input  logic  [2:0] ram_burst,
+    // A LINE WRITE (build 38): ram_we with ram_burst = 4 writes ram_wdata at
+    // ram_addr and ram_wdata3's three words at the next three, acknowledged
+    // once, with ram_last. See the take branch below.
+    input  logic [191:0] ram_wdata3,
     output logic [63:0] ram_rdata,
     // One per word of a burst, not one per transaction; `ram_last` marks the
     // final word. A write is acknowledged once, with `ram_last` set.
@@ -204,6 +208,8 @@ module ddr3_mux #(
     logic [63:0]            p_wdata[NM];
     logic  [7:0]            p_be   [NM];
     logic  [2:0]            p_rburst;     // the CPU's, 1..4
+    logic                   p_wline;      // the CPU's write is a 4-word line
+    logic [191:0]           p_wdata3;     // ...and these are its words 1..3
 
     // A byte offset within a region becomes a word address by dropping the low
     // three bits of both, which is the only place the byte/word distinction
@@ -374,6 +380,19 @@ module ddr3_mux #(
     logic                  cmd_we;
     logic  [7:0]           cmd_n;
 
+    // THE LINE WRITE GOES TO THE BRIDGE AS FOUR SINGLE-WORD WRITES, BACK TO
+    // BACK (build 38). The CPU hands a dirty data cache line over as one
+    // transaction; the bridge is given what it has always been given - one
+    // write command, one word - four times, each presented in the clock the
+    // one before it is taken, so no other master's command falls between
+    // them and the words need no burst protocol from the bridge. `wl_left`
+    // counts the words still to present after the one in front of it.
+    logic  [1:0]           wl_left;
+    logic [191:0]          wl_data;
+    logic [24:0]           wl_addr;
+    wire                   wl_cont = cmd_we && (cmd_m == $clog2(NM)'(M_RAM))
+                                     && (wl_left != 2'd0);
+
     localparam int RF = 8;
     logic [15:0] ob_now;          // observation only: a clock count, see the end
     logic [$clog2(NM)-1:0] rf_m [RF];
@@ -440,6 +459,7 @@ module ddr3_mux #(
             rf_wr          <= 3'd0;
             rf_cnt         <= 4'd0;
             ob_now         <= 16'd0;
+            wl_left        <= 2'd0;
             fbr_act        <= 1'b0;
             fbr_nxt        <= 25'd0;
             fbr_isl        <= 8'd0;
@@ -529,8 +549,11 @@ module ddr3_mux #(
                     end else begin
                         pend[i] <= 1'b1;
                     end
-                    if (i == M_RAM) p_rburst <= (ram_we || ram_burst == 3'd0)
-                                                ? 3'd1 : ram_burst;
+                    if (i == M_RAM) begin
+                        p_rburst <= (ram_we || ram_burst == 3'd0) ? 3'd1 : ram_burst;
+                        p_wline  <= ram_we && (ram_burst == 3'd4);
+                        p_wdata3 <= ram_wdata3;
+                    end
                     p_we[i]    <= rq_we[i];
                     p_addr[i]  <= rq_addr[i];
                     p_wdata[i] <= rq_wdata[i];
@@ -575,7 +598,17 @@ module ddr3_mux #(
                 cmd_v    <= 1'b0;
                 DDRAM_RD <= 1'b0;
                 DDRAM_WE <= 1'b0;
-                if (cmd_we) begin
+                if (wl_cont) begin
+                    // The next word of a line write, in front of the bridge
+                    // at once. Not acknowledged: the line is one transaction.
+                    cmd_v      <= 1'b1;
+                    DDRAM_WE   <= 1'b1;
+                    DDRAM_ADDR <= {REGION, wl_addr};
+                    DDRAM_DIN  <= wl_data[63:0];
+                    wl_data    <= {64'h0, wl_data[191:64]};
+                    wl_addr    <= wl_addr + 25'd1;
+                    wl_left    <= wl_left - 2'd1;
+                end else if (cmd_we) begin
                     // A write needs no answer. Acknowledge it now.
                     ack_q[cmd_m]  <= 1'b1;
                     busy_m[cmd_m] <= 1'b0;
@@ -603,7 +636,7 @@ module ddr3_mux #(
             // The same clock the last one is taken, so a command waits for the
             // bridge and nothing else. A read needs room in the queue, which
             // the caps above keep it from ever lacking; the check is a guard.
-            if ((!cmd_v || take) && any
+            if ((!cmd_v || take) && any && !(take && wl_cont)
                 && (pick_we || rf_cnt + (push ? 4'd1 : 4'd0) < 4'(RF))) begin
                 cmd_v          <= 1'b1;
                 cmd_m          <= pick;
@@ -626,6 +659,10 @@ module ddr3_mux #(
                     DDRAM_BE       <= p_we[pick] ? p_be[pick] : 8'hFF;
                     pend[pick]     <= 1'b0;
                     busy_m[pick]   <= 1'b1;
+                    wl_left        <= (pick == $clog2(NM)'(M_RAM) && p_we[M_RAM] && p_wline)
+                                      ? 2'd3 : 2'd0;
+                    wl_data        <= p_wdata3;
+                    wl_addr        <= p_addr[M_RAM] + 25'd1;
                     if (pick != $clog2(NM)'(M_RAM) && pick != $clog2(NM)'(M_BCN))
                         rr <= pick_slot;
                 end

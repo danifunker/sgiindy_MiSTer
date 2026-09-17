@@ -57,6 +57,7 @@ module tb_cpuonly
     logic [31:0] mem_address;
     logic  [7:0] mem_writeMask;
     logic [63:0] mem_dataWrite, mem_dataRead;
+    logic [191:0] mem_dataWrite3, bus_wdata3;
     logic  [2:0] mem_size;
     logic        fill_grant, fill_data_ready;
     logic [63:0] fill_data;
@@ -82,6 +83,7 @@ module tb_cpuonly
         .mem_size         (mem_size),
         .mem_writeMask    (mem_writeMask),
         .mem_dataWrite    (mem_dataWrite),
+        .mem_dataWrite3   (mem_dataWrite3),
         .mem_dataRead     (mem_dataRead),
         .mem_done         (mem_done),
         .fill_grant       (fill_grant),
@@ -105,6 +107,7 @@ module tb_cpuonly
         .mem_size        (mem_size),
         .mem_writeMask   (mem_writeMask),
         .mem_dataWrite   (mem_dataWrite),
+        .mem_dataWrite3  (mem_dataWrite3),
         .mem_dataRead    (mem_dataRead),
         .mem_done        (mem_done),
         .fill_grant      (fill_grant),
@@ -117,6 +120,7 @@ module tb_cpuonly
         .bus_be          (bus_be),
         .bus_aoff        (bus_aoff),
         .bus_burst       (bus_burst),
+        .bus_wdata3      (bus_wdata3),
         .bus_rdata       (bus_rdata),
         .bus_ack         (bus_ack),
         .bus_last        (bus_last)
@@ -169,6 +173,12 @@ module tb_cpuonly
                         for (int i = 0; i < 8; i++)
                             if (bus_be[7-i])
                                 mem[bus_addr[19:3]][63-8*i -: 8] <= bus_wdata[63-8*i -: 8];
+                        // A line write (build 38): four words, one request.
+                        if (bus_burst == 3'd4) begin
+                            mem[bus_addr[19:3] + 17'd1] <= bus_wdata3[63:0];
+                            mem[bus_addr[19:3] + 17'd2] <= bus_wdata3[127:64];
+                            mem[bus_addr[19:3] + 17'd3] <= bus_wdata3[191:128];
+                        end
                     end
                 end
             end else if (cnt != 0) begin

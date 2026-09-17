@@ -97,6 +97,9 @@ entity r4300_wrap is
       mem_size          : out std_logic_vector(2 downto 0);
       mem_writeMask     : out std_logic_vector(7 downto 0);
       mem_dataWrite     : out std_logic_vector(63 downto 0);
+      -- Words 1..3 of a data cache line written back in one transaction
+      -- (mem_size "100", mem_rnw '0'). See r4300_bus.sv.
+      mem_dataWrite3    : out std_logic_vector(191 downto 0);
       mem_dataRead      : in  std_logic_vector(63 downto 0);
       mem_done          : in  std_logic;
 
@@ -308,6 +311,7 @@ begin
       mem_size              => mem_size_i,
       mem_writeMask         => mem_writeMask,
       mem_dataWrite         => mem_dataWrite,
+      mem_dataWrite3        => mem_dataWrite3,
       mem_dataRead          => mem_dataRead,
       mem_done              => mem_done,
 

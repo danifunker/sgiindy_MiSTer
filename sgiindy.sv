@@ -432,6 +432,7 @@ wire [31:0] ram_addr;
 wire [63:0] ram_wdata, ram_rdata;
 wire  [7:0] ram_be;
 wire  [2:0] ram_burst;
+wire [191:0] ram_wdata3;    // a line write's words 1..3 (build 38)
 
 wire        prom_req, prom_ack;
 wire [31:0] prom_addr;
@@ -503,6 +504,7 @@ sgi_indy u_core
 	.ram_wdata        (ram_wdata),
 	.ram_be           (ram_be),
 	.ram_burst        (ram_burst),
+	.ram_wdata3       (ram_wdata3),
 	.ram_rdata        (ram_rdata),
 	.ram_ack          (ram_ack),
 	.ram_last         (ram_last),
@@ -769,6 +771,7 @@ ddr3_mux u_mem
 	.ram_wdata (ram_wdata),
 	.ram_be    (ram_be),
 	.ram_burst (ram_burst),
+	.ram_wdata3(ram_wdata3),
 	.ram_rdata (ram_rdata),
 	.ram_ack   (ram_ack),
 	.ram_last  (ram_last),
