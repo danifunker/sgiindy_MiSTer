@@ -360,8 +360,8 @@ int main(int argc, char **argv)
     //  Phase 3: FASTCLEAR and the CID clip - the two write-path features X
     //  leans on that the PROM never touches (docs/33). FASTCLEAR must write
     //  COLORVRAM through a hostile logic op and a zero z-pattern; the CID
-    //  clip must land pixels only where the auxiliary planes' low nibble
-    //  matches CLIPMODE's cidmatch field.
+    //  clip must land pixels only where CLIPMODE's cidmatch mask permits the
+    //  window ID in the auxiliary planes' low two bits.
     //========================================================================
     {
         enum { R_ZPATTERN_ = 0x0014, R_COLORVRAM = 0x001C, R_CLIPMODE_ = 0x1328 };
