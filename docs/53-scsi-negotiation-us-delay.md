@@ -284,10 +284,11 @@ a write that went elsewhere leaves the block it was meant for stale.
 `/unix`, each synced, with `ls -lR /usr` reading directories and inodes
 underneath - 50 MB of writes against a diskcheck's 3 MB.
 
-Build 41, first stress session: **no FOREIGN block anywhere on the image, and
-all 16 copies byte-identical to `/unix`** (101,931 blocks differ from pristine,
-every one of them owned by a file that was written or by free space). The
-2026-09-17 evidence therefore says the fault is rare and not particular to build 41 (nothing in the change
+Build 41, three stress sessions: **no FOREIGN block anywhere on any of the
+three images, and all 48 copies byte-identical to `/unix`** (about 102,000
+blocks differ from pristine each time, every one of them owned by a file that
+was written or by free space). That is 150 MB of writes against the 3 MB of the
+session that failed. The 2026-09-17 evidence therefore says the fault is rare and not particular to build 41 (nothing in the change
 touches a data phase; the same disk path has been in place since build 26), and
 it stays an open item rather than a release blocker - with a tool that will
 name the blocks and their data the next time it happens.
