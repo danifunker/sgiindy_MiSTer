@@ -20,9 +20,12 @@ entity cpu is
       -- remains enabled for mapped data accesses.
       INSTR_KSEG_ONLY       : boolean := false;
       -- SGI: let a load leave execute without freezing it for a clock when the
-      -- instruction behind it neither reads the loaded register nor touches
-      -- memory. See loadMayRun.
+      -- instruction behind it does not read the loaded register. See loadMayRun.
       LOAD_NO_STALL         : boolean := true;
+      -- SGI: ...including when that instruction is itself an integer load or
+      -- store (build 37). False keeps build 33-36's rule: never behind a load
+      -- or store. See loadMayRun and cpu_datacache.vhd's q_addr.
+      LOAD_NO_STALL_MEM     : boolean := true;
       -- Build the pre-event execution trace.
       --
       -- The trace is a diagnostic, and it is not free. debug_trace_bus is 896
@@ -155,6 +158,10 @@ entity cpu is
       -- The RETIRING instruction's PC and a one-clock strobe. See dbg_pc2.
       dbg_rpc               : out std_logic_vector(31 downto 0) := (others => '0');
       dbg_retire            : out std_logic := '0';
+      -- SGI: register 31 as the retiring instructions have left it - after a
+      -- JAL, the return address. A profiler sample inside a leaf routine
+      -- (us_delay, bcopy) then names its caller (docs/53).
+      dbg_ra                : out std_logic_vector(31 downto 0) := (others => '0');
       -- SGI: what the memory side of the pipeline is doing, for the
       -- performance counters in sgi_indy.sv (docs/50). Bit 0 an instruction
       -- cache fill requested, 1 a data cache fill requested, 2 a data cache
@@ -186,6 +193,10 @@ entity cpu is
       mem_size              : out unsigned(2 downto 0) := (others => '0');
       mem_writeMask         : out std_logic_vector(7 downto 0) := (others => '0'); 
       mem_dataWrite         : out std_logic_vector(63 downto 0) := (others => '0');
+      -- SGI: words 1..3 of a data cache line written back in one transaction
+      -- (mem_size "100" with mem_rnw '0'); word 0 is mem_dataWrite. See the
+      -- write FIFO scheduler's line write.
+      mem_dataWrite3        : out std_logic_vector(191 downto 0) := (others => '0');
       mem_dataRead          : in  std_logic_vector(63 downto 0); 
       mem_done              : in  std_logic;
       rdram_granted2x       : in  std_logic;
@@ -505,9 +516,9 @@ architecture arch of cpu is
    signal mem_finished_read            : std_logic := '0';
    signal mem_finished_dataRead        : std_logic_vector(63 downto 0);
           
-   signal writefifo_Din                : std_logic_vector(107 downto 0) := (others => '0');   -- SGI: 108 bits, no sequence tag (see below)
+   signal writefifo_Din                : std_logic_vector(299 downto 0) := (others => '0');   -- SGI: 108 bits + a line write's words 1..3, no sequence tag (see below)
    signal writefifo_wr                 : std_logic := '0';
-   signal writefifo_Dout               : std_logic_vector(107 downto 0);   -- SGI
+   signal writefifo_Dout               : std_logic_vector(299 downto 0);   -- SGI
    signal writefifo_Rd                 : std_logic := '0';
    signal writefifo_Empty              : std_logic;
    signal writefifo_Full               : std_logic;
@@ -935,6 +946,7 @@ architecture arch of cpu is
    signal executeIgnoreNext            : std_logic := '0';
    signal executeStallFromMEM          : std_logic := '0';
    signal loadMayRun                   : std_logic;         -- SGI: LOAD_NO_STALL
+   signal loadNextMayRun               : std_logic;         -- SGI: LOAD_NO_STALL(_MEM)
    signal executeLoadNoStall           : std_logic := '0';  -- SGI: LOAD_NO_STALL
    signal resultWriteEnable            : std_logic := '0';
    signal executeBranchdelaySlot       : std_logic := '0';
@@ -1065,6 +1077,7 @@ architecture arch of cpu is
    signal dbg_pc3                      : unsigned(63 downto 0) := (others => '0');
    signal dbg_pc4                      : unsigned(63 downto 0) := (others => '0');
    signal dbg_retire_i                 : std_logic := '0';
+   signal dbg_ra_i                     : unsigned(31 downto 0) := (others => '0');   -- SGI
    signal dbg_exc_code_u               : unsigned(4 downto 0);    -- SGI
    signal dbg_exc_epc_u                : unsigned(31 downto 0);   -- SGI
    signal dbg_exc_bad_u                : unsigned(31 downto 0);   -- SGI
@@ -1676,16 +1689,16 @@ begin
                datacache_wb_fifo_wrptr <= datacache_wb_fifo_wrptr + 1;
             end if;
 
-            if (datacache_wb_fifo_pop = '1') then
-               datacache_wb_fifo_rdptr <= datacache_wb_fifo_rdptr + 1;
-            end if;
+            -- SGI: a pop takes the whole line - all four beats go out as one
+            -- write FIFO entry - so the read pointer moves by four, which on a
+            -- two-bit pointer is where it already is.
 
             if (datacache_wb_ena = '1' and datacache_wb_fifo_pop = '0') then
                if (datacache_wb_fifo_count < 4) then
                   datacache_wb_fifo_count <= datacache_wb_fifo_count + 1;
                end if;
             elsif (datacache_wb_ena = '0' and datacache_wb_fifo_pop = '1') then
-               datacache_wb_fifo_count <= datacache_wb_fifo_count - 1;
+               datacache_wb_fifo_count <= 0;
             end if;
             
             -- Cache refill requests are one-cycle pulses. Preserve them when
@@ -1727,7 +1740,17 @@ begin
                   writefifo_issue_pending <= '0';
                   writefifo_issue_wb      <= '0';
                end if;
-            elsif (datacache_wb_fifo_count > 0) then
+            elsif (datacache_wb_fifo_count = 4) then
+               -- SGI: A DIRTY LINE GOES BACK AS ONE TRANSACTION (build 38).
+               -- Its four beats used to be four write FIFO entries, and each
+               -- paid the whole trip - FIFO, memstate, r4300_bus, ram_arb,
+               -- ddr3_mux's latch and command, the acknowledgement back - ~7
+               -- clocks a word, 28 a line, with the fill that caused it waiting
+               -- behind all four. Now the line is issued once it is staged:
+               -- beat 0 where a write always was, beats 1..3 in bits 299:108,
+               -- and (107) = '1' with (105) = '0' saying so. Four consecutive
+               -- beats of one line are consecutive words, so only beat 0's
+               -- address travels. ddr3_mux writes the four words back to back.
                if (writefifo_schedule_ready = '1') then
                   writefifo_issue_pending      <= '1';
                   writefifo_issue_wb           <= '1';
@@ -1737,13 +1760,19 @@ begin
                      datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr))(95 downto 64);
                   writefifo_Din(103 downto 96) <= x"FF";
                   writefifo_Din(104)           <= '1';
-                   writefifo_Din(105)           <= '0';
-                   writefifo_Din(106)           <= '1';
-                   writefifo_Din(107)           <= '0';
+                  writefifo_Din(105)           <= '0';
+                  writefifo_Din(106)           <= '1';
+                  writefifo_Din(107)           <= '1';
+                  writefifo_Din(171 downto 108) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 1))(63 downto 0);
+                  writefifo_Din(235 downto 172) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 2))(63 downto 0);
+                  writefifo_Din(299 downto 236) <=
+                     datacache_wb_fifo(to_integer(datacache_wb_fifo_rdptr + 3))(63 downto 0);
                end if;
-            elsif (datacache_wb_ena = '1') then
-               -- Reserve this scheduler cycle while the first unacknowledged
-               -- writeback beat is captured into the staging queue.
+            elsif (datacache_wb_fifo_count > 0 or datacache_wb_ena = '1') then
+               -- Reserve the scheduler while the line's four beats are
+               -- captured into the staging queue.
                null;
              elsif (datacache_request_latched = '1') then
                 if (writefifo_schedule_ready = '1') then
@@ -1856,7 +1885,7 @@ begin
    generic map
    (
       SIZE              => 8,
-      DATAWIDTH         => 108, -- SGI: 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache - KI's read sequence tag went with its scoreboard
+      DATAWIDTH         => 300, -- SGI: 64bit data, 32bit address, 8 bit byte enable, 1 bit stage1/4, 1 bit r/w, 1 bit 64bit access, 1 bit cache (with r/w = write: a line write), 192 bits of a line write's words 1..3 - KI's read sequence tag went with its scoreboard
       NEARFULLDISTANCE  => 4
    )
    port map
@@ -1903,7 +1932,7 @@ begin
 
    process(clk93)
       variable held_valid : boolean := false;
-      variable held_data  : std_logic_vector(115 downto 0) := (others => '0');
+      variable held_data  : std_logic_vector(299 downto 0) := (others => '0');
    begin
       if rising_edge(clk93) then
          if reset_93 = '1' then
@@ -1968,6 +1997,7 @@ begin
                         mem_request       <= '1';
                         memoryMuxStage4   <= '1';
                         mem_dataWrite     <= writefifo_Dout(63 downto 0);
+                        mem_dataWrite3    <= writefifo_Dout(299 downto 108);   -- SGI: a line write's words 1..3
                         mem_address       <= unsigned(writefifo_Dout(95 downto 64));
                         mem_writeMask     <= writefifo_Dout(103 downto 96);
                         memoryMuxStage4   <= writefifo_Dout(104);
@@ -1980,11 +2010,17 @@ begin
                            -- The KI data cache fills a 32-byte line as four
                            -- 64-bit DDR words (see cpu_datacache.vhd).
                            mem_size          <= "100";
-                           datacache_active  <= '1';
+                           -- SGI: a fill, not a line write (105 = '0'): the
+                           -- fill counters and the cache's fill window follow
+                           -- datacache_active.
+                           datacache_active  <= writefifo_Dout(105);
                         end if;
 
                         if (writefifo_Dout(104) = '0' and writefifo_Dout(107) = '1') then
-                           mem_size          <= "100";
+                           -- SGI: "101", an INSTRUCTION line: r4300_bus finishes
+                           -- it without the clock of daylight a data line needs
+                           -- (see S_FILLEND there).
+                           mem_size          <= "101";
                            instrcache_active  <= '1';
                         end if;
 
@@ -3630,11 +3666,20 @@ begin
    -- opcodeCacheMuxed is that next instruction: it is what decode latches on
    -- the same stall = 0 clock that moves this load into execute. Its rs and rt
    -- fields are compared raw - wherever a format uses them for something
-   -- else the answer is only more conservative. It must also not be a memory
-   -- instruction (primary opcode 0x20-0x3F, and LDL/LDR at 0x1A/0x1B), which
-   -- keeps the data cache serving one access at a time exactly as before:
-   -- nothing behind the load reaches stage 4 until the load is done there.
-   -- CACHE (0x2F) is excluded by the same rule.
+   -- else the answer is only more conservative.
+   --
+   -- IT MAY BE AN INTEGER LOAD OR STORE since build 37 (LOAD_NO_STALL_MEM):
+   -- LB/LH/LWL/LW/LBU/LHU/LWR/LWU (0x20-0x27), LD (0x37), LDL/LDR (0x1A/1B),
+   -- SB/SH/SWL/SW/SDL/SDR/SWR (0x28-0x2E) and SD (0x3F). Over IRIX's kernel
+   -- text 30.5 % of loads are followed by a load that does not name the loaded
+   -- register - 7.6 % of all instructions, each a clock of execute held until
+   -- then - against 4.3 % by such a store. The data cache still serves one
+   -- access at a time - nothing behind the load reaches stage 4 until the load
+   -- is done there - but the second access's address is on the data RAM while
+   -- the first is answered, so a read is only done in IDLE when the RAM's
+   -- output is its own word (cpu_datacache.vhd, q_addr), and waits a clock in
+   -- READWAIT when it is not. Not CACHE (0x2F), the LL/SC family, or the
+   -- coprocessor loads and stores (0x30-0x36, 0x38-0x3E).
    --
    -- What a load in stage 4 still needs once execute has moved on:
    -- * forwarding: the instruction then in decode is the one after next, so
@@ -3649,9 +3694,19 @@ begin
    -- Not for LWC1/LDC1 (the FPU register is not forwarded by this path), a
    -- mini-TLB miss (TLB_dataStall takes the stalled path back), or a load
    -- that faults (EXEExceptionMem).
+   loadNextMayRun <= '1' when (opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101") else
+                     '0' when (not LOAD_NO_STALL_MEM) else
+                     '1' when (opcodeCacheMuxed(31 downto 27) = "01101") else                      -- LDL, LDR
+                     '1' when (opcodeCacheMuxed(31 downto 29) = "100") else                        -- 0x20-0x27
+                     '1' when (opcodeCacheMuxed(31 downto 29) = "101" and
+                               opcodeCacheMuxed(28 downto 26) /= "111") else                     -- 0x28-0x2E
+                     '1' when (opcodeCacheMuxed(31 downto 26) = "110111" or
+                               opcodeCacheMuxed(31 downto 26) = "111111") else                   -- LD, SD
+                     '0';
+
    loadMayRun <= '1' when (LOAD_NO_STALL and
                            decodeCOP1ReadEnable = '0' and
-                           opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101" and
+                           loadNextMayRun = '1' and
                            decSource1 /= decodeTarget and decSource2 /= decodeTarget) else
                  '0';
 
@@ -3951,7 +4006,13 @@ begin
                if (executeStallFromMEM = '1') then               
                   if (executeMemReadEnable = '1' and executeCOP1ReadEnable = '0') then
                      if (executeMemUseCacheEffective = '1') then
-                        if (datacache_readdone = '1') then
+                        -- SGI: its OWN read, done in the clock stage 4 takes it
+                        -- (datacache_readena). A read finishing in READWAIT or
+                        -- at the end of a fill belongs to the load AHEAD of this
+                        -- one - a load that did not hold execute (LOAD_NO_STALL
+                        -- _MEM) - and releasing on it ran the instruction behind
+                        -- this load before its value existed.
+                        if (datacache_readdone = '1' and datacache_readena = '1') then
                            stall3 <= '0';
                         end if;
                      end if;
@@ -4879,6 +4940,9 @@ begin
 -- synthesis translate_on
                dbg_pc4              <= dbg_pc3;   -- SGI
                dbg_retire_i         <= '1';       -- SGI: exactly one per instruction
+               if (writebackWriteEnable = '1' and writebackTarget = 31) then   -- SGI
+                  dbg_ra_i          <= writebackData(31 downto 0);
+               end if;
                
                -- export
                if (writebackWriteEnable = '1') then 
@@ -5150,6 +5214,7 @@ begin
    COP0_usable  <= '1' when (privilegeMode = "00" or COP0_enable = '1') else '0';   -- SGI
    dbg_rpc      <= std_logic_vector(dbg_pc4(31 downto 0));
    dbg_retire   <= dbg_retire_i;
+   dbg_ra       <= std_logic_vector(dbg_ra_i);   -- SGI
    dbg_perf(0)  <= instrcache_request;
    dbg_perf(1)  <= datacache_request;
    dbg_perf(2)  <= datacache_wb_ena;

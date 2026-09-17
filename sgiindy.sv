@@ -432,6 +432,7 @@ wire [31:0] ram_addr;
 wire [63:0] ram_wdata, ram_rdata;
 wire  [7:0] ram_be;
 wire  [2:0] ram_burst;
+wire [191:0] ram_wdata3;    // a line write's words 1..3 (build 38)
 
 wire        prom_req, prom_ack;
 wire [31:0] prom_addr;
@@ -476,11 +477,11 @@ wire        txda, txdb;
 
 // SCSI debug beacon words out of the core (docs/28), to the writer below.
 wire [63:0] scsi_bcn [7];
-wire [63:0] scsi_stat [5];  // the disk-time counters (docs/49)
+wire [63:0] scsi_stat [7];  // the disk-time counters (docs/49; 5-6 ver 14, docs/53)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
 wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
-wire [63:0] perf_bcn [9];   // CPU performance counters (docs/50)
+wire [63:0] perf_bcn [11];  // CPU performance counters (docs/50; w9 build 37; w10 ver 13)
 
 sgi_indy u_core
 (
@@ -503,6 +504,7 @@ sgi_indy u_core
 	.ram_wdata        (ram_wdata),
 	.ram_be           (ram_be),
 	.ram_burst        (ram_burst),
+	.ram_wdata3       (ram_wdata3),
 	.ram_rdata        (ram_rdata),
 	.ram_ack          (ram_ack),
 	.ram_last         (ram_last),
@@ -742,6 +744,7 @@ fb_fetch_arb u_fetch_arb
 // What the DDR3 port is doing, for the performance counters below (docs/50).
 wire [5:0] mx_busy, mx_pend;
 wire       mx_take, mx_take_rd, mx_gap, mx_cmdwait;
+wire [63:0] mx_rdlat [3];   // a RAM read's latency, split (build 37)
 wire [2:0] mx_take_m;
 
 ddr3_mux u_mem
@@ -768,6 +771,7 @@ ddr3_mux u_mem
 	.ram_wdata (ram_wdata),
 	.ram_be    (ram_be),
 	.ram_burst (ram_burst),
+	.ram_wdata3(ram_wdata3),
 	.ram_rdata (ram_rdata),
 	.ram_ack   (ram_ack),
 	.ram_last  (ram_last),
@@ -796,6 +800,7 @@ ddr3_mux u_mem
 	.dbg_take_rd (mx_take_rd),
 	.dbg_gap     (mx_gap),
 	.dbg_cmdwait (mx_cmdwait),
+	.dbg_rdlat   (mx_rdlat),
 
 	.DDRAM_BUSY      (DDRAM_BUSY),
 	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
@@ -837,7 +842,18 @@ ddr3_mux u_mem
 // bcnread.py --perf turns two readings into a workload's breakdown.
 // ver=11 adds word 35: instruction cache fills requested after an instruction
 // TLB walk, and fill requests the cache answered from a line it already held.
-localparam int BCN_WORDS = 36;
+// ver=12 (build 37) adds words 36-39: a main-memory read's latency split into
+// the bridge's and the queue's (ddr3_mux dbg_rdlat - clocks from take to first
+// word, words owed ahead at take, gaps inside a burst, and the bridge alone on
+// reads taken with nothing owed), and the clocks a CPU access waited behind a
+// DMA transaction with the DMA transaction count (sgi_indy w9).
+// ver=13 (build 39) adds word 40: {the CPU's register 31 at retirement, the
+// PC last retired} (sgi_indy perf w10). prof.py samples it beside word 10, and
+// a sample in a leaf routine - us_delay, bcopy - names its caller (docs/53).
+// ver=14 (build 40) adds words 41-42: DATA-phase clocks split by whose turn it
+// is - {DATA IN waiting on the initiator /64, DATA IN waiting on the target /64}
+// and the same for DATA OUT (sgi_scsi dbg_stat 5-6, docs/53).
+localparam int BCN_WORDS = 43;
 
 // ---- DDR3 port performance counters (docs/50) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
@@ -897,7 +913,7 @@ reg  [31:0] bcn_addr;
 reg  [63:0] bcn_wdata;
 
 wire [63:0] bcn_src [BCN_WORDS];
-assign bcn_src[0] = { 16'hBEC0, 8'h0B, 8'h00, bcn_beat };
+assign bcn_src[0] = { 16'hBEC0, 8'h0E, 8'h00, bcn_beat };
 assign bcn_src[1] = scsi_bcn[0];
 assign bcn_src[2] = scsi_bcn[1];
 assign bcn_src[3] = scsi_bcn[2];
@@ -933,6 +949,13 @@ assign bcn_src[32] = { mx_n_ram,       mx_n_fbw };
 assign bcn_src[33] = { mx_c_lat[37:6], mx_n_rd };
 assign bcn_src[34] = { mx_c_bsy[37:6], mx_n_fbr };
 assign bcn_src[35] = perf_bcn[8];
+assign bcn_src[36] = mx_rdlat[0];
+assign bcn_src[37] = mx_rdlat[1];
+assign bcn_src[38] = mx_rdlat[2];
+assign bcn_src[39] = perf_bcn[9];
+assign bcn_src[40] = perf_bcn[10];
+assign bcn_src[41] = scsi_stat[5];
+assign bcn_src[42] = scsi_stat[6];
 
 always @(posedge clk_sys) begin
 	if (~pll_locked) begin

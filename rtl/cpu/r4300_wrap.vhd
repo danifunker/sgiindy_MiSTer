@@ -79,6 +79,8 @@ entity r4300_wrap is
       dbg_exc_bad       : out std_logic_vector(31 downto 0);
       dbg_rpc           : out std_logic_vector(31 downto 0);
       dbg_retire        : out std_logic;
+      -- Register 31 at retirement; see cpu.vhd's port of the same name.
+      dbg_ra            : out std_logic_vector(31 downto 0);
       -- Fill/writeback/bus-transaction events for the performance counters;
       -- see cpu.vhd's port of the same name.
       dbg_perf          : out std_logic_vector(9 downto 0);
@@ -97,6 +99,9 @@ entity r4300_wrap is
       mem_size          : out std_logic_vector(2 downto 0);
       mem_writeMask     : out std_logic_vector(7 downto 0);
       mem_dataWrite     : out std_logic_vector(63 downto 0);
+      -- Words 1..3 of a data cache line written back in one transaction
+      -- (mem_size "100", mem_rnw '0'). See r4300_bus.sv.
+      mem_dataWrite3    : out std_logic_vector(191 downto 0);
       mem_dataRead      : in  std_logic_vector(63 downto 0);
       mem_done          : in  std_logic;
 
@@ -297,6 +302,7 @@ begin
       dbg_exc_bad           => dbg_exc_bad,
       dbg_rpc               => dbg_rpc,
       dbg_retire            => dbg_retire,
+      dbg_ra                => dbg_ra,
       dbg_perf              => dbg_perf,
       dbg_ifetch            => dbg_ifetch,
       dbg_dfetch            => dbg_dfetch,
@@ -308,6 +314,7 @@ begin
       mem_size              => mem_size_i,
       mem_writeMask         => mem_writeMask,
       mem_dataWrite         => mem_dataWrite,
+      mem_dataWrite3        => mem_dataWrite3,
       mem_dataRead          => mem_dataRead,
       mem_done              => mem_done,
 

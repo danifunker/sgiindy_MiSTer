@@ -131,7 +131,7 @@ module sgi_scsi #(
     // were busy, how long the SCSI bus was, how many bytes crossed it in DATA
     // phases, and the cache's hits / misses / writes. Counters, not state:
     // read twice, subtract, and the difference is the boot's disk seconds.
-    output logic [63:0]             dbg_stat [5]
+    output logic [63:0]             dbg_stat [7]
 );
 
     // ---- port decode -------------------------------------------------------
@@ -498,6 +498,16 @@ module sgi_scsi #(
     wire data_ph   = bus_bsy && !bus_cd && !bus_msg;         // DATA IN or DATA OUT
     reg  [31:0] st_xact_rd, st_xact_wr, st_data_bytes;
     reg  [37:0] st_hps_cyc, st_eng_cyc, st_bsy_cyc, st_data_cyc;
+    // WHOSE TURN IT IS IN A DATA PHASE (docs/53). With REQ up and no ACK the
+    // target has offered a byte, or asked for one, and waits for the
+    // initiator - the WD33C93 model, the DMA engine and main memory behind
+    // it. With REQ down and no ACK the initiator waits for the target: the
+    // clocks after an ACK while it advances, and a sector not yet in its ring
+    // (scsi.v io_busy). ACK up is the handshake itself, counted in neither.
+    // The DATA-phase time in w20 is the sum of all three.
+    wire        din_ph  = data_ph && bus_io;     // DATA IN: target -> initiator
+    wire        dout_ph = data_ph && !bus_io;    // DATA OUT
+    reg  [37:0] st_din_ini, st_din_tgt, st_dout_ini, st_dout_tgt;
     reg         ack_d, b_ack_d;
     always_ff @(posedge clk) begin
         ack_d   <= |sd_ack;
@@ -505,6 +515,7 @@ module sgi_scsi #(
         if (reset) begin
             st_xact_rd <= 32'd0; st_xact_wr <= 32'd0; st_data_bytes <= 32'd0;
             st_hps_cyc <= 38'd0; st_eng_cyc <= 38'd0; st_bsy_cyc <= 38'd0; st_data_cyc <= 38'd0;
+            st_din_ini <= 38'd0; st_din_tgt <= 38'd0; st_dout_ini <= 38'd0; st_dout_tgt <= 38'd0;
         end else begin
             // At the rising edge of the ack the request line is still up
             // (the cache drops it on seeing the ack), so the direction is
@@ -517,6 +528,14 @@ module sgi_scsi #(
             if (eng_busy) st_eng_cyc  <= st_eng_cyc + 38'd1;
             if (bus_bsy)  st_bsy_cyc  <= st_bsy_cyc + 38'd1;
             if (data_ph)  st_data_cyc <= st_data_cyc + 38'd1;
+            if (din_ph && !b_ack) begin
+                if (bus_req) st_din_ini <= st_din_ini + 38'd1;
+                else         st_din_tgt <= st_din_tgt + 38'd1;
+            end
+            if (dout_ph && !b_ack) begin
+                if (bus_req) st_dout_ini <= st_dout_ini + 38'd1;
+                else         st_dout_tgt <= st_dout_tgt + 38'd1;
+            end
             // One initiator ACK per byte on an 8-bit bus.
             if (data_ph && b_ack && !b_ack_d) st_data_bytes <= st_data_bytes + 32'd1;
         end
@@ -526,6 +545,8 @@ module sgi_scsi #(
     assign dbg_stat[2] = { cache_hits, cache_misses };
     assign dbg_stat[3] = { st_data_bytes, st_bsy_cyc[37:6] };
     assign dbg_stat[4] = { st_data_cyc[37:6], cache_writes };
+    assign dbg_stat[5] = { st_din_ini[37:6],  st_din_tgt[37:6] };
+    assign dbg_stat[6] = { st_dout_ini[37:6], st_dout_tgt[37:6] };
 
     // SGI: DDR3 debug beacon assembly (docs/28).
     // [0]: {sd_rd, sd_wr, sd_ack, t_bsy (7 bits each),

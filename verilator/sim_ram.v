@@ -37,6 +37,9 @@ module sim_ram
     input  wire [63:0] wdata,
     input  wire  [7:0] be,
     input  wire  [2:0] burst,     // words per read, 1..4; 0 reads as 1
+    // A write with burst = 4 is a line write (build 38): wdata at addr, then
+    // wdata3's three words at the next three, acknowledged once.
+    input  wire [191:0] wdata3,
     output reg  [63:0] rdata,
     output reg         ack,
     output reg         last       // with ack: the final word of the request
@@ -57,6 +60,11 @@ module sim_ram
         if (req) begin
             if (we) begin
                 sgi_dpi_write(space, addr, wdata, be);
+                if (burst == 3'd4) begin
+                    sgi_dpi_write(space, addr + 32'd8,  wdata3[63:0],    8'hFF);
+                    sgi_dpi_write(space, addr + 32'd16, wdata3[127:64],  8'hFF);
+                    sgi_dpi_write(space, addr + 32'd24, wdata3[191:128], 8'hFF);
+                end
                 ack <= 1'b1;
             end else begin
                 rdata     <= sgi_dpi_read(space, addr);

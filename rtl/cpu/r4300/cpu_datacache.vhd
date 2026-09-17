@@ -101,6 +101,8 @@ architecture arch of cpu_datacache is
    signal tag_addr_low     : unsigned(4 downto 0) := (others => '0');
    signal read_offset      : unsigned(2 downto 0) := (others => '0');   -- SGI: RW_addr(2:0) as it was in IDLE
    signal read_offset_mux  : unsigned(2 downto 0);
+   signal q_addr           : std_logic_vector(10 downto 0) := (others => '0');   -- SGI: the word cache_q_b holds
+   signal q_match          : std_logic;
    signal tag_read_addr    : unsigned(13 downto 0) := (others => '0');
    signal fillAddr         : unsigned(31 downto 0) := (others => '0');
 
@@ -294,14 +296,33 @@ begin
       );
    end generate;
    
-   -- SGI: read_ena holds the address like write_ena does. A load no longer
-   -- has to freeze execute (cpu.vhd, LOAD_NO_STALL), so in the load's first
-   -- stage-4 cycle ce_fetch can be '1' and tag_addr already belongs to the
-   -- instruction behind it. The word read on this clock is the one READWAIT
-   -- returns after a store; it has to be the load's own. For a stalled load
-   -- ce_fetch is '0' in that cycle anyway, so this changes nothing there.
-   cache_address_b <= std_logic_vector(tag_read_addr(13 downto 3)) when (state /= IDLE) else
-                      std_logic_vector(tag_addr_1(13 downto 3)) when (ce_fetch = '0' or write_ena = '1' or read_ena = '1') else
+   -- SGI: WHOSE WORD THE DATA RAM HOLDS. Its port B read is registered, so
+   -- cache_q_b is the word at whatever address was presented a clock ago, and
+   -- a read done in IDLE returns it. A load no longer has to freeze execute
+   -- (cpu.vhd, LOAD_NO_STALL), so in its first stage-4 cycle ce_fetch can be
+   -- '1' with tag_addr already the instruction behind it - since build 37
+   -- possibly another load, which reaches stage 4 on the very next clock.
+   --
+   -- * A read that COMPLETES in IDLE presents the next access's address
+   --   (tag_addr), exactly as any other clock does, so a load right behind
+   --   it finds its own word there and completes in IDLE too.
+   -- * A read that DOES NOT - READWAIT after a store (write_ena_1), or the RAM
+   --   holding some other word (q_match = '0') - holds its own address, like
+   --   a store (write_ena): READWAIT returns the word read on this clock.
+   -- * READWAIT presents the address tag_addr_1 will hold next, for the
+   --   access behind it. Every other state reads its own line (tag_read_addr);
+   --   a load arriving after one of those finds q_match = '0' and takes
+   --   READWAIT - after a fill, a write-back or a CACHE command.
+   --
+   -- q_addr is what was presented on the last clock; tag_addr_1 is the address
+   -- of the access in stage 4, so q_match says cache_q_b is its word.
+   q_match <= '1' when (q_addr = std_logic_vector(tag_addr_1(13 downto 3))) else '0';
+
+   cache_address_b <= std_logic_vector(tag_addr_1(13 downto 3)) when (state = READWAIT and ce_fetch = '0') else
+                      std_logic_vector(tag_addr(13 downto 3))   when (state = READWAIT) else
+                      std_logic_vector(tag_read_addr(13 downto 3)) when (state /= IDLE) else
+                      std_logic_vector(tag_addr_1(13 downto 3)) when (ce_fetch = '0' or write_ena = '1' or
+                                                                     (read_ena = '1' and (write_ena_1 = '1' or slow_on = '1' or q_match = '0'))) else
                       std_logic_vector(tag_addr(13 downto 3));
                
   
@@ -333,7 +354,7 @@ begin
 
    read_busy       <= '1' when (state = READWAIT or state = WAITSLOW or state = FILL) else '0';
    
-   read_done       <= '1' when (state = IDLE and write_ena_1 = '0' and read_hit = '1' and read_ena = '1' and slow_on = '0') else
+   read_done       <= '1' when (state = IDLE and write_ena_1 = '0' and read_hit = '1' and read_ena = '1' and slow_on = '0' and q_match = '1') else
                       '1' when (state = READWAIT) else
                       '1' when (state = WAITSLOW and slowcnt = 0) else
                       '1' when (writeMode = '0' and state = FILL and ram_done = '1') else 
@@ -393,6 +414,7 @@ begin
             end if;
          end if;
          
+         q_addr   <= cache_address_b;   -- SGI: see q_match
          force_wb <= force_wb_in;
          
          slow    <= unsigned(slow_in);
@@ -459,8 +481,8 @@ begin
                      state       <= WAITSLOW;
                      slowcnt     <= slow - 1;
                      
-                  elsif (write_ena_1 = '1' and read_ena = '1' and read_hit = '1') then
-                     state <= READWAIT;
+                  elsif (read_ena = '1' and read_hit = '1' and (write_ena_1 = '1' or q_match = '0')) then
+                     state <= READWAIT;   -- SGI: q_match, see cache_address_b
                      
                   elsif (CacheCommandEna = '1') then
                      state          <= COMMANDPROCESS;

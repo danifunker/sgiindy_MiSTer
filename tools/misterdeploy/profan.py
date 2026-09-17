@@ -38,11 +38,12 @@ CLK_HZ = 50_000_000
 
 
 def load_capture(path):
-    """(start snapshot, records, end snapshot). A snapshot is (time, w0, w1..).
-    SGIPROF1 captures carry 21 words; SGIPROF2 name their word count."""
+    """(start snapshot, records, end snapshot). A snapshot is (time, w0, w1..);
+    a record is (time, w0, w10, w13, w15, w40), w40 = 0 before SGIPROF3.
+    SGIPROF1 captures carry 21 words; SGIPROF2/3 name their word count."""
     data = open(path, "rb").read()
     hdr = data[:8]
-    assert hdr in (b"SGIPROF1", b"SGIPROF2"), "not a prof.py capture"
+    assert hdr in (b"SGIPROF1", b"SGIPROF2", b"SGIPROF3"), "not a prof.py capture"
     if hdr == b"SGIPROF1":
         nwords, pre = NWORDS, 8
     else:
@@ -52,10 +53,11 @@ def load_capture(path):
     start = struct.unpack_from(snap_fmt, data, pre)
     off = pre + snap_len
     end_hdr = data.rfind(hdr)
-    rec = struct.Struct("<dQQQQ")
+    rec = struct.Struct("<dQQQQQ" if hdr == b"SGIPROF3" else "<dQQQQ")
     recs = []
     while off + rec.size <= end_hdr:
-        recs.append(rec.unpack_from(data, off))
+        r = rec.unpack_from(data, off)
+        recs.append(r if len(r) == 6 else r + (0,))
         off += rec.size
     end = struct.unpack_from(snap_fmt, data, end_hdr + pre) if end_hdr > 8 else None
     return start, recs, end
@@ -118,6 +120,11 @@ def main():
         for lo, hi in IDLE:
             if lo <= pc < hi:
                 return "idle", "(idle)"
+        # The PROM (kseg1 0xBFC..., and 0x9FC... where it runs cached) is not
+        # in /unix's symbol table: without this its time goes to the last
+        # kernel symbol below it (qt_dqrele).
+        if pc >= 0xBFC00000 or 0x9FC00000 <= pc < 0xA0000000:
+            return "kernel", "(PROM)"
         if pc >= 0x80000000:
             i = bisect.bisect_right(kaddr, pc) - 1
             return "kernel", (kname[i] if i >= 0 else "?k")
@@ -151,7 +158,7 @@ def main():
     n_tlb = 0
     split = collections.Counter()
     beats = set()
-    for t, w0, w10, w13, w15 in recs:
+    for t, w0, w10, w13, w15, w40 in recs:
         pc = w10 >> 32
         c, fn = where(pc)
         h = how(w10)
@@ -191,10 +198,35 @@ def main():
               % (pct(tot), c, fn[:34], pct(hc["run"], tot), pct(hc["fetch-stall"], tot),
                  pct(hc["exec-stall"], tot), pct(hc["wb-stall"], tot)))
 
+    # WHO CALLED IT (beacon ver 13, word 40 = register 31 at retirement). A
+    # sample inside a leaf routine - us_delay, bcopy, bzero - leaves the return
+    # address of the call that got there in r31; for anything else it is the
+    # last call that routine made, which still says where it is.
+    ver = ((start[1] >> 40) & 0xFF) if start and ((start[1] >> 48) & 0xFFFF) == 0xBEC0 else 0
+    if ver >= 13 and any(r[5] for r in recs):
+        callers = collections.defaultdict(collections.Counter)
+        for t, w0, w10, w13, w15, w40 in recs:
+            c, fn = where(w10 >> 32)
+            if c != "kernel":
+                continue
+            ra = (w40 >> 32) & 0xFFFFFFFF
+            rc, rfn = where(ra)
+            i = bisect.bisect_right(kaddr, ra) - 1
+            off_s = ("+0x%x" % (ra - kaddr[i])) if (rc == "kernel" and i >= 0
+                                                    and not rfn.startswith("(")) else ""
+            callers[fn]["%s%s" % (rfn, off_s)] += 1
+        print("\n  callers of the top kernel places (register 31 beside the PC, beacon ver 13)")
+        kranked = [(fn, hc) for (c, fn), hc in ranked if c == "kernel"][:a.top // 3 or 1]
+        for fn, hc in kranked:
+            tot = sum(hc.values())
+            parts = ", ".join("%s %.0f%%" % (k, 100.0 * v / tot)
+                              for k, v in callers[fn].most_common(4))
+            print("  %5.1f %%  %-24s <- %s" % (pct(tot), fn[:24], parts))
+
     # counters integrated across the samples (they wrap)
     nd_wr = nd_rd = lc_miss = la_miss = 0
     prev = None
-    for t, w0, w10, w13, w15 in recs:
+    for t, w0, w10, w13, w15, w40 in recs:
         cur = ((w13 >> 16) & 0xFFFF, (w13 >> 8) & 0xFF, (w15 >> 48) & 0xFFFF, (w15 >> 32) & 0xFFFF)
         if prev is not None:
             nd_wr += (cur[0] - prev[0]) & 0xFFFF
@@ -207,7 +239,9 @@ def main():
     if (end and start and len(start) >= 36 and ((start[1] >> 48) & 0xFFFF) == 0xBEC0
             and ((start[1] >> 40) & 0xFF) >= 10):
         import perfdiff
-        last = 37 if (len(start) >= 37 and ((start[1] >> 40) & 0xFF) >= 11) else 36
+        ver = (start[1] >> 40) & 0xFF
+        last = (41 if (len(start) >= 41 and ver >= 12)
+                else 37 if (len(start) >= 37 and ver >= 11) else 36)
         words = lambda snap: " ".join("%d %d" % (w >> 32, w & 0xFFFFFFFF) for w in snap[22:last])
         ra = perfdiff.parse_line("perf %.3f beat=%d %s" % (start[0], start[1] & 0xFFFFFFFF, words(start)))
         rb = perfdiff.parse_line("perf %.3f beat=%d %s" % (end[0], end[1] & 0xFFFFFFFF, words(end)))
@@ -223,11 +257,16 @@ def main():
               "DATA %.2f s for %.2f MB, cache hits %d misses %d"
               % (d(16, 63, 32), d(16, 31, 0), sec(d(17, 31, 0)), sec(d(20, 63, 32)),
                  d(19, 63, 32) / 1e6, d(18, 63, 32), d(18, 31, 0)))
+        if ((start[1] >> 40) & 0xFF) >= 14 and len(s) >= 43:
+            # ver 14: DATA-phase clocks by whose turn it was (sgi_scsi dbg_stat 5-6)
+            print("  DATA IN waiting on the initiator %.2f s, on the target %.2f s; "
+                  "DATA OUT on the initiator %.2f s, on the target %.2f s"
+                  % (sec(d(41, 63, 32)), sec(d(41, 31, 0)), sec(d(42, 63, 32)), sec(d(42, 31, 0))))
 
     if a.series > 0:
         print("\n  time series (%.0f s buckets): idle / kernel / user %%, and of busy: run / fetch / exec %%" % a.series)
         buckets = collections.defaultdict(collections.Counter)
-        for t, w0, w10, w13, w15 in recs:
+        for t, w0, w10, w13, w15, w40 in recs:
             k = int(t // a.series)
             c, fn = where(w10 >> 32)
             buckets[k][c] += 1
