@@ -105,6 +105,8 @@ if [ "$BOOT" = 1 ]; then
     ws "${STEPS[@]}"                                    # the Console, (500,600)
     rsh "sleep 3"
     ws "text:xset m 0 0" "sleep:0.3" "kbdRaw:28"        # 1:1 pointer from here
+    rsh "sleep 1"
+    ws "text:set +H" "sleep:0.3" "kbdRaw:28"           # no history expansion
     rsh "sleep 2"
     bash scripts/grab.sh "$OUTD/00-desktop.png" | tee -a "$LOG"
 fi
@@ -117,10 +119,17 @@ saver() {
     say "saver $name (${live}s): $cmd"
     # THE SAVER KILLS ITSELF. A saver that grabs the screen and the keyboard
     # cannot be stopped by typing at it, and haven does exactly that - so the
-    # guest gets a shell that starts it, waits, and kills it. The escaping is
-    # deliberate: $! and the redirection have to reach the guest's shell, not
-    # be eaten by this one.
-    ws "text:( $cmd >/dev/null 2>&1 & SP=\$!; sleep $live; kill \$SP ) &"        "sleep:0.3" "kbdRaw:28"
+    # guest gets a shell that starts it, waits, and kills it.
+    #
+    # THE SINGLE QUOTES ARE NOT DECORATION. Root's shell on this image is an
+    # interactive bash, which does history expansion BEFORE it parses the
+    # line - so a bare `$!` became `-bash: !: event not found` and the saver
+    # never ran at all, three times through every mode, with the screen
+    # sitting on the desktop looking exactly like a rasteriser that draws
+    # nothing. Single quotes are one of the two things that quote the history
+    # character, and `sh -c` then reads what is inside them. `set +H` is sent
+    # once as well, for the shell that gets this wrong anyway.
+    ws "text:sh -c '$cmd >/dev/null 2>&1 & SP=\$!; sleep $live; kill \$SP' &"        "sleep:0.3" "kbdRaw:28"
     local i
     for i in 1 2 3; do
         sleep "$gap"
