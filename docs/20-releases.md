@@ -31,75 +31,94 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
-## SGIIndy_20260917 — loads behind loads, a dirty line in one write, 3,000 ALMs back
+## SGIIndy_20260917 — the disk driver's busy-wait, loads behind loads, and 7,000 ALMs back
 
-`releases/SGIIndy_20260917.rbf`, md5 `93c2b5e47d6194ac9c858b3455e920cf`
-(build 38, SEED=5; 37,235 ALMs, 45,749 registers, 483 / 553 M10K, core
-clock setup slack +1.401 ns, HDMI PLL +0.178 ns, no negative slack in any
-check). Same `releases/boot.rom`. Built late on 2026-09-16 and tested on the
-board that night. Details in [52-fill-latency-area-writebacks.md](52-fill-latency-area-writebacks.md).
+`releases/SGIIndy_20260917.rbf`, md5 `1dc28a9667ae14c3e3b39dd07a4cbb7f`
+(build 42, SEED=2; 33,770 ALMs, 40,193 registers, 485 / 553 M10K, core clock
+setup slack +2.310 ns, HDMI PLL +0.250 ns, no negative slack in any check).
+Same `releases/boot.rom`. Built and tested on the board through 2026-09-17.
+Details in [52-fill-latency-area-writebacks.md](52-fill-latency-area-writebacks.md),
+[53-scsi-negotiation-us-delay.md](53-scsi-negotiation-us-delay.md) and
+[54-hpc3-storage-m10k.md](54-hpc3-storage-m10k.md).
 
 ### What changed
 
-* **A load no longer stalls behind another load or a store.** Since
-  SGIIndy_20260916 a load let the next instruction run in the same clock only
-  when that instruction was not a memory access; now it may be an integer
-  load or store too (30.5 % of loads in IRIX's kernel are followed by such a
-  load). The data cache checks that its RAM holds a load's own word before
-  answering, and a stalled load is released only by its own read - the
-  cpu-tests suite caught the second one.
-* **A dirty data cache line goes back to memory as one transaction.** Its four
-  words used to be four trips through the CPU's memory FIFO, the SGI bus and
-  the DDR3 mux; they are one now, written to the bridge back to back.
-* **Two clocks off an instruction cache fill, one off every main-memory
-  access.** An instruction line no longer waits a clock that only data lines
-  need, and the DDR3 mux presents a main-memory request in the clock it
-  arrives instead of the one after.
-* **3,000 ALMs back.** The configuration EEPROM's 2 Kbit and the RAMDAC's
-  control table had been built from flip-flops (1,982 and 1,056 ALMs); both
-  are block RAM now. The device is at 89 % with everything above, from 93 %.
-* **The beacon is version 12**: four more words, a main-memory read's latency
-  split into the bridge's own and the queue's. `tools/misterdeploy/` reads
-  every version.
+* **A fifth of the boot was the disk driver waiting for a chip that never
+  answered.** IRIX negotiates synchronous transfer in front of every SCSI
+  command, and the WD33C93B model's polled TRANSFER INFO sent its bytes with no
+  DBR handshake and interrupted before the driver's loop began - so every
+  negotiation timed out (7.4 ms of `us_delay` per command) and the target was
+  never marked negotiated, so it was tried again on the next command. The
+  command now hands the driver one byte per DBR, the way the part does.
+  **`us_delay` in the boot window: 28.8 s -> 1.8 s.**
+* **The bus is no longer reset four times per boot.** With the negotiation
+  working, the driver's asynchronous path waits two milliseconds before its
+  polled INQUIRY, and the target's COMMAND-phase timeout - 2.6 ms, sized for
+  something else entirely - cut the connection in the middle of it. It is 84 ms
+  now, and a message ending in ABORT or BUS DEVICE RESET ends the connection the
+  way a real target does. `wd93 SCSI Bus=0 ID=1: SYNC negotiation error` is gone
+  from SYSLOG.
+* **A load no longer stalls behind another load or a store**, and a dirty data
+  cache line goes back to memory as one transaction instead of four trips
+  through the FIFO, the bus and the DDR3 mux.
+* **Three clocks off a cache line fill**: an instruction line no longer waits a
+  clock only data lines need, the DDR3 mux presents a main-memory request in the
+  clock it arrives, and a fill's words reach the cache in the clock they come off
+  the bus. A data line fill costs 19.2 clocks on the bus where SGIIndy_20260916
+  spent 20.9.
+* **7,000 ALMs back, and the device is at 81 % from 93 %.** The configuration
+  EEPROM's 2 Kbit and the RAMDAC's control table (1,982 and 1,056 ALMs), then
+  HPC3's whole register file: 6,144 bits of PBUS channel pointers, control
+  groups and configuration that were flip-flops read twice per bus access -
+  3,637 ALMs of it - are two M10Ks now. That headroom is what the next speed
+  change will be spent from.
+* **The beacon is version 14**: a main-memory read's latency split into the
+  bridge's own and the queue's, register 31 at retirement (so the profiler names
+  who called a kernel routine), and every DATA-phase clock attributed to the side
+  that was holding the bus up.
 
 ### Measured
 
-With `scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`. The
-board had slowed down between SGIIndy_20260916's measurement and this one -
-the same build 36 bitstream re-run the same night took 113 s to X and 94.6 s
-for bzip2 (docs/52 §4) - so both columns here are that night:
+`scripts/perfprobe.sh` on a pristine IRIX 5.3 image, bash `time`. Both columns
+are 2026-09-17, six hours apart, with SGIIndy_20260916's build re-run that
+morning as the control - the board's own speed drifts between nights, so a
+release is only ever compared against something measured beside it:
 
-| workload | SGIIndy_20260916 (build 36), re-run | this file (build 38) |
+| workload | build 38, re-run this morning | this file (build 42) |
 |---|---:|---:|
-| launch to the X login screen (11 s polls) | 113 s | **102 s** |
-| bzip2 -9 of /unix | 94.6 s | **85.0 s** |
-| 60 x `/bin/ls /` | 5.09 s | **3.97 s** |
-| `ls -lR /usr/lib/X11` into the Console | 8.18 s | **7.74 s** |
-| dd 10 MB off the raw disk | 4.18 s | **3.96 s** |
-| `xterm -e /bin/true`, warm | 0.47 s | **0.41 s** |
-| perl interpreter loop | 11.2 s | 12.4 s (see below) |
-| clocks per instruction, boot / login | 1.60 / 1.72 | **1.54 / 1.63** |
-| instruction / data cache line fill, clocks on the bus | 20.4 / 20.9 | **18.5 / 20.2** |
+| launch until the boot goes quiet | 103.1 s | **83.1 s** |
+| launch to the X login screen (11 s polls) | 102 s | **79 s** |
+| `us_delay` over the boot capture | 28.8 s | **1.8 s** |
+| dd 10 MB off the raw disk | 3.89 s | **2.60 s** |
+| `ls -lR /usr/lib/X11` into the Console | 8.16 s | **5.87 s** |
+| `xterm -e /bin/true`, cold | 1.12 s | **0.68 s** |
+| bzip2 -9 of /unix | 85.5 s | **84.0 s** |
+| 60 x `/bin/ls /` | 3.88 s | 3.88 s |
+| instruction / data cache line fill, clocks on the bus | 18.5 / 20.2 | 18.5 / **19.2** |
+
+Two numbers went the other way and neither is a slowdown. Clocks per instruction
+in the boot window rose from 1.54 to 1.64 because the twenty seconds of a
+two-instruction cached busy-loop that used to hold the average down are gone.
+Interpreter loops still vary with where their hot pages land in the direct-mapped
+instruction cache - perl 12.0 s against 12.6 s here, and the warm `xterm` 0.41 s
+against 0.62 s, both single runs on paths nothing in this release touches.
 
 ### Tested
 
-Build 38, in the simulator: `make cpuonly` (728 runs, 0 against
-expectation); the R4600 cpu-tests suite 2409 / 0 over 250 tests (iris
-`1be0c05`, adding load and store right-behind-a-load tests in every cache
-state, with evictions and TLB walks); tb_ddr3 at sub-burst sizes 4 and 3 with
-line writes read back and the latency counters checked against the bridge
-model; tb_ramarb at latencies 1 and 60; tb_linecache, tb_fetcharb and the new
-tb_eeprom. The EEPROM and RAMDAC rewrites were run A/B against the old models
-(5.36 M and 1.03 M clocks, no difference). On the board, this bitstream: the
-suite as the PROM **2415 / 0** over 255 tests; `diskcheck` PASS; a full
-perfprobe run with no display line-cache miss in any window and the desktop
-intact after every workload; no SCSI notice in either boot's SYSLOG. Build 37
-(this minus the line write, the instruction-fill tag and the mux change) passed
-the same board tests.
+In the simulator: `make cpuonly` (728 runs, 0 against expectation); the R4600
+cpu-tests suite 2409 / 0 over 250 tests; `run-scsi` (the PROM booting with a disk
+attached), `run-scsiwr`, `run-dma` and `run-cdrom`; tb_ddr3, tb_ramarb,
+tb_linecache, tb_fetcharb, tb_eeprom, and the new tb_hpc3 - a shadow of the HPC3
+spec's address map that the flip-flop register file and the M10K one answer
+identically, 27,108 checks each.
 
-Perl-like interpreter loops still vary from run to run with where their hot
-pages land in the direct-mapped instruction cache: the re-run build 36's
-window had half the instruction fills of every other run that night.
+On the board, this bitstream: the suite as the PROM **2415 / 0** over 255 tests;
+`diskcheck` PASS; a full perfprobe run with no display line-cache miss in any
+window and the desktop intact after every workload; no SCSI notice in either
+boot's SYSLOG; and a `diskstress.sh` session - sixteen synced copies of /unix
+while directories are read underneath, then the whole image compared with the
+pristine one block by block - with no block of any file changed that nothing
+wrote. Builds 39, 40 and 41 each passed the same board tests as they landed.
 
 ## SGIIndy_20260916 — twice the speed, a CPU checked against real Indys, the MiSTer's clock
 
