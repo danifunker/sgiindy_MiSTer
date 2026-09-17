@@ -2025,7 +2025,8 @@ always @(posedge clk) begin
 end
 
 // ... advance counter on falling edge
-// SGI: the last MESSAGE OUT byte, for the $display below. Nothing acts on it.
+// SGI: the last MESSAGE OUT byte. ABORT and BUS DEVICE RESET end the
+// connection; see the PHASE_MSG_OUT arm.
 reg [7:0] msg_byte;
 
 // SGI: did the initiator send more than an IDENTIFY?
@@ -2056,14 +2057,23 @@ reg [7:0] msg_byte;
 // that carried only messages is released, because the initiator on this bus
 // has no way to release it.
 //
-// 2^17 clocks is around 2.6 ms at 50 MHz. It has to be long enough that an
-// initiator which IS sending a command is never cut off - IRIX's driver has
-// the CDB programmed before it starts the connection and delivers it in
-// microseconds - and short enough to be invisible next to the PROM's own
-// timeout, which is what this replaces. Anything in the tens of microseconds
-// to low milliseconds satisfies both by orders of magnitude.
-reg [16:0] cmd_wait;
-wire       cmd_timeout = cmd_wait[16];
+// 2^22 clocks is around 84 ms at 50 MHz. IT WAS 2^17, 2.6 ms, and that was
+// sized for a Select-and-Transfer, whose CDB follows within microseconds - and
+// for a PROM that, while wd33c93.sv's polled TRANSFER INFO was broken, never
+// got as far as a CDB. With TRANSFER INFO working, a target that does not
+// answer SDTR is driven the way IRIX's _sync_setup (and the PROM's copy of it)
+// means: the message goes out, the driver waits `wait_scintr(2000)` - two
+// milliseconds of us_delay - marks the target asynchronous, and only then
+// sends a polled INQUIRY in the same connection. On the board that gap is
+// ~105,000-115,000 clocks, and a clock tick inside it pushes it past 131,072:
+// the target left the bus in the middle of the INQUIRY and build 39 printed
+// "SYNC negotiation error, resetting bus" (docs/53). The simulator's us_delay
+// is calibrated against simulated time and waits ~28,000 clocks, which is why
+// it never showed. A real disk has no such timeout at all; this one only has
+// to free a bus a CDB-length disagreement left behind, and 84 ms is still
+// three orders of magnitude inside the drivers' command timeouts.
+reg [22:0] cmd_wait;
+wire       cmd_timeout = cmd_wait[22];
 always @(posedge clk) begin
 	// Any byte arriving puts this back to zero, so it times the gap SINCE the
 	// last CDB byte, not just the wait for the first one. It used to be
@@ -2076,8 +2086,8 @@ always @(posedge clk) begin
 	// fails the one command instead of the whole bus. A real initiator
 	// delivers CDB bytes microseconds apart, three orders of magnitude
 	// inside this bound.
-	if(rst || (phase != PHASE_CMD_IN) || stb_adv) cmd_wait <= 17'd0;
-	else if(!cmd_timeout) cmd_wait <= cmd_wait + 17'd1;
+	if(rst || (phase != PHASE_CMD_IN) || stb_adv) cmd_wait <= 23'd0;
+	else if(!cmd_timeout) cmd_wait <= cmd_wait + 23'd1;
 end
 
 reg msg_extra;
@@ -2955,14 +2965,24 @@ always @(posedge clk) begin
 			// = (phase != PHASE_IDLE)` is driven by the target alone, and
 			// wd33c93.sv only reads it - so without that timeout a PROM with
 			// no CDB to send leaves the target holding BSY forever.
-			if(stb_adv && !atn) phase <= PHASE_CMD_IN;
+			//
+			// ABORT (0x06) AND BUS DEVICE RESET (0x0C) END THE CONNECTION, as
+			// on a real target: the drivers' command abort (wd93abort, and the
+			// PROM's at 0x9fc1c5f0) selects with ATN, sends IDENTIFY + ABORT,
+			// waits 50 ms for the disconnect and resets the bus if the target
+			// still holds BSY. Until the COMMAND-phase timeout above grew from
+			// 2.6 ms to 84 ms, that timeout had always freed the bus first.
+			if(stb_adv && !atn)
+				phase <= (msg_byte == 8'h06 || msg_byte == 8'h0C) ? PHASE_IDLE : PHASE_CMD_IN;
 		end
 
 		else if(phase == PHASE_CMD_IN) begin
 			// NOBODY IS SENDING A COMMAND (OR THE REST OF ONE): LET THE BUS
 			// GO. Two ways here: a connection that opened with MESSAGE OUT
-			// and no CDB behind it (the IP24 PROM's synchronous-transfer
-			// negotiation), and an initiator that stopped mid-CDB because its
+			// and no CDB behind it (what the IP24 PROM's synchronous-transfer
+			// negotiation looked like while wd33c93.sv's TRANSFER INFO was
+			// broken - docs/53 - and any driver that gives up after a
+			// message), and an initiator that stopped mid-CDB because its
 			// length decode disagrees with the one above (docs/29's vendor
 			// 0xc9). A real initiator ends the first itself and never causes
 			// the second; this bus gives it no way to end anything, so the
