@@ -20,9 +20,12 @@ entity cpu is
       -- remains enabled for mapped data accesses.
       INSTR_KSEG_ONLY       : boolean := false;
       -- SGI: let a load leave execute without freezing it for a clock when the
-      -- instruction behind it neither reads the loaded register nor touches
-      -- memory. See loadMayRun.
+      -- instruction behind it does not read the loaded register. See loadMayRun.
       LOAD_NO_STALL         : boolean := true;
+      -- SGI: ...including when that instruction is itself an integer load or
+      -- store (build 37). False keeps build 33-36's rule: never behind a load
+      -- or store. See loadMayRun and cpu_datacache.vhd's q_addr.
+      LOAD_NO_STALL_MEM     : boolean := true;
       -- Build the pre-event execution trace.
       --
       -- The trace is a diagnostic, and it is not free. debug_trace_bus is 896
@@ -935,6 +938,7 @@ architecture arch of cpu is
    signal executeIgnoreNext            : std_logic := '0';
    signal executeStallFromMEM          : std_logic := '0';
    signal loadMayRun                   : std_logic;         -- SGI: LOAD_NO_STALL
+   signal loadNextMayRun               : std_logic;         -- SGI: LOAD_NO_STALL(_MEM)
    signal executeLoadNoStall           : std_logic := '0';  -- SGI: LOAD_NO_STALL
    signal resultWriteEnable            : std_logic := '0';
    signal executeBranchdelaySlot       : std_logic := '0';
@@ -3630,11 +3634,20 @@ begin
    -- opcodeCacheMuxed is that next instruction: it is what decode latches on
    -- the same stall = 0 clock that moves this load into execute. Its rs and rt
    -- fields are compared raw - wherever a format uses them for something
-   -- else the answer is only more conservative. It must also not be a memory
-   -- instruction (primary opcode 0x20-0x3F, and LDL/LDR at 0x1A/0x1B), which
-   -- keeps the data cache serving one access at a time exactly as before:
-   -- nothing behind the load reaches stage 4 until the load is done there.
-   -- CACHE (0x2F) is excluded by the same rule.
+   -- else the answer is only more conservative.
+   --
+   -- IT MAY BE AN INTEGER LOAD OR STORE since build 37 (LOAD_NO_STALL_MEM):
+   -- LB/LH/LWL/LW/LBU/LHU/LWR/LWU (0x20-0x27), LD (0x37), LDL/LDR (0x1A/1B),
+   -- SB/SH/SWL/SW/SDL/SDR/SWR (0x28-0x2E) and SD (0x3F). Over IRIX's kernel
+   -- text 30.5 % of loads are followed by a load that does not name the loaded
+   -- register - 7.6 % of all instructions, each a clock of execute held until
+   -- then - against 4.3 % by such a store. The data cache still serves one
+   -- access at a time - nothing behind the load reaches stage 4 until the load
+   -- is done there - but the second access's address is on the data RAM while
+   -- the first is answered, so a read is only done in IDLE when the RAM's
+   -- output is its own word (cpu_datacache.vhd, q_addr), and waits a clock in
+   -- READWAIT when it is not. Not CACHE (0x2F), the LL/SC family, or the
+   -- coprocessor loads and stores (0x30-0x36, 0x38-0x3E).
    --
    -- What a load in stage 4 still needs once execute has moved on:
    -- * forwarding: the instruction then in decode is the one after next, so
@@ -3649,9 +3662,19 @@ begin
    -- Not for LWC1/LDC1 (the FPU register is not forwarded by this path), a
    -- mini-TLB miss (TLB_dataStall takes the stalled path back), or a load
    -- that faults (EXEExceptionMem).
+   loadNextMayRun <= '1' when (opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101") else
+                     '0' when (not LOAD_NO_STALL_MEM) else
+                     '1' when (opcodeCacheMuxed(31 downto 27) = "01101") else                      -- LDL, LDR
+                     '1' when (opcodeCacheMuxed(31 downto 29) = "100") else                        -- 0x20-0x27
+                     '1' when (opcodeCacheMuxed(31 downto 29) = "101" and
+                               opcodeCacheMuxed(28 downto 26) /= "111") else                     -- 0x28-0x2E
+                     '1' when (opcodeCacheMuxed(31 downto 26) = "110111" or
+                               opcodeCacheMuxed(31 downto 26) = "111111") else                   -- LD, SD
+                     '0';
+
    loadMayRun <= '1' when (LOAD_NO_STALL and
                            decodeCOP1ReadEnable = '0' and
-                           opcodeCacheMuxed(31) = '0' and opcodeCacheMuxed(30 downto 27) /= "1101" and
+                           loadNextMayRun = '1' and
                            decSource1 /= decodeTarget and decSource2 /= decodeTarget) else
                  '0';
 
@@ -3951,7 +3974,13 @@ begin
                if (executeStallFromMEM = '1') then               
                   if (executeMemReadEnable = '1' and executeCOP1ReadEnable = '0') then
                      if (executeMemUseCacheEffective = '1') then
-                        if (datacache_readdone = '1') then
+                        -- SGI: its OWN read, done in the clock stage 4 takes it
+                        -- (datacache_readena). A read finishing in READWAIT or
+                        -- at the end of a fill belongs to the load AHEAD of this
+                        -- one - a load that did not hold execute (LOAD_NO_STALL
+                        -- _MEM) - and releasing on it ran the instruction behind
+                        -- this load before its value existed.
+                        if (datacache_readdone = '1' and datacache_readena = '1') then
                            stall3 <= '0';
                         end if;
                      end if;
