@@ -120,6 +120,11 @@ def main():
         for lo, hi in IDLE:
             if lo <= pc < hi:
                 return "idle", "(idle)"
+        # The PROM (kseg1 0xBFC..., and 0x9FC... where it runs cached) is not
+        # in /unix's symbol table: without this its time goes to the last
+        # kernel symbol below it (qt_dqrele).
+        if pc >= 0xBFC00000 or 0x9FC00000 <= pc < 0xA0000000:
+            return "kernel", "(PROM)"
         if pc >= 0x80000000:
             i = bisect.bisect_right(kaddr, pc) - 1
             return "kernel", (kname[i] if i >= 0 else "?k")
@@ -207,7 +212,8 @@ def main():
             ra = (w40 >> 32) & 0xFFFFFFFF
             rc, rfn = where(ra)
             i = bisect.bisect_right(kaddr, ra) - 1
-            off_s = ("+0x%x" % (ra - kaddr[i])) if (rc == "kernel" and i >= 0) else ""
+            off_s = ("+0x%x" % (ra - kaddr[i])) if (rc == "kernel" and i >= 0
+                                                    and not rfn.startswith("(")) else ""
             callers[fn]["%s%s" % (rfn, off_s)] += 1
         print("\n  callers of the top kernel places (register 31 beside the PC, beacon ver 13)")
         kranked = [(fn, hc) for (c, fn), hc in ranked if c == "kernel"][:a.top // 3 or 1]
