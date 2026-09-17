@@ -16,9 +16,10 @@
 # 12-bit double-buffered window, which is the colour DDAs, the dither and the
 # blend. Between them they cover the whole of what docs/55 added.
 #
-# Each saver runs in the background and is killed by its own shell job number,
-# so nothing is left holding the screen. The grabs land in
-# tests/out/hw/saver-TAG/ next to a log.
+# Each saver is started by a guest shell that also kills it after a fixed
+# time, because a saver that grabs the screen and the keyboard cannot be
+# stopped by typing at it. The grabs land in tests/out/hw/saver-TAG/ next to a
+# log.
 #
 #   bash scripts/saverprobe.sh --tag b43 --fresh /media/fat/games/SGIIndy/SGIIndy53-pristine.img
 #   bash scripts/saverprobe.sh --tag b43 --no-boot --only ep,bongo
@@ -109,20 +110,23 @@ if [ "$BOOT" = 1 ]; then
 fi
 
 # name, the command line typed into the Console, seconds between grabs.
-# The saver goes into the background and is killed by job number, so the
-# screen comes back whatever the saver did with it.
 saver() {
     local name="$1" cmd="$2" gap="${3:-9}"
     if ! wanted "$name"; then say "skipping $name"; return; fi
-    say "saver $name: $cmd"
-    ws "text:$cmd &" "sleep:0.3" "kbdRaw:28"
+    local live=$(( gap * 3 + 6 ))
+    say "saver $name (${live}s): $cmd"
+    # THE SAVER KILLS ITSELF. A saver that grabs the screen and the keyboard
+    # cannot be stopped by typing at it, and haven does exactly that - so the
+    # guest gets a shell that starts it, waits, and kills it. The escaping is
+    # deliberate: $! and the redirection have to reach the guest's shell, not
+    # be eaten by this one.
+    ws "text:( $cmd >/dev/null 2>&1 & SP=\$!; sleep $live; kill \$SP ) &"        "sleep:0.3" "kbdRaw:28"
     local i
     for i in 1 2 3; do
         sleep "$gap"
         bash scripts/grab.sh "$OUTD/$name-$i.png" | tee -a "$LOG"
     done
-    ws "text:kill %1" "sleep:0.3" "kbdRaw:28"
-    sleep 4
+    sleep 12                                            # let it die by itself
     ws "kbdRaw:1" "sleep:0.3"                           # Escape, if it grabbed
     sleep 3
     bash scripts/grab.sh "$OUTD/$name-after.png" >/dev/null 2>&1
