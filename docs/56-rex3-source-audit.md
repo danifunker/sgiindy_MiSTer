@@ -6,9 +6,9 @@ the right one - "the implementation is just ENTIRELY WRONG. It's drawing
 things it shouldn't be" - so before any more code, every source there is
 was mined for how Newport really behaves, and compared with the core.
 
-**Status of this document: the audit is in progress.** Section 3 holds what
-has been verified so far; the per-area findings (section 4) and the
-implementation plan (section 5) are added as each part is checked.
+**Status: complete, 2026-09-17.** Section 3 holds what
+was verified first, section 4 the six audited areas, and section 5 the
+implementation plan built from them.
 
 ## 1. The sources, most authoritative first
 
@@ -376,6 +376,124 @@ X's own mode table (Xsgi .sdata, via ioctl 0x520e) - DIDs 0-10 carry an
 17-20, 6 8-bit RGB, 7 12-bit CI, 8 12-bit RGB, 9 24-bit RGB map 0, 10 24-bit
 RGB map 1; DID 11 is 8-bit CI page 21 with gamma bypass (the desktop).
 
+### 4.6 What the guest software actually uses
+
+A dataflow census of every load and store through each binary's REX3
+pointer (libGLcore `gc->[0x6e74]`, IRIS GL `gc->[0x1f0]`, Xsgi's screen
+private, the kernel's `info->[0x60]`): PROM 592 accesses in 26 functions,
+kernel 984 in 36, Xsgi 1,188 in 60, IRIS GL 977 in 149, OpenGL 1,241 in 190.
+It reproduces the raw doubleword scan exactly (43 of 43, 172 of 172).
+
+* **215 doubleword stores, all in GL; no doubleword LOADS anywhere; none at
+  0x00-0x3C.** IRIS GL's bias for window coordinates is 5472.0 and the
+  kernel sets a GL window's XYWIN to origin + 0xAA0 on both axes, so the
+  chip's truncation of the float's top bits is relied on. GL's clear
+  (`gl_czclear`) writes nothing but the GL-format coordinates - with 32-bit
+  stores - so 4.1's mask defect blanks GL on its own.
+* **The X server writes WRMASK in the physical layout too**: `rex3RGBMask`
+  turns a GC planemask into interleaved plane bits at 4/8/12/24 bpp. The
+  WRMASK permutation of 4.3 fixes X's partial planemasks as well as GL's
+  colour masks. (IRIS carries a commented-out hack forcing 0x6DB6DB to
+  0xFFFFFF - it met these masks and papered over them.)
+* **SWAPENDIAN is used by OpenGL (re-checked)**: `__glNptPickTextureProcs`
+  ORs 0xB00 into DRAWMODE1 (32-bit host depth plus SWAPENDIAN) for ordinary
+  RGBA texture spans, and the DrawPixels fast paths set it from a flag.
+  np_rex3 ignores the bit, so those spans swap R with A and G with B.
+* **LSREPEAT**: every writer (IRIS GL, OpenGL, X) programs factor - 1; the
+  core, like IRIS, reloads REPEAT - 1, so a stipple factor n draws n pixels
+  for the first bit and n - 1 after. Reload REPEAT.
+* **YSTRIDE** is used by IRIS GL's image writes (conditionally) - built,
+  untested. **DCB devices 10, 11 and 12** are programmed by the PROM and
+  kernel (device 10 is read back at init; 11 by `initClock`; 12 is the
+  flat-panel I2C) - the core answers 0 for 8-15.
+* **Unused by any binary**: YFLIP, XYOFFSET, SKIPFIRST, LSADVLAST,
+  BACKBLEND, BLENDALPHA, PLANES 0/2/3/7, STALL0/1, DCBDATA1, SLOPERED1,
+  ENDATAPACK, doubleword loads, GO reads of anything but HOSTRW0.
+* **Used only by GL, never by X** - which is why the board shows a working
+  desktop and broken GL: the doubleword pairs, the GL-format coordinates,
+  float colours and slopes, SHADE, F_LINE, A_LINE with the endpoint filter,
+  LRONLY, CICLAMP, blending, the alpha test, ALPHAHOST, RWDOUBLE,
+  SWAPENDIAN, YSTRIDE, STEPZ, LSREPEAT > 0, LSSAVE/LSRESTORE, per-span
+  ZPATTERN software-z, CID clipping with a GL window's XYWIN, and every
+  DBLSRC-dependent read, blend and logic op.
+
 ## 5. Implementation plan
 
-(after section 4)
+**Principles.** Correctness before speed, and GL-blocking first. One change
+per build ([one-change-per-build]): a fit is the last tested build plus one
+coherent change, then a board run, then the results, before the next RTL
+edit - with one exception proposed below where three defects must all be
+fixed before anything can be observed. Every change carries its own test,
+and where IRIS is wrong the bench's oracle changes with the RTL, marked as
+a deliberate divergence and pinned by a hand-computed spec vector (the
+bench already shared one transcription slip with the RTL, 3.2). Commit and
+push after every gate.
+
+**Phase 0 - test infrastructure (no fit).**
+* A newport-level bench: drive `newport.sv`'s GIO slave with the CPU's real
+  transaction shapes (32- and 64-bit stores, GO aliases, loads during a
+  running primitive) and the VDMA port with start bytes; check registers
+  and the frame buffer. No bench reaches newport.sv's bus handling today.
+* Bench cases the audit showed missing: GL-format coordinate writes as
+  floats, XENDF1, SETUP then GO, STEPZ, LSSAVE/LSRESTORE, non-zero XYMOVE,
+  LENGTH32 lines, BRESROUND, multi-GO text; and IRIS's own `rex3_tests.rs`
+  vectors the core's benches never ported (SCR2SCR with XYMOVE, I_LINE in
+  all octants against an independent Bresenham, stipple continuation,
+  SKIPLAST polylines).
+* Recommended, optional: capture the REX3 register stream (with widths)
+  from IRIS running ep, bongo and buttonfly and replay it through
+  newport.sv in Verilator against IRIS's frame buffer - the only gate that
+  exercises GL's real command mix. Needs a small logging change in IRIS, on
+  a branch there.
+
+**Phase 1 - make GL draw.**
+
+| build | change | why | gate |
+|---|---|---|---|
+| 44 | Display window: DE from VIS_LN, cropped to the desktop's 1280 columns (frame buffer 8-1287) | Every screen: the scaler drops a column every 34 pixels today, and every screenshot used to judge the GL work passes through it (3.6, 4.5) | textprobe: zero dropped columns; PROM console and X intact |
+| 45 | GL's register interface: doubleword stores split into two register writes with one GO after both; GL-format coordinates (0x138-0x144) masked 0x007FFF80 and 0x14C decoded as XENDF1; a write to SETUP runs the setup without drawing | Each alone blanks GL (3.1, 4.1, 4.2); none can be seen working until all three are in | new bus bench + float/SETUP bench cases; saverprobe: ep, bongo, buttonfly draw; regression |
+| 46 | Host read path: graphics-class reads wait until earlier writes and GOs have taken effect (not STATUS/USER_STATUS/CONFIG), GOs queued rather than merged; packed reads left-justified at a row's end | X's GetImage and GL read-back return stale words (4.4) | bus bench read-while-busy; `xwd -root` and a GL ReadPixels round trip on the board |
+| 47 | VDMA start byte: ignore the GIO address's low three bits at REX3 | PutImage/GetImage of a buffer at 4-7 mod 8 draw nothing / read zeros (4.4) | bus bench; beacon `nd_drops` stays 0 under X image traffic |
+
+**Phase 2 - make GL look right.**
+
+| build | change | why |
+|---|---|---|
+| 48 | BLENDALPHA gates the alpha channel only; host alpha from the host field below 32 bpp | every GL alpha blend is additive today (4.3) |
+| 49 | WRMASK permuted from the physical to the logical layout when a primitive starts (RGB at every depth, the overlay's nibble buffers) | GL colour masks and X planemasks write the wrong planes (4.3, 4.6) |
+| 50 | SWAPENDIAN on host data (per field) | OpenGL texture spans swap channels (4.6) |
+| 51 | COLORVRAM formatting at 8/4-bit RGB and for the overlay; 12-bit DBLSRC reads | wrong clear colours; blends and copies in a 12-bit back buffer read the front (3.2, 4.3) |
+| 52 | Rounding with dither off; CI dither and CI rounding; CICLAMP's 12-bit bit | one-step colour errors, banded CI shading (4.3) |
+| 53 | Line stipple and patterns: LSREPEAT reload, the pattern registers as the live iterators (a write restarts, DOSETUP and row ends do not), LSSAVE/LSRESTORE | GL stipple, wide lines (4.2, 4.6) |
+| 54 | Lines: LENGTH32 segments step after their 32nd pixel, BRESROUND, the Rev-1 F_LINE setup (no E-test), STEPZ | GL depth lines, line symmetry, textured z-fail (4.2) |
+| 55 | Vertical sector clip (1344 x 1024); the screen masks under XYMOVE after a board test | off-screen drawing wraps onto the screen (4.1) |
+| 56 | Anti-aliased lines: A_LINE coverage from AWEIGHT, blended | GL smooth lines (4.2, 4.3) |
+
+**Phase 3 - display and bus fidelity.** Cursor X offset taken from the
+timing table (after one board check of the 10-pixel error); TOPSCAN applied
+to the display rather than to drawing; the BT445 gamma table with IRIX's
+register map, the XMAP9 RGB maps in CMAP and the gamma-bypass bit; XMAP9
+overlay/underlay modes 1, 6, 7; the Display Control Bus's BACKBUSY, the
+absent-device timeout, an immediate DCBRESET (the `hinv` Presenter false
+positive) and answers for devices 10-12; DCB writes no longer queued behind
+draws; the retrace interrupt's XMAP9 write measured with a beacon
+instrument before deciding anything about the tear; VERSION, CONFIG's reset
+value and read-back widths.
+
+**Phase 4 - speed.** Only once the picture is right: pipelined
+read-modify-write for spans (read ahead while writing - ~25 clocks a pixel
+today against the chip's 50-100 Mpix/s), 12-bit fills without a per-pixel
+read, and a real 32-entry graphics FIFO so the CPU is not held for a whole
+primitive. The display's ~27 Hz refresh is its own later project.
+
+**Budget.** 35,481 ALMs used of 41,910 (84.7 %), core slack +0.506 ns. Phases
+1-3 are mostly decode and small datapath changes - estimated 1,500-2,500
+ALMs and one or two M10K for the gamma table; the timing margin, not area,
+is the constraint, and every build checks it (`tests/out/hw/worstpaths.tcl`
+finds the offender from a finished compile without a refit).
+
+**Settled by evidence rather than by an emulator** (no real Indy here): the
+BLENDALPHA reading (spec text plus both SGI libraries), LSREPEAT (every
+writer), the XSTARTF truncation (spec, IRIS, MAME, the kernel's 0xAA0
+bias). **Still needing a board experiment**: XYMOVE in the screen masks,
+the cursor offset, where the retrace interrupt's XMAP9 write lands.
