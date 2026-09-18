@@ -5,42 +5,35 @@
 //  under the terms of the GNU General Public License as published by the Free
 //  Software Foundation; either version 3 of the License, or (at your option)
 //  any later version. See NOTICE.md - the licence is GPL-3.0 because the
-//  vendored R4300i is.
+//  vendored CPU (the Killer Instinct core's R4600, from N64's R4300i) is.
 //
-//  WHAT THIS IS. Until now this file was the stock MiSTer template with a
-//  `mycore` noise generator in it, and every claim this project makes about
-//  the machine comes from Verilator rather than from hardware. This is the
-//  wiring that makes a fit possible: the chipset, its memory, its console,
-//  its disks and its screen, on a DE10-Nano.
-//
-//  IT HAS BEEN THROUGH QUARTUS AND IT MEETS TIMING. The whole flow completes
-//  on a 5CSEBA6U23I7 - 73% of the ALMs, positive slack on every clock - and
-//  `scripts/build.sh` reproduces it. What that does NOT prove is that the
-//  machine runs: a fit checks wiring, not behaviour, and everything this
-//  project claims about the behaviour still comes from Verilator. Treat a
-//  hardware run as a bring-up exercise and read docs/reference/mister-integration.md
-//  first; it lists what is known to be missing rather than leaving it to be
-//  discovered. `scripts/deploy.sh` puts a build on a board.
+//  WHAT THIS IS. The MiSTer wiring around the machine in rtl/sgi/sgi_indy.sv:
+//  its memory, its PROM, its disks, its keyboard and mouse, its clock and its
+//  screen, on a DE10-Nano. docs/reference/mister-integration.md describes it
+//  in full; reports/summary.md has the current fit (tools/fit_report.py,
+//  written by scripts/build.sh after every compile).
 //
 //  THE FOUR THINGS WORTH KNOWING BEFORE READING THE CODE:
 //
-//  1. EVERYTHING IS IN DDR3. 64 MB of Indy memory and 16 MB of Newport frame
-//     buffer against 688 KB of M10K, most of which the CPU's caches already
-//     have. ddr3_mux.sv carves the 256 MB window MiSTer gives a core.
+//  1. EVERYTHING IS IN DDR3. Up to 64 MB of Indy memory and 16 MB of Newport
+//     frame buffer, against 688 KB of M10K that the CPU's caches and the
+//     graphics already use most of. ddr3_mux.sv carves the 256 MB window
+//     MiSTer gives a core. The SDRAM pins are not used.
 //  2. THE PROM COMES OFF THE SD CARD. It is SGI firmware; it is not in the
 //     bitstream. The framework loads `boot.rom` out of the core's directory
 //     by itself at startup; the OSD's "Load PROM" does the same job by hand.
 //     Either way ioctl writes it into DDR3 and the core is held in reset
 //     until the download finishes.
-//  3. THE VIDEO IS CORRECT AND THE REFRESH IS LOW. The raster is exactly the
-//     one the PROM's timing table describes - 1318 x 1065, asserted by
-//     tests/run-newport.sh - but VC2 derives its pixel clock by dividing the
-//     core clock, so a table written for 107.5 MHz comes out at 50 and the
-//     frame rate is about 28 Hz. That is a refresh rate, not a defect; 60 Hz
-//     needs a second clock domain and not a faster core. See the doc.
-//  4. THE SERIAL CONSOLE IS ON THE USER I/O UART. With no graphics board
-//     fitted the PROM talks to a terminal, and that is still the most useful
-//     way to drive this machine.
+//  3. THE VIDEO IS CORRECT AND THE REFRESH IS LOW. VC2 runs the timing table
+//     the PROM and IRIX program; the display enable is its visible window
+//     cropped to the desktop's 1280 columns, 1280 x 1065 at the pins
+//     (tests/run-newport.sh). VC2 derives its pixel clock by dividing the core
+//     clock, so a table written for 107.5 MHz comes out at 50 and the frame
+//     rate is about 28 Hz; the MiSTer scaler converts it to the HDMI mode.
+//     60 Hz needs a second clock domain, not a faster core.
+//  4. WITH NO GRAPHICS BOARD THE CONSOLE IS SERIAL. OSD "Graphics board: None"
+//     makes the PROM and IRIX use the SCC's serial port, which is wired to the
+//     MiSTer's UART pins.
 //============================================================================
 
 module emu
@@ -66,7 +59,7 @@ assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
 // No audio path. HAL2 answers its revision register and nothing else - this
-// core reports an audio processor rather than having one. docs/FEATURES_EVALUATE.md
+// core reports an audio processor rather than having one.
 assign AUDIO_S = 0;
 assign AUDIO_L = 0;
 assign AUDIO_R = 0;
@@ -310,7 +303,7 @@ wire [31:0] mem_mb = (mem_sel == 2'd1) ? 32'd32
 // 1024 because each cache answers reset by walking 512 tag entries one per
 // clock and neither of them looks at the CPU's own reset - a first cached
 // access landing inside that walk is not latched, and the pipeline wedges
-// 4096 clocks later. That is written up in docs/08-resume-prompt.md; this
+// 4096 clocks later (found during bring-up; docs/history.md, note 08). This
 // counter is the top level's half of the same rule.
 // INDEX 0 IS BOTH WAYS IN. The CONF_STR entry above is `FS0`, so a hand-picked
 // file arrives as index 0 - and MiSTer's framework loads `boot.rom` from the
