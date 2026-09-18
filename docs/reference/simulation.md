@@ -181,7 +181,7 @@ Some of these need a word on how to read them:
   nothing to name. Read the cycle numbers as well as the addresses:
   consecutive cycles on one PC are a stall, a repeating span with no gaps is a
   spin, and the same PC after a long gap is a machine that waited. See
-  [cpu-validation.md](cpu-validation.md#a-tlb-refill-taken-with-exl-set--the-bug-that-wedged-the-irix-kernel)
+  [cpu-validation.md](cpu-validation.md#a-tlb-refill-taken-with-exl-set)
   for the bug sixty-four PCs named in one run.
 - **`--pc-user` re-presents an instruction on every pipeline replay**, because
   it is the decode tap; two configurations replay in different places, so a

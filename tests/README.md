@@ -50,7 +50,7 @@ an EFS file system, and the kernel ran far enough to bring up its own console
 point: this is the only test that runs guest code past the PROM, and the PROM
 runs entirely in KSEG0/KSEG1 and never takes a TLB exception, so every other
 test here passed against a CPU that looped the kernel for ever on its first
-nested refill ([cpu-validation.md](../docs/reference/cpu-validation.md#a-tlb-refill-taken-with-exl-set--the-bug-that-wedged-the-irix-kernel)).
+nested refill ([cpu-validation.md](../docs/reference/cpu-validation.md#a-tlb-refill-taken-with-exl-set)).
 
 The image is two gigabytes of installed IRIX and cannot be in the repository.
 Set `IRIXDISK` to a raw disk image, or `IRIXCHD` to a MAME CHD (by default
