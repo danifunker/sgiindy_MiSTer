@@ -274,6 +274,73 @@ the 4+4 overlay; RGBA formats (video only); a blended SCR2SCR does not
 replicate; cross-depth views of the same planes scramble colour (the price
 of the logical layout). Colour compare in CI mode is missing and unused.
 
+### 4.4 The bus, host pixel I/O, the Display Control Bus and VDMA
+
+**The doubleword rule, specified.** The Indy really does send 64-bit
+transfers to Newport: the kernel sets the MC's GRX_SIZE_64 through
+`setgioconfig` in `newportProbe` and CONFIG.BUSWIDTH=1
+(`rex3_config_default` = 0x230C2), and the spec's own example is "A
+monochrome shape ... can be written using 64b writes as XYENDI#XYSTARTI"
+(§3.5.3.3). It is worse than a lost word: newport.sv's register offset
+keeps address bit 11, so the GO fires with the EVEN write and the odd
+register stale - XYSTARTI+XYENDI|GO draws to the old end point. Correct
+behaviour for a store with bytes in both words: R(A&~7) <- data[63:32],
+then R((A&~7)+4) <- data[31:0], then one GO if bit 11 was set, nothing in
+between (no GO after the first half, no VDMA beat between the halves), the
+CPU acknowledged after the second. Word and narrower stores unchanged.
+Doubleword loads should return {even, odd} with one GO after both, but no
+software issues one and the bus does not carry the load size today.
+
+**Reads are not ordered behind the drawing engine - BREAKS X's GetImage and
+GL's read-back.** On the chip a read is a GFIFO entry (GF_READ) and stalls
+the bus until its data exists; np_rex3 answers every read at once ("A READ
+IS NEVER HELD"). Xsgi's PIO GetImage primes HOSTRW0|GO, waits for GFXBUSY
+once, then loops `lw HOSTRW0|GO` with no wait between words (Xsgi
+0x100fe484-6fc and two more); IRIS GL's `_fb_to_mem32` and libGLcore's
+CopyPixels do the same. In the core every word after the first is the
+previous one, and back-to-back GOs merge into the single `go_pending` bit.
+Correct: every read except STATUS, USER_STATUS and CONFIG waits until all
+earlier writes and GOs have taken effect (IRIS's `busy_or_val` does this);
+DCB-class reads wait for the DCB side only. This also removes a latent
+hang (a DCB read issued while a DCB write runs loses its start pulse).
+
+**VDMA drops every beat for a buffer at 4-7 mod 8 (re-checked).**
+`Ng1PixelDma` builds the GIO address as (phys & ~7) | (memaddr & 7)
+(/unix 0x88190440-4c) - the start byte; np_rex3 keeps bit 2 of it
+(`nd_reg`, line 1642), so such a beat decodes as HOSTRW1 and is dropped:
+PutImage draws nothing, GetImage returns zeros. IRIS masks the low bits
+(mc.rs:575). The beacon's `nd_drops` counts them.
+
+**Packed reads are misaligned at a row's end.** "the leftmost field is the
+first one to be used ... undefined values ... for unused, trailing fields"
+(§3.10): a partial last word must have its pixels at the top. np_rex3 leaves
+them at the bottom with stale bits above; Xsgi keeps the TOP bytes of the
+last word, and the kernel's frame buffer depth probe tests bits 31:24. The
+non-packed read (RWPACKED=0) places its pixel at the bottom too, where the
+packing table puts it in the leftmost field.
+
+**The Display Control Bus never reports busy.** BACKBUSY is hard 0; an
+access to an absent device with an acknowledge enabled should hold
+BACKBUSY until DCBRESET, which must act at once. The kernel's
+`ng1_i2cProbe` polls exactly that for the Presenter flat-panel adapter -
+the core's answer is the `hinv` "Presenter adapter board" false positive
+(docs/48). DCB writes wait behind running draws (on the chip they go
+through their own FIFO); the CRS auto-increment is per transfer for VC2
+where the spec says per byte; DCBDATA1 does not start a transfer.
+
+**Smaller:** SWAPENDIAN on host data is missing (libGLcore sets and clears
+it); VERSION reads 1 where IRIS and MAME answer 3 (the kernel copies it to
+the board info user space sees); CONFIG resets to 0 instead of 0x230C4; the
+µTLB tag uses VPN[31:22] where the spec says [31:21] (IRIX 5.3's 4-byte
+PTEs make it moot); the CPU bus is held for a whole running primitive, so
+interrupts wait behind a long fill (the chip's GFIFO absorbs 32 entries).
+
+**The kernel's context switch round-trips through the core's formats**
+(48 registers, 32-bit only; COLORRED restored under RGBMODE for 12-bit CI,
+XSAVE after XSTART, all four slopes converted back to sign-magnitude). The
+pattern cursors are not in any register, so a context switch loses the
+stipple phase (4.2).
+
 ### 4.5 The display: VC2, XMAP9, CMAP, BT445
 
 **The display enable (re-checked).** The PROM picks the timing table from
