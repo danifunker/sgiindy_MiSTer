@@ -12,7 +12,7 @@
 //  the 32-bit register at `addr+0` is `data[63:32]`, the one at `addr+4` is
 //  `data[31:0]`.
 //
-//  Physical map, as far as it is implemented (docs/02-address-map.md has the
+//  Physical map, as far as it is implemented (docs/reference/address-map.md has the
 //  full IP22/IP24 map; cpu-tests/docs/memory-map.md explains the low alias):
 //
 //    0x00000000-0x0007FFFF  512 KB alias of the bottom of main memory
@@ -71,7 +71,7 @@ module sgi_indy #(
 
     // ---- SCSI block device ----------------------------------------------
     // One hps_io slot per target. On hardware these come from the HPS; in
-    // simulation from sim_blkdevice. Since docs/49 the block cache in
+    // simulation from sim_blkdevice. Since docs/design/scsi-block-cache.md the block cache in
     // sgi_scsi sits behind these: a transaction can be up to eight sectors
     // (scsi_sd_blk_cnt = blocks - 1) streamed through the 13-bit address.
     input  logic  [6:0] scsi_img_mounted,
@@ -110,7 +110,7 @@ module sgi_indy #(
 
     // ---- the MiSTer's clock -----------------------------------------------
     // hps_io's RTC, straight through to sgi_ds1386.sv, which loads its time
-    // registers from it (docs/51). Zero keeps the part's fixed power-on date.
+    // registers from it (docs/design/r4600-accuracy-clock-disk.md). Zero keeps the part's fixed power-on date.
     input  logic [64:0] host_rtc,
 
     // ---- main memory -----------------------------------------------------
@@ -237,7 +237,7 @@ module sgi_indy #(
     output logic [31:0] dbg_exc_bad,
     output logic [31:0] dbg_rpc,
     output logic        dbg_retire,
-    // The CPU performance counters (docs/50), nine beacon words. See the
+    // The CPU performance counters (docs/design/cpu-speed-tlb-icache.md), nine beacon words. See the
     // block that builds them for the layout.
     output logic [63:0] dbg_perf_bcn [11],
     // The instruction cache's access stream (simulator --itrace; the board
@@ -249,7 +249,7 @@ module sgi_indy #(
     // SGI: DDR3 debug beacon words from the SCSI subsystem (docs/28), on to
     // the top's beacon writer. Pure observation.
     output logic [63:0] dbg_scsi_bcn [7],
-    // SGI: the disk-time counters (docs/49), five words from sgi_scsi.
+    // SGI: the disk-time counters (docs/design/scsi-block-cache.md), five words from sgi_scsi.
     output logic [63:0] dbg_scsi_stat [7],
     // The HPC3 SCSI0 DMA channel's live state (docs/29), a separate beacon
     // word - the engine lives in sgi_hpc3, not sgi_scsi.
@@ -258,7 +258,7 @@ module sgi_indy #(
     // reaches the CPU, and what the CPU is doing. Word 0 = INT2 state + the
     // raw SCSI IRQ lines + IP2..6; word 1 = the CPU decode PC and cop0 state.
     output logic [63:0] dbg_int_bcn [2],
-    // VDMA / Newport pixel-DMA diagnostics (docs/33). Word 0 = the MC DMA
+    // VDMA / Newport pixel-DMA diagnostics (docs/design/newport-vdma.md). Word 0 = the MC DMA
     // engine's mode/cause/state/beat count; word 1 = the live descriptor
     // addresses {memadr, gio_adr}; word 2 = REX3's beat counters; word 3 =
     // the display-interpretation word (DID + mode entry in use).
@@ -896,7 +896,7 @@ module sgi_indy #(
         // L1 bit 7 is the graphics board's vertical retrace: REX3's VRINT
         // latch, set per retrace and cleared by the CPU's STATUS read -
         // which is what retires the interrupt. Wiring the raw vblank level
-        // here instead starved the machine (docs/33, build 12).
+        // here instead starved the machine (docs/design/newport-vdma.md, build 12).
         .l0_source ({3'b000, mc_dma_int, 2'b00,
                      scsi_irq | scsi_dma_irq, 1'b0}),
         .l1_source ({np_vblank, 7'h00}),
@@ -920,7 +920,7 @@ module sgi_indy #(
                               9'b0, int2_state_o };
     assign dbg_int_bcn[1] = { dbg_pc, dbg_cop0 };
 
-    // ---- CPU performance counters (docs/50) ------------------------------
+    // ---- CPU performance counters (docs/design/cpu-speed-tlb-icache.md) ------------------------------
     // WHERE THE CLOCKS GO, COUNTED RATHER THAN SAMPLED. tools/misterdeploy/
     // prof.py samples word 10 and says which code is running and whether the
     // pipeline was held; these count every clock and every event, which is
@@ -1021,7 +1021,7 @@ module sgi_indy #(
     // counter; beacon ver 13.
     assign dbg_perf_bcn[10] = { dbg_ra, dbg_rpc };
 
-    // VDMA beacon words (docs/33): the MC engine, the descriptor, and the
+    // VDMA beacon words (docs/design/newport-vdma.md): the MC engine, the descriptor, and the
     // Newport's view of what arrived - enough to say from the board which
     // link of CPU -> MC engine -> REX3 -> interrupt a wedged X is stuck on.
     assign dbg_vdma_bcn[0] = mc_dma_dbg;

@@ -3,7 +3,7 @@
 
 WHY. run-newport.sh checks the raster's SIZE, and a raster can be exactly the
 right size while showing the frame buffer one row too high: build 18b did
-(docs/36 section 5) - the VC2 numbered its lines from 1, frame buffer row 0
+(docs/design/scsi-fit-and-framebuffer-layout.md section 5) - the VC2 numbered its lines from 1, frame buffer row 0
 was never displayed, the bottom screen row was black, and every size check
 passed. This compares the two pictures the simulator can write, --viddump
 (what came out of the pins, one row per raster line) and --fbdump (the store,

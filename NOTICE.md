@@ -39,7 +39,7 @@ carry them.
 - **The `cpu-tests` suite.** It lives in the IRIS project (BSD-3-Clause) and is
   used from there rather than forked; `tests/run-cputest.sh` points at a
   checkout. The R4300 support this core needs was contributed to that copy -
-  see `docs/09-cpu-validation.md`.
+  see `docs/reference/cpu-validation.md`.
 - **Chip specifications, MAME sources and the full PROM disassembly**, kept
   locally under `reference/` and gitignored - 26 MB of derived and
   third-party material that the core does not need to build.

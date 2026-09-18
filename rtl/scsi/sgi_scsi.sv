@@ -3,7 +3,7 @@
 //
 //  Three jobs: decode the two byte-wide ports out of a 64-bit big-endian bus
 //  access, wire the initiator to an array of scsi.v targets, and do the bus
-//  arbitration between them. Since docs/49 a fourth: the block cache between
+//  arbitration between them. Since docs/design/scsi-block-cache.md a fourth: the block cache between
 //  the targets and hps_io (rtl/scsi/scsi_cache.sv, ported from
 //  MacQuadra800_MiSTer), which answers the targets' sector reads from block
 //  RAM, prefetches behind them, accepts their writes at RAM speed and
@@ -119,14 +119,14 @@ module sgi_scsi #(
     input  logic                    sd_buff_wr,
 
     // The OSD's "SCSI cache: Off": every request passes straight through to
-    // hps_io, one sector per transaction, as before docs/49.
+    // hps_io, one sector per transaction, as before docs/design/scsi-block-cache.md.
     input  logic                    cache_bypass,
 
     // SGI: DDR3 debug beacon words (docs/28). [0] bus/HPS live, [1] wd33c93,
     // [2]/[3] target 1 live A/B, [4]/[5] target 6 live A/B, [6] target 1
     // sticky first-stall snapshot. Pure observation.
     output logic [63:0]             dbg_bcn [7],
-    // SGI: the disk-time counters (docs/49), five more beacon words: how many
+    // SGI: the disk-time counters (docs/design/scsi-block-cache.md), five more beacon words: how many
     // HPS transactions, how long the HPS channel and the targets' block ports
     // were busy, how long the SCSI bus was, how many bytes crossed it in DATA
     // phases, and the cache's hits / misses / writes. Counters, not state:
@@ -490,7 +490,7 @@ module sgi_scsi #(
     // encoding predates the per-slot split and the decoder expects one LBA.
     wire [31:0] lba_live = (|sd_rd | |sd_wr) ? p_lba : 32'h0;
 
-    // ---- the disk-time counters (docs/49) ----------------------------------
+    // ---- the disk-time counters (docs/design/scsi-block-cache.md) ----------------------------------
     // Cycle counters are 38 bits and the beacon carries bits [37:6]: one unit
     // is 64 cycles = 1.28 us at 50 MHz, and 2^32 of them is 5,500 s.
     wire hps_busy  = |sd_rd | |sd_wr | |sd_ack;              // an HPS transaction outstanding
@@ -498,7 +498,7 @@ module sgi_scsi #(
     wire data_ph   = bus_bsy && !bus_cd && !bus_msg;         // DATA IN or DATA OUT
     reg  [31:0] st_xact_rd, st_xact_wr, st_data_bytes;
     reg  [37:0] st_hps_cyc, st_eng_cyc, st_bsy_cyc, st_data_cyc;
-    // WHOSE TURN IT IS IN A DATA PHASE (docs/53). With REQ up and no ACK the
+    // WHOSE TURN IT IS IN A DATA PHASE (docs/design/scsi-sync-negotiation.md). With REQ up and no ACK the
     // target has offered a byte, or asked for one, and waits for the
     // initiator - the WD33C93 model, the DMA engine and main memory behind
     // it. With REQ down and no ACK the initiator waits for the target: the

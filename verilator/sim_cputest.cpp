@@ -12,7 +12,7 @@
 //  `rc=` it prints in IRIS-CPUTEST-DONE when there is no test device.
 //
 //  Diagnostics, ported from the DE1 sandbox's ImGui harness because they
-//  earned their keep there (docs/06-simulation.md):
+//  earned their keep there (docs/reference/simulation.md):
 //
 //    --trace          timestamped bus trace with decoded register names
 //    --stuck N        no-forward-progress detector, and what it was polling
@@ -54,9 +54,9 @@ static const uint64_t SCLK_DIV = 4;
 
 // ---- MMIO register names -------------------------------------------------
 //
-// Ported from the sandbox's decode_reg_name table (docs/06-simulation.md); it
+// Ported from the sandbox's decode_reg_name table (docs/reference/simulation.md); it
 // is what makes a bus trace readable. Only the windows this core decodes so
-// far are listed; the rest of the IP24 map is in docs/02-address-map.md.
+// far are listed; the rest of the IP24 map is in docs/reference/address-map.md.
 struct RegName { uint32_t lo, hi; const char *name; };
 
 static const RegName kRegNames[] = {
@@ -149,7 +149,7 @@ struct Options {
     // consecutive repeats in both streams before comparing, and treat the
     // result as a lead rather than as proof.
     std::string pcuser;
-    // --prof FILE: a clock-weighted PC profile (docs/50). Every clock, the
+    // --prof FILE: a clock-weighted PC profile (docs/design/cpu-speed-tlb-icache.md). Every clock, the
     // decode PC is charged one clock - and one stalled clock if the stall
     // vector is non-zero - so a function's share is the wall time it held,
     // stalls included, the way the board's beacon profiler (prof.py) sees
@@ -159,7 +159,7 @@ struct Options {
     // "caller target site count" per edge.
     std::string prof;
     std::vector<uint32_t> prof_callers;
-    // --itrace FILE: the instruction cache's access stream (docs/50), for
+    // --itrace FILE: the instruction cache's access stream (docs/design/cpu-speed-tlb-icache.md), for
     // replaying through other cache geometries offline (tools/icachesim.c).
     // One little-endian uint32 per access - the physical address >> 5, the
     // 32-byte line - with consecutive repeats of a line collapsed, which
@@ -203,7 +203,7 @@ struct Options {
     // board; the serial-console regressions turn it off, because the PROM
     // moves its console to the graphics head as soon as it finds one.
     bool        gfx = true;
-    // The SCSI block cache (docs/49); --scsi-nocache clears it and every
+    // The SCSI block cache (docs/design/scsi-block-cache.md); --scsi-nocache clears it and every
     // block request becomes one HPS transaction, the pre-build-26 path.
     bool        scsi_cache = true;
     // Which cpu_error bits abort the run. See kErrorNames: only the two that
@@ -307,12 +307,12 @@ static void usage()
         "  --pc-user FILE    write every user-mode PC to FILE, one per line and\n"
         "                    nothing else, for diffing two runs against each other\n"
         "  --prof FILE       clock-weighted decode-PC profile at exit: 'pc clocks\n"
-        "                    stalled' per line (docs/50)\n"
+        "                    stalled' per line (docs/design/cpu-speed-tlb-icache.md)\n"
         "  --prof-callers H,H  with --prof, the PC in front of every entry to\n"
         "                    each listed address (the delay slot of the call)\n"
         "  --itrace FILE     the instruction cache's access stream: physical\n"
         "                    line addresses (addr >> 5) as uint32, repeats\n"
-        "                    collapsed (docs/50, tools/icachesim.c)\n"
+        "                    collapsed (docs/design/cpu-speed-tlb-icache.md, tools/icachesim.c)\n"
         "  --dtrace FILE     the data cache's: (addr >> 3) << 1 | store as\n"
         "                    uint32, exact repeats collapsed (tools/dcachesim.c)\n"
         "  --exc             one line per exception the CPU accepts: ExcCode,\n"
@@ -329,7 +329,7 @@ static void usage()
         "                    names a wedge that has stopped touching the bus\n"
         "  --pc-from N       start the PC trace at cycle N (implies --pc)\n"
         "  --pc-count N      how many PCs to print (default 2000)\n"
-        "  --scsi-nocache    bypass the SCSI block cache (docs/49): every block\n"
+        "  --scsi-nocache    bypass the SCSI block cache (docs/design/scsi-block-cache.md): every block\n"
         "                    request is one HPS transaction, as before build 26\n"
         "  --no-gfx          leave Newport unfitted, which keeps the PROM's\n"
         "                    console on the serial port\n"
@@ -961,7 +961,7 @@ int main(int argc, char **argv)
         // instruction RETIRED, which is what a diff of two runs wants; the
         // stream that came back was interleaved rather than sequential, so the
         // mirror of pcOld2..4 in cpu.vhd does not yet track the pipeline the
-        // way pcOld2..4 do. Finishing it is worth doing - see docs/06 - but an
+        // way pcOld2..4 do. Finishing it is worth doing - see docs/reference/simulation.md - but an
         // instrument that looks right and is not is worse than none, so
         // --pc-user stays on the decode tap below, whose one quirk (an
         // instruction re-presented on a pipeline replay) is documented.
@@ -1064,7 +1064,7 @@ int main(int argc, char **argv)
            stop_reason, static_cast<unsigned long long>(cycle),
            static_cast<unsigned long long>(txns));
 
-    // The performance counters (docs/50, sgi_indy.sv). The simulator's memory
+    // The performance counters (docs/design/cpu-speed-tlb-icache.md, sgi_indy.sv). The simulator's memory
     // answers in one cycle, so clocks per fill here are the pipeline's own
     // overhead and nothing of DDR3; the fill and walk COUNTS are the machine's.
     {

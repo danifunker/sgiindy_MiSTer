@@ -84,7 +84,7 @@ PY
 
 echo "booting $(basename "$PROM") with a disk on ID 1 and a CD-ROM on ID 6 ..."
 # Stops on the CD-ROM line, which is the last one hinv prints now that HAL2
-# reports no audio (hal2.sv REV bit 15, docs/36) - there is no later line to
+# reports no audio (hal2.sv REV bit 15, docs/design/scsi-fit-and-framebuffer-layout.md) - there is no later line to
 # stop on. The stop pattern is the tail of the line, so everything the EXPECT
 # below asks for has been transmitted by the time the run ends.
 # --no-gfx leaves Newport unfitted. A real Indy always has a graphics

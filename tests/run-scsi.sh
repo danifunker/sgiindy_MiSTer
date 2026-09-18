@@ -62,7 +62,7 @@ EXPECT=(
     "SCSI Disk: scsi(0)disk(1)"
     # The CD-ROM drive elaborated on ID 6 answers INQUIRY with no disc in it,
     # so this line is here with no ISO attached; it is also the last hinv
-    # line now that HAL2 reports no audio (hal2.sv REV bit 15, docs/36), so
+    # line now that HAL2 reports no audio (hal2.sv REV bit 15, docs/design/scsi-fit-and-framebuffer-layout.md), so
     # the run stops on it.
     "SCSI CDROM: scsi(0)cdrom(6)"
 )

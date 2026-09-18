@@ -27,7 +27,7 @@ diff -ruN a/tests/bench/bench.c b/tests/bench/bench.c
 + * checkout and the Verilator ratchet never see it. The docs/34 question is
 + * why IRIX feels slower than its clock says it should. The PROM's
 + * "16 Mhz R4400" line measures an UNCACHED loop - a KSEG1 fetch per
-+ * instruction, docs/10 - and says nothing about the cached path the kernel
++ * instruction, docs/reference/cpu.md - and says nothing about the cached path the kernel
 + * actually runs on. These print the numbers that answer it:
 + *
 + *   bench/i_cached     an 18-instruction ALU loop fetched from KSEG0

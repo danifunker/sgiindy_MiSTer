@@ -95,7 +95,7 @@ else
     # the desktop's own columns (IRIX biases the screen 8 pixels right). This
     # said 1318 until build 44: that was DSPLY_EN, RO1's pipeline enable,
     # driving the display enable, and the MiSTer scaler squeezed 1318 columns
-    # into 1280 and dropped one every ~34 pixels (docs/56 3.6). An exact
+    # into 1280 and dropped one every ~34 pixels (docs/design/rex3-source-audit.md 3.6). An exact
     # number here encoded the bug. Both numbers come out of the pins exactly, so this asserts
     # them exactly rather than with a threshold: the timing generator is an
     # interpreter for that table and "close" is a bug.
@@ -142,7 +142,7 @@ echo
 echo "console output is in ${OUT#"$ROOT"/}"
 # THE RASTER MUST SHOW THE STORE ROW FOR ROW. The size check above passed on
 # build 18b while the display showed frame buffer row 1 on its first line and
-# never row 0 (docs/36 section 5): tests/vidshift.py aligns where the rows
+# never row 0 (docs/design/scsi-fit-and-framebuffer-layout.md section 5): tests/vidshift.py aligns where the rows
 # change on the pins with where they change in the store.
 vs="$(python3 "$ROOT/tests/vidshift.py" "$VID" "$FB" 2>&1)"; vsrc=$?
 echo "$vs" | sed 's/^/  /'

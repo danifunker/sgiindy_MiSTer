@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # diskpair.sh RBF [--tag T] [--boots N] - the SCSI block cache's board
-# measurement (docs/49): deploy RBF, then boot IRIX from the pristine image
+# measurement (docs/design/scsi-block-cache.md): deploy RBF, then boot IRIX from the pristine image
 # with the cache ON and again with it OFF, logging the disk-time counters at
 # every 20 s poll (scripts/irixrate.sh --stats). The stats line at X-UP is
 # the boot's disk time; the elapsed column is the boot.

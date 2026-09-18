@@ -47,7 +47,7 @@ against an N64 checkout shows all of it), the parts that matter here:
   registered-read-address fix that made beat 4 right), plus a fill consumer in
   the clk1x domain in both caches.
 * **CP0 corrections**: EXL or ERL forces kernel mode (the N64 exported raw
-  KSU — this core needed that first, docs/09), `kusegUnmapped` while ERL is set
+  KSU — this core needed that first, docs/reference/cpu-validation.md), `kusegUnmapped` while ERL is set
   (MIPS III), and `chainedDelaySlot`, so an exception in the delay slot of a
   branch that is itself in a delay slot does not back EPC up twice.
 * **Native R4600 identity**: `COP0_PRID_R4600` = `0x2020`.
@@ -114,7 +114,7 @@ software takes the TLB entry count and the cache line size from `PRId` because
 no register reports the first and IRIX never reads `Config` for the second.
 The KI base already reports an R4600; `PRESENT_AS_R4600` in `cpu_cop0.vhd`
 selects everything that has to go with that, and `cpu.vhd` and `cpu_FPU.vhd`
-carry copies. `docs/10-r4300-integration.md` has the original reasoning (for the
+carry copies. `docs/reference/cpu.md` has the original reasoning (for the
 R4400 presentation this core used until docs/43) and the safety argument for
 the cache-geometry report; docs/43-44 the move to R4600.
 
@@ -123,7 +123,7 @@ the cache-geometry report; docs/43-44 the move to R4600.
 | `cpu_cop0.vhd` | `PRId` reports KI's `COP0_PRID_R4600` (`0x2020`) under `PRESENT_AS_R4600`, `0x0B22` (the R4300) otherwise | IRIX 5.3 keys its R4600 code paths off imp 0x20 — including a **32-byte data-cache line hard-coded** in `__dcache_inval` / `__dcache_wb_inval` (it never reads `Config.DB`), which is exactly the geometry KI's data cache has. Under an R4400 PRId it hard-codes 16 bytes, so the R4400 presentation and this cache cannot coexist (docs/39) |
 | `cpu_FPU.vhd` | `FIR` reports `0x2020` | imp 0x20, revision 2.0 — matches PRId, and is what `hinv` names the FPU from |
 | `cpu_cop0.vhd`, `cpu_TLB_instr.vhd`, `cpu_TLB_data.vhd` | **48 TLB entries** instead of KI's 32 | An R4600 has 48. Not optional once `PRId` says so: IRIX writes indices up to 47, and a 32-entry part aliases those onto 0..15 and corrupts its own page tables. The search was sequential then, so the cost was one address bit and 16 more cycles worst case; since build 28 all 48 are matched at once (see "Speed") |
-| `cpu_cop0.vhd` | `Config` reports 16 KB / 32-byte lines for both caches | TRUE for both since docs/44 (the N64 base's report was under-reported on purpose; see docs/10) |
+| `cpu_cop0.vhd` | `Config` reports 16 KB / 32-byte lines for both caches | TRUE for both since docs/44 (the N64 base's report was under-reported on purpose; see docs/reference/cpu.md) |
 
 The cpu-tests suite (`iris/cpu-tests`) selects its expectations by `PRId` and
 had no case for imp 0x20; the build copy used here (`~/cputests`) treats an
@@ -240,7 +240,7 @@ physical bit 13 (no replacement policy needed, no alias possible); it costs a
 second data-RAM read and a mux on the fetch data path, which is exactly the
 path KI's `FetchIndex` work shortened.
 
-### Speed — the TLB matched in parallel, 16 KB of instruction cache, refills answered from it (docs/50)
+### Speed — the TLB matched in parallel, 16 KB of instruction cache, refills answered from it (docs/design/cpu-speed-tlb-icache.md)
 
 Measured on the board with a beacon profiler before any of this was changed:
 the pipeline advanced in about a quarter of the clocks of an IRIX boot, a
@@ -254,14 +254,14 @@ about a third.
 | `cpu_instrcache.vhd` | A fill request for a line the cache already holds is answered from it: a third copy of the tags in block RAM (`itagramf`, registered read) at the fill's line, states `CHECK` then `CACHED`, `fill_done` three clocks after the request with no bus transaction; a line whose tag was written on the edge the read took is filled rather than trusted (`tag_wr_q`). Block RAM because the first fit's asynchronous MLAB copy cost ~430 ALMs at 97 % of the device | `cpu.vhd` asks for a fill after EVERY instruction TLB walk without a lookup - by then the fetch-path lookup has moved on to the next PC. With a one-page mini-TLB that is a DDR3 line fill for every crossing into another mapped page, 22 per 1000 instructions in a perl loop against 38.7 fills in all (build 28) |
 | `cpu.vhd`, `r4300_wrap.vhd` | `dbg_perf(9 downto 0)` and `dbg_ifetch` ports | Performance-counter events for `sgi_indy.sv` and the simulator's instruction-cache access trace (`--itrace`). Wires only |
 
-### Loads that do not stall execute (docs/51)
+### Loads that do not stall execute (docs/design/r4600-accuracy-clock-disk.md)
 
 | File | Change | Why |
 |---|---|---|
 | `cpu.vhd` | `LOAD_NO_STALL` generic (default true). `loadMayRun`: the load in decode leaves execute without `stall3`/`executeStallFromMEM` when the instruction being decoded behind it (`opcodeCacheMuxed`) names neither `decodeTarget` in its rs/rt fields nor is a memory instruction (primary opcode 0x20-0x3F, LDL/LDR). LWC1/LDC1, COP0/COP2 reads, a load that walks the TLB (`TLB_dataStall` clears `executeLoadNoStall`) and a faulting load keep stalling. Stage 4 keys `writebackForwardValue1/2` to `decSource` for such a load, as for any other instruction | Upstream held execute a clock on every load. 24.8 % of IRIX kernel instructions are loads and 80 % of them are followed by an instruction that does not read the loaded register. Board, build 33: boot 1.68 -> 1.64 clocks per instruction, bzip2 103.9 -> 99.5 s |
 | `cpu_datacache.vhd` | `read_ena` holds `cache_address_b` on `tag_addr_1` as `write_ena` does; a read that finishes outside IDLE (READWAIT, WAITSLOW, the end of a FILL) shifts by `read_offset`, `RW_addr(2 downto 0)` captured in IDLE | Both assumed execute stayed frozen for the whole read: in a no-stall load's first stage-4 clock `tag_addr` and `RW_addr` already belong to the next instruction. For a stalled load both are what they were |
 
-### Loads behind loads, and fewer trips per line (docs/52)
+### Loads behind loads, and fewer trips per line (docs/design/cache-fill-latency.md)
 
 | File | Change | Why |
 |---|---|---|
@@ -271,7 +271,7 @@ about a third.
 | `cpu.vhd`, `r4300_wrap.vhd` | A dirty line's four staged beats are issued as ONE write FIFO entry (the FIFO is 300 bits: beats 1..3 in 299:108, `(107) = '1'` with `(105) = '0'` tags it) and presented as `mem_size "100"` on a write with words 1..3 on the new `mem_dataWrite3`; the staging queue pops all four at once; `datacache_active` follows `(105)` so a line write is not counted as a fill | Each beat was its own transaction through memstate, `r4300_bus.sv`, `ram_arb.sv` and `ddr3_mux.sv` - ~7 clocks a word on the board, 28 a line, with the evicting fill queued behind all four. `ddr3_mux.sv` writes the four words back to back and acknowledges once |
 | `cpu.vhd` | An instruction line fill is tagged `mem_size "101"` | `r4300_bus.sv` finishes it without S_FILLEND, which only the data cache needs (it answers out of the line in the clock it sees `ram_done`; the instruction cache's `fill_done` is registered) |
 
-### Who called it (docs/53)
+### Who called it (docs/design/scsi-sync-negotiation.md)
 
 | File | Change | Why |
 |---|---|---|

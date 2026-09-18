@@ -28,7 +28,7 @@
 //  for an answer nobody had heard - which is exactly the bug the HPC3 DMA
 //  engine had, and it is written up in docs/13-scsi-dma-plan.md.
 //
-//  PIPELINED SINCE docs/50. Every master still has at most one transaction
+//  PIPELINED SINCE docs/design/cpu-speed-tlb-icache.md. Every master still has at most one transaction
 //  outstanding, but the bridge takes a new command while earlier reads are
 //  still answering (the scaler's own Avalon master relies on the same thing),
 //  so the display, the CPU and the rasteriser no longer wait out each other's
@@ -75,10 +75,10 @@ module ddr3_mux #(
     parameter logic [31:0] BASE_PROM = 32'h0500_0000,  // 512 KB
 
     // The display's bursts go to the bridge as reads of at most FBR_SUB words,
-    // at most FBR_AHEAD of them outstanding at once (docs/50). tb_ddr3 runs a
+    // at most FBR_AHEAD of them outstanding at once (docs/design/cpu-speed-tlb-icache.md). tb_ddr3 runs a
     // second build with small values so the splitting is exercised.
     //
-    // 4, NOT 16 (docs/51). The bridge answers reads in the order it took
+    // 4, NOT 16 (docs/design/r4600-accuracy-clock-disk.md). The bridge answers reads in the order it took
     // them, so a CPU cache fill taken while the display has its sub-bursts
     // outstanding waits for all of their words first: up to FBR_AHEAD x
     // FBR_SUB = 32 of them at 16. Build 31 on the board spent 24 clocks per
@@ -94,7 +94,7 @@ module ddr3_mux #(
     input  logic        reset,
 
     // ---- master 0: the display's serial port -----------------------------
-    // The only master with a deadline. Second in line since docs/50, behind
+    // The only master with a deadline. Second in line since docs/design/cpu-speed-tlb-icache.md, behind
     // main memory, which never has more than one short transaction out; its
     // bursts go to the bridge as sub-bursts (FBR_SUB) so nothing waits long
     // behind them either.
@@ -162,7 +162,7 @@ module ddr3_mux #(
     input  logic [63:0] bcn_wdata,
 
     // ---- observation only: the performance counters in sgiindy.sv --------
-    // (docs/50). Who is outstanding, who is waiting, and what the bridge took
+    // (docs/design/cpu-speed-tlb-icache.md). Who is outstanding, who is waiting, and what the bridge took
     // this clock; nothing here feeds back into the scheduling.
     output logic  [5:0] dbg_busy,     // masters with a transaction outstanding
     output logic  [5:0] dbg_pend,     // masters with a request latched, not yet presented
@@ -267,7 +267,7 @@ module ddr3_mux #(
 
     // ---- the display's burst, served as sub-bursts ---------------------------
     // fb_linecache asks for up to 128 words at a time and counts them as they
-    // stream back; that contract is unchanged. What changed (docs/50) is how
+    // stream back; that contract is unchanged. What changed (docs/design/cpu-speed-tlb-icache.md) is how
     // the bridge is asked: the burst goes out as FBR_SUB-word reads, each one
     // presented while the one before it is still answering, never more than
     // FBR_AHEAD outstanding. The display's stream stays continuous - the next
@@ -392,7 +392,7 @@ module ddr3_mux #(
     // transaction at a time meant a CPU cache fill, or a writeback, arriving
     // during a display burst queued behind the whole burst AND its round trip:
     // 15-20 clocks waiting for 8-11 held, on every CPU transaction, measured on
-    // the board (docs/50). The scaler's own Avalon master (sys/ascal.vhd)
+    // the board (docs/design/cpu-speed-tlb-icache.md). The scaler's own Avalon master (sys/ascal.vhd)
     // already relies on the bridge taking commands while reads are owed.
     logic                  cmd_we;
     logic  [7:0]           cmd_n;
@@ -446,7 +446,7 @@ module ddr3_mux #(
     assign fbr_dout_valid = fbr_word;
     assign fbr_taken      = fbr_taken_q;
 
-    // observation (docs/50)
+    // observation (docs/design/cpu-speed-tlb-icache.md)
     logic [NM-1:0] busy_obs;
     always_comb begin
         busy_obs = busy_m;
@@ -691,7 +691,7 @@ module ddr3_mux #(
     end
 
     // ---- observation: a main-memory read's latency, split (build 37) --------
-    // docs/50 measured the bridge answering a read 9.7 clocks after taking it,
+    // docs/design/cpu-speed-tlb-icache.md measured the bridge answering a read 9.7 clocks after taking it,
     // with one transaction at a time; since the mux is pipelined a read also
     // waits for every word owed to reads taken before it, most of them the
     // display's. A line fill costs ~20 clocks on the bus on the board and ~8 in

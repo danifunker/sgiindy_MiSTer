@@ -25,11 +25,11 @@
 //  CONTENTS ARE VOLATILE. On hardware this part has a battery; here it powers
 //  up blank, so the PROM finds a bad checksum and reinitialises its
 //  environment on every boot. That is the documented failure mode rather than
-//  a hang - see docs/03-boot-prom.md on the checksum and the validity tag -
+//  a hang - see docs/reference/boot-prom.md on the checksum and the validity tag -
 //  and it is the one thing standing between this and a remembered `setenv`.
 //  Wiring the array to MiSTer's SD-card save path is the fix.
 //
-//  THE TIME COMES FROM THE MiSTer (docs/51). Without a battery the clock used
+//  THE TIME COMES FROM THE MiSTer (docs/design/r4600-accuracy-clock-disk.md). Without a battery the clock used
 //  to power up at a fixed 1996 date on every load; IRIX then found the time of
 //  day behind its root file system's, fell back to that, and printed "CHECK
 //  AND RESET THE DATE!" - so the machine always believed it was the moment of
@@ -113,7 +113,7 @@ module sgi_ds1386 #(
 
     // ---- the Ethernet address, written in on every reset ------------------
     //
-    // THIS IS THE COPY THE PROM READS. docs/02 says "MAC address comes from
+    // THIS IS THE COPY THE PROM READS. docs/reference/address-map.md says "MAC address comes from
     // the RTC/NVRAM device" and that is measured rather than quoted: the same
     // six bytes were put in the 93C56 EEPROM first, at the words IRIS also
     // writes, and `printenv` in the Command Monitor still listed fifteen

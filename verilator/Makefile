@@ -148,7 +148,7 @@ cputest: $(RTL)/cpu/generated/r4300_wrap.v
 	   -o Vsim_top $(CPUTEST_V) $(CPUTEST_C)
 
 
-# --- the SCSI block cache's own bench (docs/49) -----------------------------
+# --- the SCSI block cache's own bench (docs/design/scsi-block-cache.md) -----------------------------
 # rtl/scsi/scsi_cache.sv against an engine-like requester and a slow device
 # model with random latency: prefetch, write-behind, re-base, passthrough,
 # mount invalidation, a random mix, the installer's burst, multi-block
@@ -163,7 +163,7 @@ tb_scsi_cache:
 	   tb_scsi_cache.sv $(RTL)/scsi/scsi_cache.sv
 	./obj_dir_tbc/tb_scsi_cache
 
-# --- the DS1386 against the MiSTer's clock (docs/51) --------------------------
+# --- the DS1386 against the MiSTer's clock (docs/design/r4600-accuracy-clock-disk.md) --------------------------
 # rtl/sgi/sgi_ds1386.sv's time registers loaded from hps_io's RTC: every field,
 # the 1940-based year, the weekday, a time sent during reset, resets keeping the
 # time, and software writes still winning.
@@ -388,7 +388,7 @@ ddr3test:
 
 # The same bench with the display's bursts split into 3-word reads. Written
 # when the shipping FBR_SUB was 16, which the bench's 1-16-word display bursts
-# never split; the shipping value is 4 since docs/51, so `ddr3test` splits
+# never split; the shipping value is 4 since docs/design/r4600-accuracy-clock-disk.md, so `ddr3test` splits
 # them too and this is the odd-sized case.
 ddr3test_sub:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_ddr3sub --top-module ddr3_mux \
@@ -450,9 +450,9 @@ rex3draw:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3draw --top-module np_rex3 -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnp_rex3draw $(RTL)/newport/np_rex3.sv tb_rex3draw.cpp
 	./obj_dir_rex3draw/Vnp_rex3draw
 
-# --- Newport at its own bus: the CPU's and the MC's transactions (docs/56) ---
+# --- Newport at its own bus: the CPU's and the MC's transactions (docs/design/rex3-source-audit.md) ---
 # tb_rex3 and tb_rex3draw drive np_rex3's 32-bit register port, which sits
-# downstream of newport.sv's doubleword handling - where docs/56 3.1 lives.
+# downstream of newport.sv's doubleword handling - where docs/design/rex3-source-audit.md 3.1 lives.
 # These drive newport.sv itself (REX3, VC2, both XMAP9s, both CMAPs, the
 # BT445) with the CPU's real 32- and 64-bit loads and stores (r4300_bus.sv's
 # byte lanes), GO aliases, reads behind a running primitive, and VDMA beats
@@ -480,7 +480,7 @@ newporttest:
 	./obj_dir_newport/Vnewport_test
 
 # The self-test: the synthetic trace as the RTL is (marker 2 differs - the
-# doubleword store of docs/56 3.1), then with the bench splitting doublewords,
+# doubleword store of docs/design/rex3-source-audit.md 3.1), then with the bench splitting doublewords,
 # where every marker must match IRIS's expected dumps.
 newportreplay:
 	$V -cc --exe --build --build-jobs 0 --verilate-jobs 1 --Mdir ./obj_dir_npreplay --top-module newport $(NEWPORT_OPT) -CFLAGS "-O2 -std=c++17 -I.." -LDFLAGS "-lz" $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnewport_replay $(NEWPORT_V) tb_newport_replay.cpp

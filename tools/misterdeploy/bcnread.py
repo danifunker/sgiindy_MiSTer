@@ -17,7 +17,7 @@ of each field - the bit maps live next to the assemblies):
   w5  target 6 live A   w6  target 6 live B
   w7  target 1 sticky first-stall snapshot (reason 1 = REQ suppressed,
       reason 2 = REQ up but never answered), latched until core reload
-  w16..w20 (ver >= 9, build 26, docs/49): the SCSI disk-time counters -
+  w16..w20 (ver >= 9, build 26, docs/design/scsi-block-cache.md): the SCSI disk-time counters -
       w16 {hps transactions rd, wr}  w17 {hps busy, target wait} (x64 cycles)
       w18 {cache hits, misses}       w19 {DATA-phase bytes, bus busy (x64)}
       w20 {DATA-phase time (x64), sectors written into the cache}
@@ -30,7 +30,7 @@ Usage (on the MiSTer):
     bcnread.py                one decoded sample
     bcnread.py --loop 30 --interval 2      sample for a minute
     bcnread.py --raw          just the hex words
-    bcnread.py --perf         (ver >= 10, docs/50; 36-39 from ver 12, build 37) the performance counters,
+    bcnread.py --perf         (ver >= 10, docs/design/cpu-speed-tlb-icache.md; 36-39 from ver 12, build 37) the performance counters,
                               raw, as one line of 28 integers (30 from
                               ver 11, word 35); two of these
                               a workload apart are the workload's breakdown:
@@ -207,7 +207,7 @@ def dec(ws):
     if len(ws) > 14 and bits(w0, 47, 40) >= 7:
         out.extend(dec_disp(ws[14]))
     if len(ws) > 15 and bits(w0, 47, 40) >= 8:
-        # w15: the display line caches (docs/36). rgb_miss and aux_miss are
+        # w15: the display line caches (docs/design/scsi-fit-and-framebuffer-layout.md). rgb_miss and aux_miss are
         # pixels served black because the line was not resident; aux_skips
         # is lines the auxiliary cache published as zeros without a fetch.
         w15 = ws[15]
@@ -231,7 +231,7 @@ def dec(ws):
 
 
 def stats_line(ws):
-    """The docs/49 counters as one line of seconds and counts."""
+    """The docs/design/scsi-block-cache.md counters as one line of seconds and counts."""
     w16, w17, w18, w19, w20 = ws[16:21]
     sec = lambda x64: x64 * 64.0 / CLK_HZ
     xact_rd, xact_wr = bits(w16, 63, 32), bits(w16, 31, 0)

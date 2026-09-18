@@ -43,7 +43,7 @@
 #
 #   bash scripts/irixrate.sh 10 --tag b25 --fresh /media/fat/games/SGIIndy/SGIIndy53-pristine.img
 #
-# --stats (build 26 and later, docs/49) reads the SCSI disk-time counters out
+# --stats (build 26 and later, docs/design/scsi-block-cache.md) reads the SCSI disk-time counters out
 # of the DDR3 beacon at every 20 s poll (bcnread.py --stats) and logs them
 # with the verdict: HPS transactions, HPS-busy and target-wait seconds, bus
 # and DATA-phase seconds, bytes, the block cache's hits/misses/writes. The
@@ -101,7 +101,7 @@ for i in $(seq 1 "$N"); do
         # the old file unlinked while MiSTer still held it open, and the board's exFAT
         # driver never gave those clusters back: after two weeks of runs ~37 GB of the
         # 59 GB card belonged to no file, a reboot did not return it, and a restore
-        # failed with ENOSPC (docs/50). Loading the menu core closes the image - so a
+        # failed with ENOSPC (docs/design/cpu-speed-tlb-icache.md). Loading the menu core closes the image - so a
         # guest still running cannot write into the fresh copy either - and the copy
         # then overwrites the same file, needing no free space.
         rsh "echo 'load_core /media/fat/menu.rbf' > /dev/MiSTer_cmd; for i in \$(seq 1 30); do ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q '$IMG\$' || break; sleep 1; done; cp '$FRESH' '$IMG' && sync" || { echo "image restore failed" | tee -a "$LOG"; exit 1; }

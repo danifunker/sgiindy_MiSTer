@@ -9,7 +9,7 @@ desktop in frame buffer columns 8..1287 (bt445_bug_xbias = 8), and since
 build 44 the display window is exactly those 1280 columns, so screen column X
 must be frame buffer column X + 8 everywhere. Before build 44 the display
 enable was 1318 pixels wide and the scaler squeezed it into 1280, dropping a
-column every ~34 - which looked like damaged glyphs (docs/56 3.6).
+column every ~34 - which looked like damaged glyphs (docs/design/rex3-source-audit.md 3.6).
 
 The palette is learned from the pictures themselves - each colour index is
 given the screen colour it shows most often at the offset being tried - so

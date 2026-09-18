@@ -7,7 +7,7 @@
 //  the PROM writes the self-test command 0xAA to +0x44 and then polls the
 //  same address, so a register that reads back what was written answers
 //  0xAA, whose bit 1 says "input buffer full", and the PROM waits forever
-//  for a controller that never drains. See docs/12-chipset.md finding 10.
+//  for a controller that never drains. See docs/reference/chipset.md finding 10.
 //
 //  This models the controller and both devices behind it, rather than the
 //  PS/2 serial lines: MiSTer's hps_io already decodes the wire protocol into

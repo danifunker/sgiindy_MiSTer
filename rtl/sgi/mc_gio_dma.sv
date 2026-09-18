@@ -6,7 +6,7 @@
 //  boot memory clear uses - on the argument that "this machine HAS no GIO64
 //  device". That argument died the day the Newport went in: IRIX's ng1 driver
 //  moves EVERY pixel X draws through this engine (Ng1PixelDma -> vdma_set_tlb
-//  -> MCdma in the kernel, disassembled in docs/33), as memory-to-GIO
+//  -> MCdma in the kernel, disassembled in docs/design/newport-vdma.md), as memory-to-GIO
 //  transfers into REX3's HOSTRW port, with the source address translated
 //  through the MC's own four-entry DMA TLB. The old stub reported those
 //  transfers instantly finished without moving a byte and without raising the

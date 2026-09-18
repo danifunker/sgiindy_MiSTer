@@ -35,7 +35,7 @@ struct UartRx {
     bool     in_burst    = false;
 
     // Frame decode, as an independent check on what actually came out of the
-    // pin - see docs/06-simulation.md on why that is worth having next to the
+    // pin - see docs/reference/simulation.md on why that is worth having next to the
     // byte tap.
     bool     in_frame = false;
     int      bit_idx  = 0;

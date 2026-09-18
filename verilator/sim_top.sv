@@ -30,7 +30,7 @@ module sim_top
     // command line rather than by rebuilding. Both on for a normal run.
     input  wire        icache_en,
     input  wire        dcache_en,
-    // The SCSI block cache's OSD bypass (docs/49): --scsi-nocache sets it,
+    // The SCSI block cache's OSD bypass (docs/design/scsi-block-cache.md): --scsi-nocache sets it,
     // and a run with it on is the pre-build-26 block path, sector by sector.
     input  wire        scsi_cache_bypass,
 
@@ -106,7 +106,7 @@ module sim_top
     output wire [31:0] dbg_exc_bad,
     output wire [31:0] dbg_rpc,
     output wire        dbg_retire,
-    // The CPU performance counters (docs/50), printed by the harness at exit.
+    // The CPU performance counters (docs/design/cpu-speed-tlb-icache.md), printed by the harness at exit.
     output wire [63:0] perf0, perf1, perf2, perf3, perf4, perf5, perf6, perf7, perf8,
     // The instruction cache's access stream, for --itrace.
     output wire [32:0] ifetch,

@@ -118,10 +118,10 @@ module newport #(
     // set at each retrace and held until the CPU reads STATUS - the read is
     // what deasserts the line, in IRIS and MAME both. NOT the raw vblank
     // timing level: build 12 wired that here and the un-retirable interrupt
-    // starved the whole machine (docs/33).
+    // starved the whole machine (docs/design/newport-vdma.md).
     output logic        vblank_irq,
     output logic [31:0] dbg_nd,       // np_rex3's VDMA beat counters
-    // The display-interpretation beacon word (docs/33): the live DID and the
+    // The display-interpretation beacon word (docs/design/newport-vdma.md): the live DID and the
     // mode entry the visible pixel is being read through, plus the walker
     // state - a sampled answer to "what is the screen being decoded AS".
     output logic [63:0] dbg_disp,
@@ -156,7 +156,7 @@ module newport #(
     // registers in pairs with 64-bit `sdc1` stores - XYSTARTI+XYENDI,
     // XSTARTF+YSTARTF, XSTARTI+XENDF1 with GO, the colour and slope pairs,
     // HOSTRW0+HOSTRW1 with GO: 215 of them between libGLcore.so and libgl.so,
-    // none in the X server (docs/56 3.1, 4.4, 4.6). The Indy really sends them
+    // none in the X server (docs/design/rex3-source-audit.md 3.1, 4.4, 4.6). The Indy really sends them
     // as single 64-bit transfers - the kernel sets the MC's GRX_SIZE_64 and
     // CONFIG.BUSWIDTH - and REX3 takes a whole transfer as one GFIFO entry
     // (GF_DATA 63:0, GF_D32 marking the 32-bit ones, one GF_GO), so the even
@@ -629,7 +629,7 @@ module newport #(
     // fetched last. Nothing saw it while the window opened on IRIX's black
     // 8-pixel margin; cropping the window to the desktop's own columns put
     // the previous line's last pixel at the left edge of every line, and
-    // tests/vidshift.py caught it on the boot gradient (docs/56).
+    // tests/vidshift.py caught it on the boot gradient (docs/design/rex3-source-audit.md).
     //
     // THE DELAYS ARE CLOCKS, AND THE PIXEL ENABLE GOES WITH THEM. The colour
     // path above runs every clock, but VC2's pixel enable does not: it pauses

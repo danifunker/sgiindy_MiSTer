@@ -111,7 +111,7 @@ static void tick()
     // THE BURST COUNT IS PART OF THE COMMAND AND IS SAMPLED WITH IT, before
     // the edge. It used to be read after the edge, which worked only while the
     // mux left DDRAM_BURSTCNT alone for a few cycles after a command was
-    // taken; the pipelined mux (docs/50) presents the next command in that
+    // taken; the pipelined mux (docs/design/cpu-speed-tlb-icache.md) presents the next command in that
     // same edge, and the bridge model then read the NEXT command's count.
     Bus b{(bool)dut->DDRAM_RD, (bool)dut->DDRAM_WE, (uint32_t)dut->DDRAM_ADDR,
           dut->DDRAM_DIN, (uint8_t)dut->DDRAM_BE, (uint8_t)dut->DDRAM_BURSTCNT};
@@ -535,7 +535,7 @@ int main(int argc, char **argv)
     check("all four masters made progress",
           m_fbr.acked > 100 && m_ram.acked > 100 &&
           m_prom.acked > 100 && m_fbw.acked > 100);
-    // The display must never be starved. Until docs/50 the display was first
+    // The display must never be starved. Until docs/design/cpu-speed-tlb-icache.md the display was first
     // in the priority list and one transaction ran at a time, and this checked
     // that it never waited longer than the rasteriser. The mux is pipelined
     // now and main memory goes first - the CPU stalls on every transaction and

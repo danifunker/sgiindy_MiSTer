@@ -16,7 +16,7 @@
 //  The dbg_tx_byte_* outputs are a non-standard debug tap: they present the
 //  byte a channel has just popped from its TX FIFO into the shift register,
 //  with a one-cycle strobe. That is what the console tap uses - see
-//  docs/06-simulation.md on why decoding the serial waveform is the wrong way
+//  docs/reference/simulation.md on why decoding the serial waveform is the wrong way
 //  to read what the machine is printing.
 //============================================================================
 

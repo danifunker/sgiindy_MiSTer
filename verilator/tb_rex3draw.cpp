@@ -810,7 +810,7 @@ static void oracle_write(uint32_t off, uint32_t val)
     // IRIS, which restarts it only on DOSETUP: the spec's pattern register is
     // "(msb = first pixel)", and every writer - X's glyph rows, GL's bitmaps,
     // polygon stipple, software-z line segments - loads a fresh word per GO
-    // and means it from the top (docs/56 4.2). np_rex3 does the same.
+    // and means it from the top (docs/design/rex3-source-audit.md 4.2). np_rex3 does the same.
     case R_ZPATTERN:  ox.zpattern = val; ox.zpat_bit = 31; break;
     case R_COLORBACK: ox.colorback = val; break;
     case R_COLORVRAM: ox.colorvram = val; break;
@@ -831,7 +831,7 @@ static void oracle_write(uint32_t off, uint32_t val)
     // THE GL-FORMAT COORDINATES: "12.4(7) GL version of XSTART, (zeros 4
     // msbs)" - IRIS's from12_4_7 keeps bits 22:7 of what is really a float.
     // 0x14C is XENDF1, "Same as XENDF" - this bench used to decode it as an
-    // integer, the same slip np_rex3 had (docs/56 4.2).
+    // integer, the same slip np_rex3 had (docs/design/rex3-source-audit.md 4.2).
     case R_XSTARTF:   ox.xstart = ox.xsave = (int32_t)(val & 0x007FFF80); break;
     case R_YSTARTF:   ox.ystart = (int32_t)(val & 0x007FFF80); break;
     case R_XENDF:
@@ -1167,7 +1167,7 @@ static void run_case(uint32_t dm0, uint32_t dm1, uint32_t cm)
         both(R_BRESD,       (rnd() & 0x07FFFFFF));
     }
     // GL writes its coordinates as the raw bits of the float 4096 + x, into
-    // the GL-format registers (docs/56 4.1): half the time the endpoints go
+    // the GL-format registers (docs/design/rex3-source-audit.md 4.1): half the time the endpoints go
     // that way. The mantissa of 4096 + x + f/16 is exactly x.f in 12.11, and
     // XYWIN's 0x1000 puts the bias back as it does for the integer forms.
     bool via_float = rnd() & 1;

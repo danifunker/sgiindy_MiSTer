@@ -5,7 +5,7 @@
 # This is the only test here that runs guest code past the PROM, and it is the
 # ratchet for the whole exception path: the kernel takes a TLB refill on its
 # first instruction and roughly two and a half million of them before it
-# prints anything. The bug it exists to catch is in docs/09, "A TLB refill
+# prints anything. The bug it exists to catch is in docs/reference/cpu-validation.md, "A TLB refill
 # taken with EXL set" - the CPU sent a refill nested inside the refill handler
 # back to the refill vector, and IRIX looped there forever in eight cached
 # instructions, issuing no bus cycles at all. Nothing else in tests/ came

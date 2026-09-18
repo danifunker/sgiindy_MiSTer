@@ -1,7 +1,7 @@
 /*
  * promstub.S - boot the IRIS CPU test suite on this core, out of the PROM.
  *
- * WHY A PROM IMAGE AND NOT THE PROVEN PATH. docs/11 boots the suite off a SCSI
+ * WHY A PROM IMAGE AND NOT THE PROVEN PATH. docs/reference/cpu-tests-on-hardware.md boots the suite off a SCSI
  * disk through the real PROM's ARCS loader, which is right for a real Indy and
  * awkward here: it needs the maintenance menu, and therefore a keyboard, and
  * therefore somebody sitting in front of the machine for every run. The core

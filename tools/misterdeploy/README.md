@@ -69,7 +69,7 @@ python tools/misterdeploy/launch_unstable_core.py --core sgiindy.rbf --dry-run
 | `--seed-mount-size N` | — | `1024` | size of the `.s<N>` file (NUL-padded; MiSTer uses 1024) |
 
 The `--seed-*` flags are unused by this core today. They exist for the moment
-`docs/17-nvram-persistence.md` lands and a `setenv` has somewhere to survive: they
+`docs/reference/nvram.md` lands and a `setenv` has somewhere to survive: they
 drop a default save image and pre-write MiSTer's per-slot mount memory
 (`config/<core>.s<N>`) so it is auto-mounted from the first boot. Both are
 create-only-if-missing, so saved data is never overwritten. **`boot.rom` is not

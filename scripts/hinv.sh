@@ -54,7 +54,7 @@ if [ -n "$FRESH" ]; then
     # the old file unlinked while MiSTer still held it open, and the board's exFAT
     # driver never gave those clusters back: after two weeks of runs ~37 GB of the
     # 59 GB card belonged to no file, a reboot did not return it, and a restore
-    # failed with ENOSPC (docs/50). Loading the menu core closes the image - so a
+    # failed with ENOSPC (docs/design/cpu-speed-tlb-icache.md). Loading the menu core closes the image - so a
     # guest still running cannot write into the fresh copy either - and the copy
     # then overwrites the same file, needing no free space.
     rsh "echo 'load_core /media/fat/menu.rbf' > /dev/MiSTer_cmd; for i in \$(seq 1 30); do ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q '$IMG\$' || break; sleep 1; done; cp '$FRESH' '$IMG' && sync" || exit 1

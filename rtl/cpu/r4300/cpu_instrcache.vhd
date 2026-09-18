@@ -33,7 +33,7 @@ entity cpu_instrcache is
       
       read_select       : in  std_logic;
       -- RAM index for the tag and data lookups: bits 13 downto 2 of the
-      -- PHYSICAL fetch address (SGI, docs/47 and docs/50: bits 13:12 are the
+      -- PHYSICAL fetch address (SGI, docs/47 and docs/design/cpu-speed-tlb-icache.md: bits 13:12 are the
       -- translated ones from cpu.vhd's FetchIndexPhys1; bits 11:2 are page
       -- offset and come from KI's ONE flattened mux there rather than the
       -- forwarding mux feeding the fetch mux - see FetchIndex1 for why the
@@ -72,7 +72,7 @@ end entity;
 
 architecture arch of cpu_instrcache is
 
-   -- SGI: 16 KB AGAIN, PHYSICALLY INDEXED, with the full 20-bit tag (docs/50).
+   -- SGI: 16 KB AGAIN, PHYSICALLY INDEXED, with the full 20-bit tag (docs/design/cpu-speed-tlb-icache.md).
    -- Build 24 went down to 8 KB for the reason below and build 25 made the
    -- index physical; with a physical index the reason is gone, because no
    -- mapping can put one line in two sets whatever IRIX colours. The history
@@ -111,7 +111,7 @@ architecture arch of cpu_instrcache is
    -- address, which is physical).
    --
    -- 16 KB because the 8 KB cache was the largest single cost the board
-   -- measured (docs/50): the fetch stage waited on instruction-cache fills in
+   -- measured (docs/design/cpu-speed-tlb-icache.md): the fetch stage waited on instruction-cache fills in
    -- about a third of the busy clocks of an IRIX boot. The index is bits 13:5
    -- (512 lines); Config has always reported 16 KB, so the kernel's index
    -- flush loops now cover it exactly once.
@@ -136,7 +136,7 @@ architecture arch of cpu_instrcache is
    -- the next PC by then. The instruction mini-TLB holds ONE page, so every
    -- fetch that crosses into another mapped page walks - and build 28 on the
    -- board paid a whole DDR3 line fill (~40 clocks) for each, 22 per 1000
-   -- instructions in a perl loop against 38.7 fills in all (docs/50), mostly
+   -- instructions in a perl loop against 38.7 fills in all (docs/design/cpu-speed-tlb-icache.md), mostly
    -- for lines that were in the cache all along. A third copy of the tags,
    -- read at the fill's own line, sees that; the request then takes three
    -- clocks and no bus transaction (states CHECK, CACHED).

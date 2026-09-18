@@ -4,7 +4,7 @@
 //  primitive, and the MC's VDMA beats with the host buffer's start byte in
 //  the address. See tb_newport.h for the bus contract and the frame buffer.
 //
-//  docs/56 is why. GL draws nothing on the board because of three defects no
+//  docs/design/rex3-source-audit.md is why. GL draws nothing on the board because of three defects no
 //  bench could see - each sits upstream of np_rex3's own register port, or
 //  in a register decode no bench wrote: GL's 64-bit register pairs lose
 //  their second word (3.1, 4.4), GL's float coordinates keep four exponent
@@ -12,7 +12,7 @@
 //  ordered behind the drawing engine and VDMA drops buffers at 4 mod 8
 //  (4.4). The tests below state the correct behaviour. They were written
 //  against the build 43b RTL, on which 2b, 3a, 3b, 4b, 5d, 5f, 6b, 7a-7d, 8a,
-//  8b and 9 failed; those failures defined the fixes of docs/56 section 5's
+//  8b and 9 failed; those failures defined the fixes of docs/design/rex3-source-audit.md section 5's
 //  phase 1, and build 44 passes all of them. Every check is must-pass.
 //
 //    1  32-bit register writes read back through both word lanes
@@ -59,11 +59,11 @@ static bool     g_hung = false;
 static const char *XFAIL_LABEL = "expected to fail on this RTL";
 
 // What the build 43b RTL got wrong, per test group - the defects build 44
-// fixed (docs/56 section 5, phase 1), kept here because a failure of the
+// fixed (docs/design/rex3-source-audit.md section 5, phase 1), kept here because a failure of the
 // matching check most likely means one of them is back:
 //   2b 3a 3b 4b 7c  newport.sv kept the first register of a doubleword store
 //                   and dropped the second; its GO fired with the first
-//                   (docs/56 3.1 + 4.4)
+//                   (docs/design/rex3-source-audit.md 3.1 + 4.4)
 //   5d 5f           np_rex3 answered every read at once, not after the earlier
 //                   writes and GOs had taken effect, and merged back-to-back
 //                   GOs (4.4)
@@ -155,7 +155,7 @@ static void settle()
 static uint32_t XY(int x, int y) { return ((uint32_t)(x & 0xFFFF) << 16) | (uint32_t)(y & 0xFFFF); }
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 // What GL writes for coordinate x: the raw bits of the float 4096 + x, whose
-// mantissa is x in 12.11 fixed point (docs/56 4.1).
+// mantissa is x in 12.11 fixed point (docs/design/rex3-source-audit.md 4.1).
 static uint32_t glc(int x) { return fbits(4096.0f + (float)x); }
 
 // Colour index, 8 bits, the drawing planes, logic op SRC, alpha test off.
@@ -169,7 +169,7 @@ static void fresh()
     g_hung = false;
     W(R_XYWIN,    0x10001000);   // the identity window: coordinates carry a 4096 bias
     W(R_CLIPMODE, 0x00001E00);   // scissors off, CIDMATCH 0xF: every window ID allowed
-    W(R_TOPSCAN,  0x000003FF);   // drawing's identity today (np_rex3 fb_row) and after docs/56 3.3
+    W(R_TOPSCAN,  0x000003FF);   // drawing's identity today (np_rex3 fb_row) and after docs/design/rex3-source-audit.md 3.3
     W(R_XYMOVE,   0);
     W(R_WRMASK,   0x00FFFFFF);
     W(R_ZPATTERN, 0xFFFFFFFF);
@@ -335,7 +335,7 @@ static void t1_registers()
 //============================================================================
 static void t2_xy64()
 {
-    heading("2. XYSTARTI + XYENDI in one 64-bit store with GO (docs/56 4.4, the spec's own example)");
+    heading("2. XYSTARTI + XYENDI in one 64-bit store with GO (docs/design/rex3-source-audit.md 4.4, the spec's own example)");
     fresh();
     const uint32_t blk = DM0_DRAW | DM0_BLOCK | DM0_DOSETUP | DM0_STOPONX | DM0_STOPONY;
     W(R_DRAWMODE0, blk);
@@ -366,7 +366,7 @@ static void t2_xy64()
 //============================================================================
 static void t3_color64()
 {
-    heading("3. colour register pairs as 64-bit stores (GL's sdc1, docs/56 3.1)");
+    heading("3. colour register pairs as 64-bit stores (GL's sdc1, docs/design/rex3-source-audit.md 3.1)");
     fresh();
     // Something else in all four first, so a dropped half is visible.
     W(R_COLORRED, 0x00011111); W(R_COLORALPHA, 0x00022222);
@@ -423,7 +423,7 @@ static void t4_host64()
 //============================================================================
 static void t5_reads()
 {
-    heading("5. reads behind a running primitive (docs/56 4.4)");
+    heading("5. reads behind a running primitive (docs/design/rex3-source-audit.md 4.4)");
     fresh();
     const uint32_t blk = DM0_DRAW | DM0_BLOCK | DM0_DOSETUP | DM0_STOPONX | DM0_STOPONY;
     const int X0 = 0, Y0 = 700, X1 = 255, Y1 = 763;
@@ -467,7 +467,7 @@ static void t5_reads()
            !g_hung && st.lat <= LIM && (st.v & ST_GFXBUSY) && st.running, nullptr,
            {strf("answered in %llu clocks with %08x, the fill %s",
                  (unsigned long long)st.lat, st.v, run_word(st.running))});
-    report("5c", "CONFIG (0x1330) read during the fill answers at once (docs/56: immediate class)",
+    report("5c", "CONFIG (0x1330) read during the fill answers at once (docs/design/rex3-source-audit.md: immediate class)",
            !g_hung && cf.lat <= LIM && cf.running, nullptr,
            {strf("answered in %llu clocks with %08x, the fill %s",
                  (unsigned long long)cf.lat, cf.v, run_word(cf.running))});
@@ -524,7 +524,7 @@ static void t5_reads()
 //============================================================================
 static void t6_vdma()
 {
-    heading("6. VDMA write beats with the host buffer's start byte in nd_addr[2:0] (docs/56 4.4)");
+    heading("6. VDMA write beats with the host buffer's start byte in nd_addr[2:0] (docs/design/rex3-source-audit.md 4.4)");
     fresh();
     W(R_DRAWMODE1, CI8 | DM1_RWPACKED | DM1_HD8 | DM1_RWDOUBLE);
     W(R_DRAWMODE0, DM0_DRAW | DM0_BLOCK | DM0_COLORHOST | DM0_STOPONX | DM0_STOPONY);
@@ -562,7 +562,7 @@ static void t6_vdma()
 //============================================================================
 static void t7_glcoords()
 {
-    heading("7. GL-format coordinates: the raw bits of the float 4096 + x (docs/56 4.1, 4.2)");
+    heading("7. GL-format coordinates: the raw bits of the float 4096 + x (docs/design/rex3-source-audit.md 4.1, 4.2)");
     fresh();
     const uint32_t blk = DM0_DRAW | DM0_BLOCK | DM0_DOSETUP | DM0_STOPONX | DM0_STOPONY;
     W(R_DRAWMODE0, blk);
@@ -626,7 +626,7 @@ static std::set<std::pair<int, int>> pixels_at(const std::vector<Change> &ch, in
 
 static void t8_setup()
 {
-    heading("8. SETUP (0x0030): the line/span setup without iteration (docs/56 4.1, 4.2)");
+    heading("8. SETUP (0x0030): the line/span setup without iteration (docs/design/rex3-source-audit.md 4.1, 4.2)");
     fresh();
 
     // ---- 8a: a block ----------------------------------------------------------
@@ -768,7 +768,7 @@ static void xmap_mode(int entry, uint32_t mode)  // both XMAP9s (chip 4), CRS 5
 // A timing table with the shape of np_timing.h's 1280 x 1024 ones: 1680 x
 // 1065 pixels a frame; on a visible line VIS_LN (state A bit 0) lasts 1296
 // pixels and DSPLY_EN (state A bit 2) starts with it and runs 22 further, to
-// 1318 (docs/56 3.6, 4.5). Durations are in two-pixel units, the channels
+// 1318 (docs/design/rex3-source-audit.md 3.6, 4.5). Durations are in two-pixel units, the channels
 // active low; see tb_vc2.cpp for the format.
 static void vc2_load_1280x1024()
 {

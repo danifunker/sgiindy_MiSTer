@@ -218,7 +218,7 @@ architecture arch of cpu_cop0 is
    -- cpu.vhd, which has the same constant, and it picks the FPU's FIR in
    -- cpu_FPU.vhd. Set all three copies false to go back to reporting the
    -- R4300 the N64 core was built as, which is what the cpu-tests suite needs
-   -- to apply honest R4300 expectations - see docs/10-r4300-integration.md.
+   -- to apply honest R4300 expectations - see docs/reference/cpu.md.
    constant PRESENT_AS_R4600 : boolean := true;
 
    -- SGI: an R4600 has 48 TLB entries (so do the R4000/R4400 and R5000). The
@@ -354,7 +354,7 @@ architecture arch of cpu_cop0 is
    signal TLB_readAddr                    : unsigned(5 downto 0) := (others => '0');
    signal TLB_compareEnd                  : unsigned(5 downto 0) := (others => '0');
 
-   -- SGI: THE TLB IS MATCHED IN PARALLEL, NOT WALKED (docs/50). Upstream
+   -- SGI: THE TLB IS MATCHED IN PARALLEL, NOT WALKED (docs/design/cpu-speed-tlb-icache.md). Upstream
    -- compares one entry per clock, starting from the entry that matched last,
    -- because the entries live in LUT RAM and an N64 game barely uses the TLB.
    -- IRIX runs every user program through it: a fetch that leaves the
@@ -549,7 +549,7 @@ begin
    -- KSEG0/KSEG1 - but KI2's boot ROM stores to kuseg with ERL = 1, and without
    -- this it takes a TLBS refill exception on every one of them.
    --
-   -- SGI: the EXL/ERL rule is the one this core needed first (docs/09): with
+   -- SGI: the EXL/ERL rule is the one this core needed first (docs/reference/cpu-validation.md): with
    -- the raw KSU exported, every exception taken FROM USER CODE decoded its
    -- handler's addresses with the user table, and IRIX's general exception
    -- handler, which keeps its scratch area in KSEG3, saved its stack pointer
@@ -670,7 +670,7 @@ begin
             readValue(1 downto 0)   <= COP0_16_CONFIG_cacheAlgoKSEG0;
             readValue(3 downto 2)   <= COP0_16_CONFIG_cu;   
             if (PRESENT_AS_R4600) then
-               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines, what an R4600 reports - and what both caches are (the I-cache is 16 KB again since docs/50, cpu_instrcache.vhd). IRIX never reads it anyway
+               readValue(14 downto 4) <= "11001001011";   -- SGI: 16K/16K, 32 B lines, what an R4600 reports - and what both caches are (the I-cache is 16 KB again since docs/design/cpu-speed-tlb-icache.md, cpu_instrcache.vhd). IRIX never reads it anyway
             else
                readValue(14 downto 4) <= "11001000110";   -- R4300: 16K/8K, 32/16 B
             end if;

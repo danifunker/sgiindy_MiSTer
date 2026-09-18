@@ -18,7 +18,7 @@
 //  `scripts/build.sh` reproduces it. What that does NOT prove is that the
 //  machine runs: a fit checks wiring, not behaviour, and everything this
 //  project claims about the behaviour still comes from Verilator. Treat a
-//  hardware run as a bring-up exercise and read docs/18-mister-integration.md
+//  hardware run as a bring-up exercise and read docs/reference/mister-integration.md
 //  first; it lists what is known to be missing rather than leaving it to be
 //  discovered. `scripts/deploy.sh` puts a build on a board.
 //
@@ -129,7 +129,7 @@ localparam CONF_STR = {
 	// the HPS UART working at all. This puts a transmitter of the core's own
 	// on the pin, in one clock domain or the other.
 	"O[16:15],UART debug,Off,0x55 from clk_sys,0x55 from sclk;",
-	// THE SCSI BLOCK CACHE (docs/49; rtl/scsi/scsi_cache.sv). Off makes every
+	// THE SCSI BLOCK CACHE (docs/design/scsi-block-cache.md; rtl/scsi/scsi_cache.sv). Off makes every
 	// block request a single-sector HPS transaction again, as before build
 	// 26 - the control for measuring the cache on one bitstream, and the
 	// way out if it ever misbehaves. scripts/setopt.sh knows it as scsicache.
@@ -193,7 +193,7 @@ assign sd_lba[2] = scsi_sd_lba[2];
 assign sd_lba[3] = scsi_sd_lba[6];
 // Blocks per transaction, minus one. The block cache issues one transaction
 // at a time and says how long it is; hps_io reads the entry for the slot it
-// is servicing, so every slot carries the same value (docs/49). Up to 8
+// is servicing, so every slot carries the same value (docs/design/scsi-block-cache.md). Up to 8
 // sectors here; hps_io's own ceiling is 16 KB.
 assign sd_blk_cnt[0] = 6'd0;
 assign sd_blk_cnt[1] = scsi_sd_blk_cnt;
@@ -226,7 +226,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(VDNUM)) hps_io
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 
-	// The MiSTer's clock, for the DS1386 (sgi_ds1386.sv, docs/51).
+	// The MiSTer's clock, for the DS1386 (sgi_ds1386.sv, docs/design/r4600-accuracy-clock-disk.md).
 	.RTC(host_rtc),
 
 	.ioctl_download(ioctl_download),
@@ -477,11 +477,11 @@ wire        txda, txdb;
 
 // SCSI debug beacon words out of the core (docs/28), to the writer below.
 wire [63:0] scsi_bcn [7];
-wire [63:0] scsi_stat [7];  // the disk-time counters (docs/49; 5-6 ver 14, docs/53)
+wire [63:0] scsi_stat [7];  // the disk-time counters (docs/design/scsi-block-cache.md; 5-6 ver 14, docs/design/scsi-sync-negotiation.md)
 wire [63:0] hpc3_dma_bcn;   // HPC3 SCSI0 DMA channel state (docs/29)
 wire [63:0] int_bcn [2];    // interrupt-delivery diagnostics (docs/29)
-wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/33)
-wire [63:0] perf_bcn [11];  // CPU performance counters (docs/50; w9 build 37; w10 ver 13)
+wire [63:0] vdma_bcn [4];   // VDMA / Newport pixel-DMA diagnostics (docs/design/newport-vdma.md)
+wire [63:0] perf_bcn [11];  // CPU performance counters (docs/design/cpu-speed-tlb-icache.md; w9 build 37; w10 ver 13)
 
 sgi_indy u_core
 (
@@ -741,7 +741,7 @@ fb_fetch_arb u_fetch_arb
 	.fbr_dout_valid(lc_valid)
 );
 
-// What the DDR3 port is doing, for the performance counters below (docs/50).
+// What the DDR3 port is doing, for the performance counters below (docs/design/cpu-speed-tlb-icache.md).
 wire [5:0] mx_busy, mx_pend;
 wire       mx_take, mx_take_rd, mx_gap, mx_cmdwait;
 wire [63:0] mx_rdlat [3];   // a RAM read's latency, split (build 37)
@@ -825,16 +825,16 @@ ddr3_mux u_mem
 // Runs on pll_locked alone - a guest reset must not stop the reporting.
 // Build 12 (ver=6) added words 11-13: the MC VDMA engine, its descriptor
 // addresses, and REX3's beat counters. Build 14 (ver=7) adds word 14: the
-// display-interpretation word - DID and mode entry in use (docs/33). ver=8
+// display-interpretation word - DID and mode entry in use (docs/design/newport-vdma.md). ver=8
 // adds word 15: the two display line caches - drawing-plane misses, auxiliary
 // misses, and lines the auxiliary cache published as zeros without a fetch
-// (docs/36) - which is how the PIX_DIV=1 bandwidth budget is checked live.
+// (docs/design/scsi-fit-and-framebuffer-layout.md) - which is how the PIX_DIV=1 bandwidth budget is checked live.
 // ver=9 (build 26) adds words 16-20: the SCSI disk-time counters - HPS
 // transactions by direction, HPS-busy and target-wait time, the block
 // cache's hits/misses/writes, bytes across the bus in DATA phases and bus
-// busy time, and DATA-phase time (docs/49). bcnread.py --stats turns two
+// busy time, and DATA-phase time (docs/design/scsi-block-cache.md). bcnread.py --stats turns two
 // readings into the boot's disk seconds.
-// ver=10 (docs/50) adds words 21-34, the performance counters: 21-28 the
+// ver=10 (docs/design/cpu-speed-tlb-icache.md) adds words 21-34, the performance counters: 21-28 the
 // CPU's (sgi_indy.sv - instructions, stall clocks by stage, TLB walks, cache
 // fills and the clocks they spent on the bus), 29-34 the DDR3 port's (below -
 // clocks each master held the port, clocks the CPU and the rasteriser waited
@@ -849,13 +849,13 @@ ddr3_mux u_mem
 // DMA transaction with the DMA transaction count (sgi_indy w9).
 // ver=13 (build 39) adds word 40: {the CPU's register 31 at retirement, the
 // PC last retired} (sgi_indy perf w10). prof.py samples it beside word 10, and
-// a sample in a leaf routine - us_delay, bcopy - names its caller (docs/53).
+// a sample in a leaf routine - us_delay, bcopy - names its caller (docs/design/scsi-sync-negotiation.md).
 // ver=14 (build 40) adds words 41-42: DATA-phase clocks split by whose turn it
 // is - {DATA IN waiting on the initiator /64, DATA IN waiting on the target /64}
-// and the same for DATA OUT (sgi_scsi dbg_stat 5-6, docs/53).
+// and the same for DATA OUT (sgi_scsi dbg_stat 5-6, docs/design/scsi-sync-negotiation.md).
 localparam int BCN_WORDS = 43;
 
-// ---- DDR3 port performance counters (docs/50) ------------------------------
+// ---- DDR3 port performance counters (docs/design/cpu-speed-tlb-icache.md) ------------------------------
 // WHO HAS THE ONE PORT, AND WHO IS WAITING FOR IT. Everything the machine
 // stores goes through ddr3_mux: the display's line fetches, the CPU's cache
 // fills and uncached accesses together with the SCSI and MC DMA engines (the
@@ -987,7 +987,7 @@ end
 // Straight out of VC2's timing generator. There is no scandoubler and no line
 // doubler: the raster is already 1318 x 1065 progressive, which is more than
 // MiSTer's scaler needs to work with, and what it is short of is not lines but
-// FRAME RATE. See the header, and docs/18-mister-integration.md.
+// FRAME RATE. See the header, and docs/reference/mister-integration.md.
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = vid_ce_pix;
 assign VGA_DE = vid_de;

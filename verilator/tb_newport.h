@@ -6,7 +6,7 @@
 //
 //  WHY A NEWPORT-LEVEL BENCH. tb_rex3.cpp and tb_rex3draw.cpp drive np_rex3
 //  through its own 32-bit register port, and that port is downstream of the
-//  bug docs/56 found first: newport.sv turns the CPU's doubleword into ONE
+//  bug docs/design/rex3-source-audit.md found first: newport.sv turns the CPU's doubleword into ONE
 //  register write (3.1, 4.4). Nothing reached newport.sv's bus handling
 //  until this - so everything here drives the top-level ports with the
 //  exact transaction shapes the rest of the machine produces.

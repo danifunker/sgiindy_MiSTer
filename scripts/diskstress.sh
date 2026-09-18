@@ -101,7 +101,7 @@ for i in $(seq 1 82); do STEPS+=("mouseMove:0,4" "sleep:0.02"); done
 ws "${STEPS[@]}"                                    # the Console, (500,600)
 rsh "sleep 3"
 
-# No pipes through the ws API (docs/49). The background ls keeps directory and
+# No pipes through the ws API (docs/design/scsi-block-cache.md). The background ls keeps directory and
 # inode reads going while the copies write; each copy is synced so its blocks go
 # out while the next one is being read.
 LIST=$(seq -s ' ' 1 "$COPIES")

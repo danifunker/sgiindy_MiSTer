@@ -5,7 +5,7 @@ Reads the drawing planes straight out of the DDR3 the HPS shares with the FPGA
 and writes one byte per pixel - the colour index - to /tmp/fb.raw, 1280x1024,
 which tools/misterdeploy/fbpng.py turns into a picture on the host. It bypasses
 the whole display pipeline, so "the login screen is in the grab" is NOT "the
-login screen is on the monitor" - always take scripts/grab.sh too (docs/33).
+login screen is on the monitor" - always take scripts/grab.sh too (docs/design/newport-vdma.md).
 
 LAYOUT. A 32-bit slot per pixel on a 2048-pixel stride, two pixels to a 64-bit
 word with the even pixel in the low half (np_rex3.sv). As the ARM sees it the

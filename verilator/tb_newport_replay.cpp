@@ -2,7 +2,7 @@
 //  tb_newport_replay - a REX3 bus trace captured from IRIS, replayed through
 //  newport.sv, and the frame buffers compared with IRIS's.
 //
-//  docs/56 section 5, phase 0: "the only gate that exercises GL's real
+//  docs/design/rex3-source-audit.md section 5, phase 0: "the only gate that exercises GL's real
 //  command mix". IRIS records every access the guest makes to REX3 - CPU
 //  loads and stores with their widths, the MC's VDMA beats - in program
 //  order; this drives each one through the same bus model as the directed
@@ -39,15 +39,15 @@
 //  the display would make of them.
 //
 //  BENCH-SIDE EMULATIONS, off unless asked for, so a trace can be compared
-//  past a bus defect docs/56 has already named. They change what is sent to
+//  past a bus defect docs/design/rex3-source-audit.md has already named. They change what is sent to
 //  the RTL, never the RTL, and the summary says which were on:
 //    --split64     a 64-bit store goes as two 32-bit stores, the GO on the
-//                  second (docs/56 3.1/4.4: what newport.sv should do)
+//                  second (docs/design/rex3-source-audit.md 3.1/4.4: what newport.sv should do)
 //    --gl-coords   the float coordinate registers' values are masked to
 //                  0x007FFF80 before they are sent, and a 32-bit XENDF1 goes
-//                  to XENDF (docs/56 4.1)
+//                  to XENDF (docs/design/rex3-source-audit.md 4.1)
 //    --sync-reads  every read but STATUS, USER_STATUS, CONFIG and the DCB
-//                  ports waits for the engine to go idle first (docs/56 4.4)
+//                  ports waits for the engine to go idle first (docs/design/rex3-source-audit.md 4.4)
 //
 //    make -C verilator newportreplay          (builds, then the synthetic self-test)
 //    ./obj_dir_npreplay/Vnewport_replay TRACE -o OUT \
@@ -127,7 +127,7 @@ static void usage(const char *argv0)
            "  --max-records N     stop after N records\n"
            "  --show N            read mismatches printed in full (default 20)\n"
            "  --split64 | --gl-coords | --sync-reads | --emulate-fixes (all three)\n"
-           "                      bench-side emulations of docs/56 fixes; see the source\n"
+           "                      bench-side emulations of docs/design/rex3-source-audit.md fixes; see the source\n"
            "  -v                  print every record\n",
            argv0, O.outdir.c_str());
 }

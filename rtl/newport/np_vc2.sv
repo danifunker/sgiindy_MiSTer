@@ -113,7 +113,7 @@ module np_vc2 #(
     // own XMAP mode. Zero when DC_CONTROL's DID enable is clear, which is
     // the whole-screen-entry-0 world the PROM console lives in.
     output logic  [4:0] did,
-    // {DID enable, walker state} for the DDR3 beacon (docs/33).
+    // {DID enable, walker state} for the DDR3 beacon (docs/design/newport-vdma.md).
     output logic  [3:0] dbg_did
 );
 
@@ -383,7 +383,7 @@ module np_vc2 #(
     // display enable, and the MiSTer scaler squeezed 1318 columns into 1280,
     // dropping one every ~34 pixels: glyph strokes that fell on a dropped
     // column vanished ("echo" -> "ecro"), with the frame buffer perfect
-    // underneath (docs/56 3.6). The two start on the same pixel, so column 0
+    // underneath (docs/design/rex3-source-audit.md 3.6). The two start on the same pixel, so column 0
     // is where it always was.
     //
     // `vis` drives everything INSIDE this module - the column counter, the

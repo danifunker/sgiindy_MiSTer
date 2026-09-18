@@ -1,7 +1,0 @@
-== rawdisk
-160+0 records in
-160+0 records out
-
-real	0m4.049s
-user	0m0.028s
-sys	0m1.717s

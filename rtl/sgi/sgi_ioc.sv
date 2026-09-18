@@ -40,7 +40,7 @@
 //  (the front panel) and nothing else, and polls its devices - it never takes
 //  an interrupt for SCSI at all. So a boot to the Command Monitor proves
 //  nothing about anything below, and reasoning about device timing from the
-//  console will mislead you; it already did once, and docs/12-chipset.md
+//  console will mislead you; it already did once, and docs/reference/chipset.md
 //  records the wrong conclusion next to the right one. tests/run-int.sh is
 //  what actually exercises this block.
 //============================================================================

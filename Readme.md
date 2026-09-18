@@ -11,7 +11,7 @@ boot screen through Newport, and reaches the System Maintenance Menu.
 **This is early.** It draws and it boots; it is not yet a machine you can use.
 No IRIX, no mouse pointer, no sound, no network, and nothing you change
 survives a reset. If you want to try it, read
-[`docs/20-releases.md`](docs/20-releases.md) first — it says what each build
+[`docs/20-releases.md`](docs/history.md#20) first — it says what each build
 does and does not do, and the install has one step that fails silently if you
 skip it.
 
@@ -26,7 +26,7 @@ skip it.
 
 Everything except the first two rows is measured under Verilator. The fit is
 Quartus 17.0.2 Lite on a `5CSEBA6U23I7`.
-[`docs/18-mister-integration.md`](docs/18-mister-integration.md) is the top
+[`docs/reference/mister-integration.md`](docs/reference/mister-integration.md) is the top
 level and what is still wrong with it.
 
 ```sh
@@ -63,10 +63,10 @@ Monitor, which is far easier to read than a screen that may not be there yet.
 ## Where to start
 
 [`docs/README.md`](docs/README.md) indexes everything.
-[`docs/10-r4300-integration.md`](docs/10-r4300-integration.md) is the CPU as
+[`docs/reference/cpu.md`](docs/reference/cpu.md) is the CPU as
 built — the byte-lane contract, what it takes to turn an R4300 into an R4400,
 the bugs fixed in the vendored core, and the numbers. If you are picking this work up,
-[`docs/08-resume-prompt.md`](docs/08-resume-prompt.md) is the entry point.
+[`docs/08-resume-prompt.md`](docs/history.md#08) is the entry point.
 
 ## Layout
 

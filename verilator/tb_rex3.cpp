@@ -272,7 +272,7 @@ int main(int argc, char **argv)
     check("every write the engine asserted reached memory", lost == 0);
 
     //========================================================================
-    //  Phase 2: the VDMA host port - X's pixel path (docs/33).
+    //  Phase 2: the VDMA host port - X's pixel path (docs/design/newport-vdma.md).
     //
     //  What IRIX's ng1 driver actually does: program a host-sourced packed
     //  draw (DRAW | colorhost, RWPACKED | RWDOUBLE, 8bpp host depth), then
@@ -359,7 +359,7 @@ int main(int argc, char **argv)
 
         //====================================================================
         //  Build 44: the host read path, SETUP, the VDMA start byte
-        //  (docs/56 4.1, 4.4). A register read here is what the CPU does -
+        //  (docs/design/rex3-source-audit.md 4.1, 4.4). A register read here is what the CPU does -
         //  one `sel` cycle, then wait for the acknowledgement.
         //====================================================================
         auto rd = [&](uint32_t off, uint32_t &val, int &waited) -> bool {
@@ -478,7 +478,7 @@ int main(int argc, char **argv)
 
     //========================================================================
     //  Phase 3: FASTCLEAR and the CID clip - the two write-path features X
-    //  leans on that the PROM never touches (docs/33). FASTCLEAR must write
+    //  leans on that the PROM never touches (docs/design/newport-vdma.md). FASTCLEAR must write
     //  COLORVRAM through a hostile logic op and a zero z-pattern; the CID
     //  clip must land pixels only where CLIPMODE's cidmatch mask permits the
     //  window ID in the auxiliary planes' low two bits.

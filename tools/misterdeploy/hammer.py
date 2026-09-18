@@ -5,7 +5,7 @@ The CPU test suite passes on this board, and a PROM boot fails about four times
 in ten. The largest difference between them is not the CPU: it is how many
 masters are on the memory. The suite never programs Newport, so the display's
 frame buffer reader is idle and the CPU has DDR3 to itself. A boot programs it,
-and docs/18 measures that reader saturating the port.
+and docs/reference/mister-integration.md measures that reader saturating the port.
 
 So this adds a second heavy reader while the suite runs. It is not the same
 master - it contends at the HPS end rather than through ddr3_mux's arbiter -

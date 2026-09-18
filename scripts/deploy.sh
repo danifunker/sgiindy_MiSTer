@@ -38,10 +38,10 @@ if [ -r scripts/local.env ]; then . scripts/local.env; fi
 : "${PROJECT_NAME:=sgiindy}"
 
 RBF="output_files/$RBF_NAME"
-# The PROM is normally the repository's own boot.rom, but it does not have to
-# be: tests/hw-cputest builds a boot.rom that IS the CPU test suite, and the
-# framework will upload anything at index 0 just the same.
-ROM="boot.rom"
+# The PROM is normally the release's releases/boot.rom, but it does not have
+# to be: tests/hw-cputest builds a boot.rom that IS the CPU test suite, and
+# the framework will upload anything at index 0 just the same.
+ROM="releases/boot.rom"
 LAUNCH=1
 ROM_ONLY=0
 while [ $# -gt 0 ]; do

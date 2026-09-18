@@ -1,6 +1,6 @@
 /*
  * icachesim - replay the simulator's instruction-cache access stream through
- * other cache geometries (docs/50).
+ * other cache geometries (docs/design/cpu-speed-tlb-icache.md).
  *
  *   ./obj_wm2/Vsim_top ... --itrace itrace.bin
  *   cc -O2 -o icachesim tools/icachesim.c

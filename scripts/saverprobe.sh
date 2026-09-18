@@ -14,7 +14,7 @@
 # /usr/sbin/haven over /usr/demos/bin/ep (ElectroPaint) and
 # /usr/demos/bin/bongo (Octahedra): shaded, dithered, blended spans into a
 # 12-bit double-buffered window, which is the colour DDAs, the dither and the
-# blend. Between them they cover the whole of what docs/55 added.
+# blend. Between them they cover the whole of what docs/design/rex3-rendering.md added.
 #
 # Each saver is started by a guest shell that also kills it after a fixed
 # time, because a saver that grabs the screen and the keyboard cannot be

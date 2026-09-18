@@ -2067,7 +2067,7 @@ reg [7:0] msg_byte;
 // sends a polled INQUIRY in the same connection. On the board that gap is
 // ~105,000-115,000 clocks, and a clock tick inside it pushes it past 131,072:
 // the target left the bus in the middle of the INQUIRY and build 39 printed
-// "SYNC negotiation error, resetting bus" (docs/53). The simulator's us_delay
+// "SYNC negotiation error, resetting bus" (docs/design/scsi-sync-negotiation.md). The simulator's us_delay
 // is calibrated against simulated time and waits ~28,000 clocks, which is why
 // it never showed. A real disk has no such timeout at all; this one only has
 // to free a bus a CDB-length disagreement left behind, and 84 ms is still
@@ -2981,7 +2981,7 @@ always @(posedge clk) begin
 			// GO. Two ways here: a connection that opened with MESSAGE OUT
 			// and no CDB behind it (what the IP24 PROM's synchronous-transfer
 			// negotiation looked like while wd33c93.sv's TRANSFER INFO was
-			// broken - docs/53 - and any driver that gives up after a
+			// broken - docs/design/scsi-sync-negotiation.md - and any driver that gives up after a
 			// message), and an initiator that stopped mid-CDB because its
 			// length decode disagrees with the one above (docs/29's vendor
 			// 0xc9). A real initiator ends the first itself and never causes

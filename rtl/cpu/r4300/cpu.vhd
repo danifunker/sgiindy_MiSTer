@@ -136,7 +136,7 @@ entity cpu is
       -- one entered this clock. This is OUTSIDE the savestate export's
       -- `-- synthesis translate_off` block on purpose: pcOld2..4 and
       -- cpu_export.pc live inside it, so they are not in the netlist GHDL
-      -- lowers for Verilator, and docs/06-simulation.md lists the missing PC
+      -- lowers for Verilator, and docs/reference/simulation.md lists the missing PC
       -- as the one instrument this harness did not have. It is needed the
       -- moment a failure stops producing bus cycles: an IRIX kernel that wedges
       -- in a cached loop is silent on the bus and invisible without it.
@@ -160,10 +160,10 @@ entity cpu is
       dbg_retire            : out std_logic := '0';
       -- SGI: register 31 as the retiring instructions have left it - after a
       -- JAL, the return address. A profiler sample inside a leaf routine
-      -- (us_delay, bcopy) then names its caller (docs/53).
+      -- (us_delay, bcopy) then names its caller (docs/design/scsi-sync-negotiation.md).
       dbg_ra                : out std_logic_vector(31 downto 0) := (others => '0');
       -- SGI: what the memory side of the pipeline is doing, for the
-      -- performance counters in sgi_indy.sv (docs/50). Bit 0 an instruction
+      -- performance counters in sgi_indy.sv (docs/design/cpu-speed-tlb-icache.md). Bit 0 an instruction
       -- cache fill requested, 1 a data cache fill requested, 2 a data cache
       -- writeback beat, 3 an uncached fetch requested (one-clock pulses);
       -- 4 a bus transaction issued (pulse); 5 a bus transaction in flight,
@@ -174,14 +174,14 @@ entity cpu is
       -- them.
       dbg_perf              : out std_logic_vector(9 downto 0) := (others => '0');
       -- SGI: the instruction cache's access stream, for the simulator's
-      -- --itrace (docs/50). Bit 32 pulses the clock after a fetch looked in
+      -- --itrace (docs/design/cpu-speed-tlb-icache.md). Bit 32 pulses the clock after a fetch looked in
       -- the cache (the fetch that found its line, or the one that filled it;
       -- a fetch held for a mini-TLB walk is counted once, when the walk hands
       -- it back); bits 31:0 are the physical address it looked up. Wires
       -- only, unconnected on the board.
       dbg_ifetch            : out std_logic_vector(32 downto 0) := (others => '0');
       -- SGI: the data cache's access stream, for the simulator's --dtrace
-      -- (docs/50), one clock late: bit 33 pulses for a load or store that
+      -- (docs/design/cpu-speed-tlb-icache.md), one clock late: bit 33 pulses for a load or store that
       -- went to the data cache, bit 32 says it was a store, bits 31:0 are the
       -- physical address. Unconnected on the board.
       dbg_dfetch            : out std_logic_vector(33 downto 0) := (others => '0');
@@ -657,7 +657,7 @@ architecture arch of cpu is
    signal FetchAddrTLBMuxed1           : unsigned(31 downto 0) := (others => '0'); 
    signal FetchAddrTLBMuxed2           : unsigned(31 downto 0) := (others => '0');
    -- SGI: THE INSTRUCTION CACHE IS PHYSICALLY INDEXED (docs/47). Its index is
-   -- bits 13:5 (16 KB since docs/50) and bits 13:12 are the ones a 4 KB page
+   -- bits 13:5 (16 KB since docs/design/cpu-speed-tlb-icache.md) and bits 13:12 are the ones a 4 KB page
    -- does not fix, so they are taken from FetchAddrTLBMuxed - the instruction
    -- mini-TLB's translation when the fetch is mapped, the (equal) virtual
    -- bits when it is not. The mini-TLB's physical bits 31:12 are a plain
@@ -3659,7 +3659,7 @@ begin
    -- answers), so that the instruction behind it could be given the loaded
    -- value by forwarding. Most never need it: over IRIX's kernel text 24.8 %
    -- of instructions are loads, and 80 % of those are followed by an
-   -- instruction that does not read the loaded register (docs/51 section 6).
+   -- instruction that does not read the loaded register (docs/design/r4600-accuracy-clock-disk.md section 6).
    -- For those the load goes to stage 4 and the next instruction executes in
    -- the same clock.
    --

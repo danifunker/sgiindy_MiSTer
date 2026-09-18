@@ -57,7 +57,7 @@ module hal2 (
     // REV. Bit 15 clear means "audio present"; the PROM's node printer splits
     // the rest as (v>>12)&7 . (v>>4)&F . v&F, so 0x4010 prints as 4.1.0 and
     // the "A2" beside it in hinv is a string in the PROM, not a field here.
-    // BIT 15 IS SET AGAIN - "no audio present" - since 2026-09-02 (docs/36).
+    // BIT 15 IS SET AGAIN - "no audio present" - since 2026-09-02 (docs/design/scsi-fit-and-framebuffer-layout.md).
     // With it clear, IRIX's audio.sm probe (exprobe of this register with
     // mask 0x8000) passes and the kernel loads the kdsp_a2 audio driver into
     // mapped kernel space, and that driver runs against a HAL2 with no DMA

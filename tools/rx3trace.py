@@ -25,7 +25,7 @@ each, IRIS's fb_rgb / fb_aux layout: pixel (x, y) at y * 2048 + x.
       the frame buffers IRIS would dump at each of its markers. Marker 0 is a
       filled block and some register reads, marker 1 an image drawn and read
       back by VDMA, marker 2 GL's shapes: a 64-bit XYSTARTI+XYENDI|GO and a
-      64-bit colour pair. On the RTL as it is, marker 2 differs (docs/56 3.1)
+      64-bit colour pair. On the RTL as it is, marker 2 differs (docs/design/rex3-source-audit.md 3.1)
       unless the replay is given --split64.
   python3 tools/rx3trace.py print TRACE [-n N]
       the records, one a line, and a count of each kind

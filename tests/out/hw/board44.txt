@@ -1,4 +1,0 @@
-[05:55:10] build 44: output_files/sgiindy-b44-seed2.rbf (889b69be4ee3b2248a61162b4dc6c078)
-[05:55:11] saverprobe
-[06:20:07] saverprobe rc=0
-[06:20:07] textprobe

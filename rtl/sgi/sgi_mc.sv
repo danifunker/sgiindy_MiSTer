@@ -5,7 +5,7 @@
 //  mc.pdf), cross-checked against IRIS's src/mc.rs and against what the PROM
 //  actually does at 0xBFC003C0. Where the spec and the PROM's own annotated
 //  disassembly disagreed, the spec won and the disassembly's register names
-//  turned out to be shifted by one slot; docs/02-address-map.md records that.
+//  turned out to be shifted by one slot; docs/reference/address-map.md records that.
 //
 //  REGISTER ADDRESSING - the thing to get right first.
 //
@@ -28,7 +28,7 @@
 //  THE GIO64 DMA ENGINE IS REAL NOW - fill, both copy directions, and the
 //  µTLB translation, in rtl/sgi/mc_gio_dma.sv, with the DMA-done interrupt
 //  on `dma_int` (INT2 LOCAL0 bit 4). IRIX's ng1 driver runs every pixel X
-//  draws through it; docs/33 has the whole diagnosis.
+//  draws through it; docs/design/newport-vdma.md has the whole diagnosis.
 //============================================================================
 
 module sgi_mc #(
@@ -114,7 +114,7 @@ module sgi_mc #(
     // every pixel DMA X issues; unwired it is the whole black desktop.
     output logic        dma_int,
 
-    // Live engine and descriptor state for the DDR3 beacon (docs/33):
+    // Live engine and descriptor state for the DDR3 beacon (docs/design/newport-vdma.md):
     // dma_dbg   = {mode[7:0], XLATE, 2'b0, IE, cause[3:0], engine dbg[23:0],
     //              int level, 3'b0, gio_adr[19:0]}
     // dma_addrs = {memadr, gio_adr}, the live descriptor registers.

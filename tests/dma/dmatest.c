@@ -8,7 +8,7 @@
  * something else needs them:
  *
  *   - The PROM's descriptors never set XIE, so the whole interrupt path can be
- *     broken without the boot noticing. docs/12-chipset.md records the last
+ *     broken without the boot noticing. docs/reference/chipset.md records the last
  *     time this project concluded an interrupt worked because the thing behind
  *     it worked.
  *   - The PROM writes ch_active with a plain store, never with ch_active_mask,

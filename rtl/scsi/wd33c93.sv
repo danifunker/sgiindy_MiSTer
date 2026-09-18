@@ -18,7 +18,7 @@
 //  fitted.
 //
 //  Both addresses come out of the PROM's own device descriptor table at
-//  0xBFC7B410, not from a datasheet reading - see docs/02-address-map.md.
+//  0xBFC7B410, not from a datasheet reading - see docs/reference/address-map.md.
 //
 //  WHAT THIS DRIVES. The SCSI bus side talks to scsi.v, a target-only device
 //  vendored from the MacLC core. This module is the initiator: it arbitrates,
@@ -430,7 +430,7 @@ module wd33c93 #(
     // connection), and a negotiation that fails that way leaves the target
     // marked "not negotiated", so the kernel negotiated again in front of
     // nearly EVERY command: us_delay was 20 % of the board's boot and 11 % of
-    // a login (docs/53).
+    // a login (docs/design/scsi-sync-negotiation.md).
     logic        pio_sbt;       // single byte transfer: the count is one
     logic  [2:0] pio_phase;     // the phase the transfer runs in
     logic [23:0] pio_left;      // bytes still to move

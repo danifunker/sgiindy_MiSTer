@@ -101,7 +101,7 @@
 //  `mem` group exercises exactly this, at every offset, and settles it: all
 //  eighteen pass, with the caches on and with `--no-icache --no-dcache`. The
 //  concern was real and the answer is that it works; both are recorded here
-//  rather than one of them - see docs/09-cpu-validation.md.
+//  rather than one of them - see docs/reference/cpu-validation.md.
 //============================================================================
 
 module r4300_bus

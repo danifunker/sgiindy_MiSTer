@@ -14,7 +14,7 @@
 //    * `img_blocks` (the 32-bit block count sgi_scsi already carries) is the
 //      mount-size tag, in place of hps_io's 64-bit img_size;
 //    * `stat_hits` / `stat_misses` are 32 bits and `stat_writes` counts the
-//      sectors accepted from the engine, for the DDR3 beacon (docs/49);
+//      sectors accepted from the engine, for the DDR3 beacon (docs/design/scsi-block-cache.md);
 //    * `bypass`: an OSD switch that turns every request into a passthrough.
 //      A bypassed request on a slot holding dirty sectors flushes them first
 //      (the guest is about to read the image directly), and drops the slot's

@@ -17,7 +17,7 @@
 # Count, so what it reports is instruction throughput. Doubling PIT_TICK_DIV
 # and doubling RTC_TICK_DIV each leave it at 16, which rules out both
 # timebases; the loop lives at 0xBFC3159C, in uncached KSEG1, so the
-# instruction cache does not move it either. See docs/10-r4300-integration.md,
+# instruction cache does not move it either. See docs/reference/cpu.md,
 # "What it did not buy". The part that matters is "R4400, with FPU".
 #
 # The run ends on "Mbytes" rather than on "Memory size:", which is the last
@@ -56,7 +56,7 @@ FORBID=(
     # The 8042 answers its self-test, so the keyboard/mouse diagnostic passes
     # and prints nothing at all. This used to be an EXPECT line, back when the
     # ports read zero and the only question was whether POST got as far as
-    # complaining about them - see docs/12-chipset.md finding 10. Moved here
+    # complaining about them - see docs/reference/chipset.md finding 10. Moved here
     # rather than deleted: the machine now gets further, and a regression that
     # brought the failure back would otherwise pass silently.
     "PC keyboard/mouse controller"
@@ -68,7 +68,7 @@ FORBID=(
     "SCSI controller 0 diagnostic"
     # The bus scan of the empty IDs used to print one of these per ID and then
     # fail POST. It was the chip accepting a command while an interrupt was
-    # still pending, where the part sets LCI and refuses; docs/12-chipset.md has
+    # still pending, where the part sets LCI and refuses; docs/reference/chipset.md has
     # the whole diagnosis. "Diagnostics failed" was an EXPECT line for as long
     # as that was true - POST now passes, and with it the "[Press any key to
     # continue.]" prompt that used to gate the menu is gone too.

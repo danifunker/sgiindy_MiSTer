@@ -8,7 +8,7 @@
 # with efsread.py and compares: IRIX's checksums against the bytes on disk, and
 # the copy against its source, byte for byte.
 #
-# Written for the DMA word batching (docs/51): a change there that loses or
+# Written for the DMA word batching (docs/design/r4600-accuracy-clock-disk.md): a change there that loses or
 # misplaces a byte shows up here as a wrong checksum or a differing copy, where
 # a benchmark would only show a faster number.
 #
@@ -110,7 +110,7 @@ ws "${STEPS[@]}"                                    # the Console, (500,600)
 rsh "sleep 3"
 
 # No pipes: a `|` typed through the ws API never reaches IRIX's shell as one
-# (docs/49). The copy is synced before the halt so it is on the disk rather than
+# (docs/design/scsi-block-cache.md). The copy is synced before the halt so it is on the disk rather than
 # in the buffer cache.
 say "checksumming and copying inside IRIX"
 ws "text:sum $FILES > $SUMS; sum -r $FILES >> $SUMS; cp $SRC $COPY; sync; sync" "sleep:0.3" "kbdRaw:28"

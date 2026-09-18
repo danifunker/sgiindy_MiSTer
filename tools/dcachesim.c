@@ -1,6 +1,6 @@
 /*
  * dcachesim - replay the simulator's data-cache access stream through other
- * cache geometries (docs/50). The data-side companion of icachesim.c.
+ * cache geometries (docs/design/cpu-speed-tlb-icache.md). The data-side companion of icachesim.c.
  *
  *   ./obj_wm2/Vsim_top ... --dtrace dtrace.bin
  *   cc -O2 -o dcachesim tools/dcachesim.c

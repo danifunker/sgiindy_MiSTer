@@ -50,7 +50,7 @@ static const int H_VIS = H_VIS_RUNS * H_VIS_DUR;
 // DSPLY_EN RUNS ON PAST THE PICTURE, as it does in every real table: RO1's
 // pipeline enable stays asserted to flush the pipe after VIS_LN, the visible
 // window, has ended - 22 pixels on IRIX's 1280x1024 table. The display must
-// follow VIS_LN (docs/56 3.6: following DSPLY_EN made the MiSTer scaler drop
+// follow VIS_LN (docs/design/rex3-source-audit.md 3.6: following DSPLY_EN made the MiSTer scaler drop
 // a column every 34 pixels), so this table gives the two different ends and
 // the visible width checked is VIS_LN's.
 static const int H_TAIL = 11;                              // DSPLY_EN only

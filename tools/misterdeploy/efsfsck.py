@@ -3,7 +3,7 @@
 
 RUN IT ON THE HOST, not on the board: it keeps an owner for every allocated
 block, which is ~400 MB for this 2 GB image, and the MiSTer has 492 MB and no
-swap (docs/53 §7). Copy the image over, or check the pristine one here.
+swap (docs/design/scsi-sync-negotiation.md §7). Copy the image over, or check the pristine one here.
 
 Walks every in-use inode, collects the basic blocks its extents (and indirect
 extent blocks) claim, and compares them with the free-block bitmap:

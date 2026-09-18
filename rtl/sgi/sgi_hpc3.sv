@@ -338,7 +338,7 @@ module sgi_hpc3 (
         // BIT 15 IS THE SWITCH, AND IT IS SET AGAIN (hal2.sv REV_VALUE,
         // 2026-09-02): with it clear IRIX loads the kdsp_a2 audio driver,
         // which wedges the kernel in an endless bzero the first time
-        // anything plays a sound (docs/36). Set, it means "no audio
+        // anything plays a sound (docs/design/scsi-fit-and-framebuffer-layout.md). Set, it means "no audio
         // present", and both the PROM and the IRIX driver skip the audio
         // path entirely - which is what this returned before, deliberately,
         // as IRIS's hal2_absent_read does. Clearing it commits to answering the

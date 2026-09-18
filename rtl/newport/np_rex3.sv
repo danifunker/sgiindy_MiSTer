@@ -36,7 +36,7 @@
 //  from a real IRIX desktop, and counting its feature bits says what a
 //  screen saver actually needs: dither in 197 of them, the three line
 //  address modes in 137, the colour DDAs in 85, line stipple in 49, alpha
-//  blending in 46. docs/55 has the table.
+//  blending in 46. docs/design/rex3-rendering.md has the table.
 //
 //  So: colour DDAs with per-pixel slopes and the CI and RGB clamps, the
 //  24-bit-to-plane-depth compression with the Bayer dither, alpha blending
@@ -134,7 +134,7 @@ module np_rex3 #(
     // depends on it: build 12 wired the raw vblank level there instead, the
     // ISR could never retire it, and the machine spent ~80% of its cycles
     // in exception_ip12/VEC_int - a boot that crawled for half an hour and
-    // never reached X (docs/33).
+    // never reached X (docs/design/newport-vdma.md).
     output logic        vrint_irq
 );
 
@@ -677,7 +677,7 @@ module np_rex3 #(
     // op and the patterns - IRIS's process_pixel_fastclear, active for DRAW
     // without host data when the CID clip is off. Xsgi fills every large
     // background this way; ignoring the bit painted the login panel with a
-    // stale colour source: index 0, black (docs/33).
+    // stale colour source: index 0, black (docs/design/newport-vdma.md).
     wire        fastclear_act = dm1_fastclear && (cid_match == 4'hF)
                               && (dm0_opcode == OP_DRAW) && !host_mode;
 
@@ -954,7 +954,7 @@ module np_rex3 #(
     // it is odd, picked with the port's byte enables. The auxiliary region
     // starts 8 MB above the drawing one. This is IRIS's shape (rex3.rs keeps
     // fb_rgb and fb_aux as two arrays), and it is what lets the display fetch
-    // half as much per pixel: see rtl/mister/fb_linecache.sv and docs/18.
+    // half as much per pixel: see rtl/mister/fb_linecache.sv and docs/reference/mister-integration.md.
     //
     // THE SPARE BYTE OF A DRAWING SLOT CARRIES A COPY OF THE WINDOW-ID NIBBLE
     // (aux[3:0], the same four bits the CID clip compares), kept current by a
@@ -1632,7 +1632,7 @@ module np_rex3 #(
     // and then reads HOSTRW0|GO back to back, and IRIS GL's lrectread and
     // libGLcore's ReadPixels do the same - so every word after the first was
     // the previous one, and back-to-back GOs merged into `go_pending`'s one
-    // bit (docs/56 4.4). Now a read waits: the status registers never (the
+    // bit (docs/design/rex3-source-audit.md 4.4). Now a read waits: the status registers never (the
     // REX3WAIT/BFIFOWAIT polls must not deadlock against the engine they are
     // waiting for), the display-bus registers for the display bus only, and
     // everything else for the engine. A read's GO fires as it is answered -
@@ -1697,7 +1697,7 @@ module np_rex3 #(
     // builds the GIO address as (phys & ~7) | (memaddr & 7) (/unix
     // 0x88190440): a buffer at 4..7 mod 8 used to decode as HOSTRW1 and
     // every beat of it was dropped - PutImage drew nothing and GetImage read
-    // zeros (docs/56 4.4). The MC's engine has already realigned the data.
+    // zeros (docs/design/rex3-source-audit.md 4.4). The MC's engine has already realigned the data.
     wire [12:0] nd_reg  = {nd_off[12], 1'b0, nd_off[10:0]} & 13'h1FF8;
     wire        nd_host = (nd_reg == R_HOSTRW0);
 
@@ -1887,7 +1887,7 @@ module np_rex3 #(
                         // and a fractional line's endpoint correction - and
                         // draws nothing. GL's glBitmap, IRIS GL's lrectwrite
                         // and both libraries' depth-buffered lines write it and
-                        // then GO without DOSETUP (docs/56 4.1, 4.2).
+                        // then GO without DOSETUP (docs/design/rex3-source-audit.md 4.1, 4.2).
                         R_SETUP:       begin setup_r <= wr_val;
                                              setup_pending <= 1'b1; end
                         R_STEPZ:       stepz     <= wr_val;
@@ -1912,7 +1912,7 @@ module np_rex3 #(
                         // registers' mask, kept those four bits, and turned
                         // every GL coordinate into x - 20480: GL's clear, its
                         // lines and its points were all culled off the left
-                        // of the frame buffer (docs/56 4.1). IRIS and MAME
+                        // of the frame buffer (docs/design/rex3-source-audit.md 4.1). IRIS and MAME
                         // both mask with 0x007FFF80.
                         R_XSTARTF:     begin xstart <= wr_val & M_GLCOORD;
                                              xsave  <= wr_val & M_GLCOORD; end

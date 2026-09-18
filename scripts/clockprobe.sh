@@ -5,7 +5,7 @@
 # by the host's clock. Answers two separate questions about the machine's clock:
 #
 #   * what date IRIX believes at boot - the DS1386 has no battery here, so this
-#     is whatever the core seeds it with (docs/51);
+#     is whatever the core seeds it with (docs/design/r4600-accuracy-clock-disk.md);
 #   * whether IRIX's time ADVANCES at real speed: the two readings' difference
 #     against the host's GAP, to about 1 s in GAP (the readings are whole
 #     seconds and the typing is timed on the host).

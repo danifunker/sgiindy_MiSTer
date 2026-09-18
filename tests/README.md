@@ -21,7 +21,7 @@ tests/run-irix.sh         # boot an INSTALLED IRIX 5.3 root to the kernel    ~5 
 `run-irix.sh` is the only one that runs guest code past the PROM, and it needs
 a two-gigabyte installed-IRIX image this repository cannot carry — it **skips**
 without one. It is worth its five minutes: the PROM never uses the TLB, so
-every other test here passed against the CPU bug in `docs/09` that looped the
+every other test here passed against the CPU bug in `docs/reference/cpu-validation.md` that looped the
 IRIX kernel forever on its first nested TLB miss.
 
 **Everything except the last two graphics tests passes `--no-gfx`**, and that is not a
@@ -43,7 +43,7 @@ Copyright 1987-1994 Silicon Graphics, Inc.
 Getting there means the PROM read the volume header, `sash` loaded `/unix`
 off an EFS filesystem, and the kernel ran far enough to bring up its own
 console — which on an R4400 means a few million TLB refill exceptions. That
-last part is the point. `docs/09`, "A TLB refill taken with EXL set", is a
+last part is the point. `docs/reference/cpu-validation.md`, "A TLB refill taken with EXL set", is a
 CPU bug that every other test in this directory passes over, because the PROM
 runs entirely in KSEG0/KSEG1 and never takes a TLB exception at all.
 
@@ -62,13 +62,13 @@ passes on the reference fails here.
 The suite is *not* forked into this repo. It is a general MIPS III/IV suite
 that also runs on real SGI hardware, and its expectations come from the R4000
 manual; keeping it upstream is what keeps it honest. Set `CPUTESTS` if your
-checkout is elsewhere. See [docs/09-cpu-validation.md](../docs/09-cpu-validation.md)
-for the oracle policy and [docs/10-r4300-integration.md](../docs/10-r4300-integration.md)
+checkout is elsewhere. See [docs/reference/cpu-validation.md](../docs/reference/cpu-validation.md)
+for the oracle policy and [docs/reference/cpu.md](../docs/reference/cpu.md)
 for the R4300 support that was added to it.
 
 Current: **2161 checks passed, 3 failed** over 240 tests, against 2101 / 61 for
 IRIS's own R4400 — the same expectations, since the core identifies as an
-R4400. One test fails, `fpu/vec_cvt_from_l`, diagnosed in `docs/10`.
+R4400. One test fails, `fpu/vec_cvt_from_l`, diagnosed in `docs/reference/cpu.md`.
 
 `--no-icache` and `--no-dcache` pass straight through to the simulator, so a
 failure can be bisected onto one of the primary caches without a rebuild.
@@ -245,7 +245,7 @@ loads, and for an interpreter "close" is a bug. The frame buffer is written to
 shows the store **row for row**: it aligns the rows where the pins picture
 changes with the rows where the store changes (the boot screen's gradient
 gives about 150 of them). A size check alone passed on a build whose VC2
-numbered its lines from 1 and never showed frame buffer row 0 (docs/36
+numbered its lines from 1 and never showed frame buffer row 0 (docs/design/scsi-fit-and-framebuffer-layout.md
 section 5); this one fails it.
 
 ## `run-rex3.sh` — every pixel against every command

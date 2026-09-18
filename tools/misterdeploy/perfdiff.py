@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Two performance-counter readings -> what the machine did between them.
 
-The counters are beacon words 21-34 (ver 10, docs/50), 35 (ver 11) and 36-39
+The counters are beacon words 21-34 (ver 10, docs/design/cpu-speed-tlb-icache.md), 35 (ver 11) and 36-39
 (ver 12, build 37): sgi_indy.sv counts the CPU's clocks and events, sgiindy.sv
 and ddr3_mux.sv the DDR3 port's. `bcnread.py --perf` on the board prints one
 reading as a line of 28 integers (30 from ver 11, 38 from ver 12); give this

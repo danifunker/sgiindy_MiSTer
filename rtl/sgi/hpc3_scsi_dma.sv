@@ -81,7 +81,7 @@
 //      whole burst-sizing apparatus exist to keep a 64-bit GIO64 burst busy;
 //      this engine moves one byte per handshake and the pointers are storage.
 //
-//  ONE MEMORY CYCLE PER WORD, NOT PER BYTE (docs/51). Main memory is a DDR3
+//  ONE MEMORY CYCLE PER WORD, NOT PER BYTE (docs/design/r4600-accuracy-clock-disk.md). Main memory is a DDR3
 //  round trip - about ten clocks holding the port on the board - and this
 //  engine used to spend one on every byte: half of the ~25 clocks a byte of a
 //  data phase cost. DATA IN bytes now collect in `wbuf`, in their lanes, and

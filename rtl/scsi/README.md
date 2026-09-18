@@ -52,7 +52,7 @@ Two local changes, marked in the source with `SGI LOCAL CHANGE` at every hunk
 so a re-vendor can find them.
 
 **A READ's next three bytes are an output** (`dout_ahead_read`,
-`dout_ahead_ok`; docs/51 §10). The WD33C93B model takes a DATA IN byte with
+`dout_ahead_ok`; docs/design/r4600-accuracy-clock-disk.md §10). The WD33C93B model takes a DATA IN byte with
 the three after it so that three bytes in four skip the settle for the
 buffer's look-ahead prefetch. The bytes are the sector buffers' own `q_b` /
 `q_c` / `q_d` terms, exactly the READ arms of `cmd_dout_pair` and
@@ -82,7 +82,7 @@ three CD pages, and the LBA/transfer-length scale at command latch.
 
 ## The block cache (`scsi_cache.sv`)
 
-Between the targets and hps_io since build 26 (docs/49), and ported nearly
+Between the targets and hps_io since build 26 (docs/design/scsi-block-cache.md), and ported nearly
 verbatim from MacQuadra800_MiSTer's `rtl/scsi_cache.sv` - that core's
 `docs/scsi-block-cache.md` is the design note, and `verilator/tb_scsi_cache.sv`
 here is its bench. The targets did not change: the cache offers `scsi.v`

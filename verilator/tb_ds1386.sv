@@ -1,6 +1,6 @@
 //============================================================================
 //  tb_ds1386 -- the DS1386's time registers against the MiSTer's clock
-//  (docs/51). `make -C verilator tb_ds1386`.
+//  (docs/design/r4600-accuracy-clock-disk.md). `make -C verilator tb_ds1386`.
 //
 //  Drives hps_io's RTC bus the way Main_MiSTer's send_rtc() and hps_io.sv do
 //  it - the four data words first, bit 64 toggled at the end of the command -

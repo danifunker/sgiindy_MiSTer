@@ -341,7 +341,7 @@ static u8 wait_int(void)
 /* Issue a command, honouring the one rule of the part that this project has
  * already got wrong once: a command written while an interrupt is still
  * pending bounces off LCI and has to be retried after the stale interrupt is
- * cleared. docs/12-chipset.md has the diagnosis; the PROM's own command-issue
+ * cleared. docs/reference/chipset.md has the diagnosis; the PROM's own command-issue
  * routine at 0xBFC1F64C is built around exactly this. */
 static int wd_command(u8 cmd)
 {

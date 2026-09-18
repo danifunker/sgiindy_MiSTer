@@ -11,7 +11,7 @@
 //  reading of the RTL would agree with the RTL and prove nothing.
 //
 //  The copy modes are the ones IRIX's ng1 driver uses for every pixel X
-//  draws (docs/33): mode 0x50 mem->GIO with XLATE for writes, 0x52 for
+//  draws (docs/design/newport-vdma.md): mode 0x50 mem->GIO with XLATE for writes, 0x52 for
 //  reads. The cases below include the exact shapes Ng1PixelDma programs -
 //  translated, unaligned, multi-line with stride - and the fault paths.
 //
