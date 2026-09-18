@@ -48,8 +48,16 @@ This is the R4000 **BEV=1** boot-exception layout:
    this is the one place the reset path is inferred rather than certain.)*
 3. Clear `MC_CPU_ERRSTAT` and `MC_GIO_ERRSTAT`, dummy-read `0x1fbb0000`
    (`INTSTAT`).
-4. Compute a refresh/timing value from `Config` cache-size fields and write
-   `MC_CPUCTRL0`; write `MC_CPUCTRL1 = 0x16`; program `MC_RPSS_CTR`.
+4. Compute `CPUCTRL0`'s `MUX_HWM` field from the cache line size in `Config` —
+   the secondary cache's (`SB`) when `SC` says one is fitted, otherwise 32 or
+   16 bytes from the primary caches' `IB`/`DB` bits — and write `MC_CPUCTRL0`
+   with refresh enabled at four lines a burst. Then `MC_CPUCTRL1 = 0x16`,
+   `GIO64_ARB = 0x401` (at `0x1fa00084`, from a table word),
+   `CPU_MEMACC = 0x11453433`, `GIO_MEMACC = 0x00034322` and
+   `RPSS_DIVIDER = 0x104`, and spin at `0xbfc00510` until `RPSS_CTR`
+   (`0x1fa01004`) has advanced by `0x271`. *(An earlier reading of this step
+   said it "programs `MC_RPSS_CTR`": that was the write to `0x1fa00084`, under
+   the inventory's shifted name for it — see HARDWARE.md.)*
 5. Then, in order:
 
 | Call | Function | What it does |
@@ -138,9 +146,10 @@ strings `init_env(` and `init_env()\r\n` sit at device `0x10d`–`0x12f`, inside
 the checksummed window; they look like debug output that was written into the
 image after the checksum was last computed.
 
-`reference/prom/nvram-default-repaired.bin` is that file with the single byte corrected
+`nvram-default-repaired.bin` is that file with the single byte corrected
 (offset `0x40`, `0xda` → `0xb3`); it validates. Nothing else was changed, and
-the original was not modified.
+the original was not modified. Neither file is in this repository;
+`tools/prom/nvram.py` does the same check and repair on any device image.
 
 ## 5. Embedded audio — three IMA ADPCM tunes
 
@@ -167,7 +176,7 @@ carries two tables, which settle the format beyond doubt:
   `{-1,-1,-1,-1,2,4,6,8}` twice.
 
 The loop reads the **high nibble first** (`srl $a3, 4`) and clamps at `0x8000`.
-`tools/extract_audio.py` reimplements it; decoded WAVs are in `out/audio/`.
+`tools/prom/extract_audio.py` reimplements it and writes the tunes out as WAVs.
 
 These are the tunes played by the undocumented Command Monitor command
 **`.play <tune #>`** (`sub_bfc13320`), and one of them is played from
@@ -292,3 +301,9 @@ Device names `SGI-GR2`, `gr2`, `AHGR2` appear in the inventory tables.
 Graphics registers are reached through a base pointer held in a variable rather
 than `lui`-formed constants, so they do not show up in the MMIO inventory. The
 5.0 strings (above) are the reliable anchor: **REX at phys `0x1f0f0000`**.
+
+GR2 is not all of it. The 5.3 image also carries the Newport driver an Indy's
+own graphics board needs — *"Checking if REX3 present"*, *"Initializing
+XMAP9"*, *"Initializing CMAP"*, *"Initializing VC2"*, *"Initializing REX3"*,
+and the device names `NG1` and `ng1` — with REX3 at the same `0x1f0f0000`. It
+is the path this core's graphics board runs.

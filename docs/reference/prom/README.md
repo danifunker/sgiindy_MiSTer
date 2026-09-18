@@ -1,15 +1,16 @@
-# SGI IP24 (Indy) Boot PROM — Full Disassembly & Analysis
+# The IP24 (Indy) boot PROM — disassembly and analysis
 
-Complete static analysis of two SGI IP24 boot PROMs, produced for MiSTer FPGA
-core development.
+Static analysis of two SGI IP24 boot PROMs, produced for the development of
+this core.
 
-| Image | Version string | Date | MD5 |
-|---|---|---|---|
-| `roms/IP24_Indy/ip24prom.070-9101-007.bin` | SGI Version **5.0 Rev B6** IP24 | Sep 28, 1994 | `1a9fe64104ed03e43d7e5e4c1e4e02f0` |
-| `roms/IP24_Indy/ip24prom.070-9101-011.bin` | SGI Version **5.3 Rev B10** R4X00/R5000 IP24 | Feb 12, 1996 | `11bb4acd64fb7c79c985d3d09390668b` |
+| Image | Version string | Date | MD5 | In this repository |
+|---|---|---|---|---|
+| `ip24prom.070-9101-007.bin` | SGI Version **5.0 Rev B6** IP24 | Sep 28, 1994 | `1a9fe64104ed03e43d7e5e4c1e4e02f0` | no |
+| `ip24prom.070-9101-011.bin` | SGI Version **5.3 Rev B10** R4X00/R5000 IP24 | Feb 12, 1996 | `11bb4acd64fb7c79c985d3d09390668b` | `roms/IP24_Indy/`, and as `releases/boot.rom` |
 
 Both are 512 KiB, MIPS-III big-endian, mapped at physical `0x1fc00000`
-(`0xbfc00000` uncached / `0x9fc00000` cached).
+(`0xbfc00000` uncached / `0x9fc00000` cached). The 5.3 image is the one this
+core boots.
 
 ## Documents
 
@@ -18,24 +19,30 @@ Both are 512 KiB, MIPS-III big-endian, mapped at physical `0x1fc00000`
 - **[HARDWARE.md](HARDWARE.md)** — register-level hardware reference aimed at
   core implementation: what the PROM touches, in what order, and what it
   expects back.
-- **[ip24-prom-teardown.html](ip24-prom-teardown.html)** — the same findings as a
-  standalone illustrated report (open it in a browser; no assets, no network).
 
-## Generated artefacts (`out/`)
+What this core answers at each of those registers is in
+[../address-map.md](../address-map.md); how the PROM gets into the machine is
+in [../boot-prom.md](../boot-prom.md).
 
-| File | What it is |
-|---|---|
-| `ip24prom-011-5.3-B10.asm` | Full annotated disassembly, 5.3 Rev B10 (9.2 MB) |
-| `ip24prom-007-5.0-B6.asm` | Full annotated disassembly, 5.0 Rev B6 (9.2 MB) |
-| `functions-011.txt` / `-007.txt` | Function inventory: bounds, callers, hardware touched, strings used |
-| `hardware-011.txt` / `-007.txt` | Every MMIO address the PROM forms, grouped by device |
-| `strings-011.txt` / `-007.txt` | String table with the functions that reference each string |
-| `symbols-011.json` / `-007.json` | Machine-readable symbol map |
-| `named-symbols.txt` | The 147 hand-annotated symbols recovered from `prom.map` |
-| `audio/`, `audio-007/` | The three embedded PROM tunes, decoded to WAV |
-| `nvram-default-repaired.bin` | A default NVRAM image with a valid checksum |
+## Generated artefacts
 
-## Tools (`tools/`)
+The tools below write these; none of them is committed.
+
+| File | Written by | What it is |
+|---|---|---|
+| `ip24prom-011-5.3-B10.asm`, `ip24prom-007-5.0-B6.asm` | `run.py` | Full annotated disassembly (9.2 MB each) |
+| `functions-011.txt` / `-007.txt` | `report.py` | Function inventory: bounds, callers, hardware touched, strings used |
+| `hardware-011.txt` / `-007.txt` | `report.py` | Every MMIO address the PROM forms, grouped by device |
+| `strings-011.txt` / `-007.txt` | `report.py` | String table with the functions that reference each string |
+| `symbols-011.json` / `-007.json` | `report.py` | Machine-readable symbol map |
+| `tune0-22050Hz.wav` … `tune2-22050Hz.wav` | `extract_audio.py` | The three embedded PROM tunes, decoded at the rate given |
+
+The original analysis also had `named-symbols.txt` (the 147 hand-annotated
+symbols recovered from `prom.map`) and `nvram-default-repaired.bin` (a default
+NVRAM image with a valid checksum; [ANALYSIS.md §4](ANALYSIS.md#4-nvram-and-rtc--fully-decoded)).
+Neither is in this repository.
+
+## Tools (`tools/prom/`)
 
 All Python, dependency: `capstone`.
 
@@ -50,27 +57,39 @@ report.py         build the reports: report.py <image> <map|-> <outdir> <tag>
 tables.py         static (string -> handler) dispatch-table finder
 extract_audio.py  IMA-ADPCM decoder for the embedded tunes
 nvram.py          NVRAM checksum verify / repair
+win.py            the instructions around one address, in any of the three aliases
 ```
 
-Rebuild everything:
+`hwmap.py` names some MC and INT2 registers from before the chip
+specifications were read, and those names are shifted by a slot:
+[HARDWARE.md](HARDWARE.md) and [../address-map.md](../address-map.md) have the
+corrected tables.
+
+Rebuild everything, from the repository root. `-` stands for "no symbol map";
+give the path to `prom.map` in its place if you have it:
 
 ```sh
-python3 -m venv venv && ./venv/bin/pip install capstone
-PY=./venv/bin/python
-$PY tools/run.py    roms/IP24_Indy/ip24prom.070-9101-011.bin prom.map reference/prom/ip24prom-011-5.3-B10.asm
-$PY tools/run.py    roms/IP24_Indy/ip24prom.070-9101-007.bin -        reference/prom/ip24prom-007-5.0-B6.asm
-$PY tools/report.py roms/IP24_Indy/ip24prom.070-9101-011.bin prom.map out 011
-$PY tools/report.py roms/IP24_Indy/ip24prom.070-9101-007.bin -        out 007
-$PY tools/extract_audio.py roms/IP24_Indy/ip24prom.070-9101-011.bin out/audio 22050
-$PY tools/nvram.py <path-to-nvram-image.bin>
+pip install capstone
+ROM=roms/IP24_Indy/ip24prom.070-9101-011.bin
+python tools/prom/report.py        $ROM - out 011        # creates out/
+python tools/prom/run.py           $ROM - out/ip24prom-011-5.3-B10.asm
+python tools/prom/extract_audio.py $ROM out/audio 22050
+python tools/prom/tables.py        $ROM -
+python tools/prom/nvram.py         <nvram-image.bin> [<repaired.bin>]
+python tools/prom/win.py           0x9fc1f238
 ```
+
+The 5.0 image, where you have it, takes the same commands with tag `007`.
 
 ## Sources of truth
 
-Everything here is derived from the two binaries plus the `reference/prom/prom.map` Ghidra
-export, which carries 147 hand-written symbol names (`realstart`, `szmem`,
-`init_memconfig`, `cpu_get_eaddr`, …) that anchor the analysis. The Ghidra project archive `prom.gzf` (not copied into this repo) is a
-Ghidra project archive for the **-011** image; the map matches it.
+Everything here is derived from the two binaries plus a Ghidra export of the
+**-011** image's project, `prom.map`, which carries 147 hand-written symbol
+names (`realstart`, `szmem`, `init_memconfig`, `cpu_get_eaddr`, …) that anchor
+the analysis. The map and the Ghidra project archive it matches (`prom.gzf`)
+are not in this repository. Without the map the tools still run: the
+disassembler finds 1075 functions in the 5.3 image rather than 1102, and every
+function is named by its address.
 
-Claims below are labelled where they are inferred rather than read directly out
-of the instruction stream.
+Claims in ANALYSIS.md and HARDWARE.md are labelled where they are inferred
+rather than read directly out of the instruction stream.

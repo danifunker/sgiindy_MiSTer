@@ -1,30 +1,33 @@
-# Boot PROM — images, reset flow, NVRAM, bring-up checklist
+# The boot PROM — image, reset flow, NVRAM, bring-up order
 
-Condensed from `~/mistersgi/indy-prom/{README,ANALYSIS,HARDWARE}.md`, which
-should be read in full before implementing any of it. Everything there is
-derived from the two IP24 binaries plus a Ghidra `prom.map` carrying 147
+Condensed from the full analysis in [prom/](prom/README.md) —
+[ANALYSIS.md](prom/ANALYSIS.md) and [HARDWARE.md](prom/HARDWARE.md) — which
+should be read in full before changing anything the PROM depends on. Everything
+there is derived from the IP24 binaries plus a Ghidra `prom.map` carrying 147
 hand-written symbol names (`realstart`, `szmem`, `init_memconfig`,
-`cpu_get_eaddr`, …).
+`cpu_get_eaddr`, …). The map is not in this repository; the tools in
+`tools/prom/` run without it.
 
-## Images available
+## The image this core runs
 
-| Machine | File | Version | Size |
+| Files | Version | Size | MD5 |
 |---|---|---|---|
-| **Indy (IP24)** | `ip24prom.070-9101-007.bin` | SGI Version 5.0 Rev B6 IP24, Sep 28 1994 | 512 KiB |
-| **Indy (IP24)** | `ip24prom.070-9101-011.bin` | SGI Version 5.3 Rev B10 **R4X00/R5000** IP24, Feb 12 1996 | 512 KiB |
-| **Indigo (IP12)** | `ip12prom.070-8088-xxx.bin` | SGI Version 4.0.1 Rev C LG1/GR2, Jul 9 1992 | **256 KiB** |
-| 4D/35 (IP12) | `ip12prom.070-8086-002.bin` | SGI Version 4.0.1 Rev C GR1/GR2/LG1, Feb 14 1992 | 512 KiB |
-| Indigo R4000 (IP20) | `ip20prom.070-8116-004.BE.bin` | SGI Version 4.0.5D Rev A IP20, Aug 19 1992 | 512 KiB |
-| Indigo2 (IP22) | `ip22prom.070-8127-002.bin` | SGI Version 5.1 Rev B IP22, Sep 16 1993 (BE) | 512 KiB |
+| `releases/boot.rom`, `roms/IP24_Indy/ip24prom.070-9101-011.bin` | SGI Version 5.3 Rev B10 **R4X00/R5000** IP24, Feb 12 1996 | 512 KiB | `11bb4acd64fb7c79c985d3d09390668b` |
 
-Plus IP6, IP15, IP17, IP26, IP28, IP30 (Octane), IP32 (O2) — see
-[01-source-inventory.md](../history.md#01).
+The two files are the same image. At the Command Monitor, `version` prints
+`PROM Monitor SGI Version 5.3 Rev B10 R4X00/R5000 IP24 Feb 12, 1996 (BE)`.
 
-Several directories also carry **serial captures** (`*.capture.txt.gz`) of a
-real machine's boot output — invaluable as a golden reference to diff the
-core's console output against.
+It is SGI firmware and not part of the bitstream. MiSTer's framework loads
+`boot.rom` from the core's games directory (`games/SGIIndy/`) at every core
+start, over `ioctl` index 0; the OSD's **Load PROM** does the same by hand.
+Either way `sgiindy.sv` writes it into DDR3 and holds the machine in reset
+until the download has finished and for 65,535 clocks after.
+`scripts/deploy.sh` copies `releases/boot.rom` to the card.
 
-Both IP24 images are MIPS-III big-endian, mapped at physical `0x1FC00000`
+The analysis in [prom/](prom/README.md) also covers the older 5.0 Rev B6 image
+(`ip24prom.070-9101-007.bin`, Sep 28 1994), which is not in this repository.
+
+The image is MIPS-III big-endian, mapped at physical `0x1FC00000`
 (`0xBFC00000` uncached / `0x9FC00000` cached).
 
 ## Image layout (IP24)
@@ -60,8 +63,13 @@ Verified instruction by instruction:
    R4000 `Config` is the endianness bit — this branch is inferred, not certain.)*
 3. Clear `MC_CPU_ERRSTAT` and `MC_GIO_ERRSTAT`; dummy-read `0x1FBB0000`
    (`INTSTAT`).
-4. Compute a refresh/timing value from `Config`'s cache-size fields; write
-   `MC_CPUCTRL0`; write `MC_CPUCTRL1 = 0x16`; program `MC_RPSS_CTR`.
+4. Compute `CPUCTRL0`'s `MUX_HWM` field from the cache line size in `Config` —
+   the secondary cache's (`SB`) when `SC` says one is fitted, otherwise 32 or
+   16 bytes from the primary caches' `IB`/`DB` bits — and write `MC_CPUCTRL0`
+   with refresh enabled at four lines a burst. Then `MC_CPUCTRL1 = 0x16`,
+   `GIO64_ARB = 0x401` (from a table word), `CPU_MEMACC = 0x11453433`,
+   `GIO_MEMACC = 0x00034322` and `RPSS_DIVIDER = 0x104`, and spin at
+   `0xBFC00510` until `RPSS_CTR` (`0x1FA01004`) has advanced by `0x271`.
 5. Then, in order:
 
 | Call site | Function | What it does |
@@ -78,8 +86,9 @@ Verified instruction by instruction:
 | `0xBFC00604` | `FUN_bfc032a4` | → ADPCM boot tune playback |
 
 `enterinteractivemode` (`0xBFC00624`) is the **Command Monitor** entry, reached
-from 12 sites including the catch-all trap handler. **Reaching that prompt over
-the serial console is the right definition of "the core boots".**
+from 12 sites including the catch-all trap handler. Reaching its prompt over
+the serial console was this core's first milestone; [chipset.md](chipset.md)
+is the record of what that took.
 
 ## NVRAM — must be right, or the environment is wiped every boot
 
@@ -109,14 +118,24 @@ NVRAM is accepted only when **both** hold:
 1. `nvram[0] == checksum()`
 2. `(nvram[1] & 0x3F) == 8`
 
-`indy-prom/tools/nvram.py` verifies and repairs images;
-`indy-prom/out/nvram-default-repaired.bin` is a known-good 8 KiB device image.
+`tools/prom/nvram.py IMAGE [REPAIRED]` verifies an 8 KiB device image against
+both rules and, given a second name, writes a copy with the checksum and the
+tag corrected.
 
 Environment variables the PROM stores here: `SystemPartition`,
 `OSLoadPartition`, `OSLoader`, `OSLoadFilename`, `OSLoadOptions`, `ConsoleIn`,
 `ConsoleOut`, `ConsoleWarning`, `console`, `diagmode`, `dbaud`, `rbaud`,
 `keybd`, `monitor`, `netaddr`, `netinsthost`, `netinstfile`, `tapedevice`,
-`scsiretries`, `Verbose`.
+`scsiretries`, `Verbose`. The Ethernet address is six raw bytes at offsets
+`0xFA`–`0xFF`, inside the checksummed window, which the routine at
+`0xBFC118DC` reads with `nvram_read(0xFA, 6, …)`; that is where `eaddr` comes
+from.
+
+In this core the device is `rtl/sgi/sgi_ds1386.sv`. Its NVRAM survives a reset
+but not a reload of the core, so the first boot after loading the core prints
+*"NVRAM checksum is incorrect: reinitializing."* and writes a default
+environment; [nvram.md](nvram.md) has what survives what, and where the
+Ethernet address comes from.
 
 ## Command Monitor
 
@@ -137,7 +156,8 @@ the offsets move. Decoder at `FUN_bfc032cc` (648 bytes, copied into RAM),
 with the canonical 89-entry step table at `0xBFC55954` and the 16-entry
 index-adjust table at `0xBFC55914`; high nibble first, clamp at `0x8000`.
 Played at ~22050 Hz (inferred from HAL2 BRES2 programming — strong but not
-certain). Decoded WAVs are in `indy-prom/out/audio/`.
+certain). `tools/prom/extract_audio.py IMAGE OUTDIR RATE` decodes them to WAV.
+This core has no audio path, so none of them is heard.
 
 ## Graphics anchor
 
@@ -153,9 +173,15 @@ i.e. **REX/GR2 at physical `0x1F0F0000`**. Graphics tests named in the strings:
 *"GR2: VC1 test"*, *"REX power on test failed."*. The PROM also carries
 *"IP22/GR2 PROM HQ Microcode"* and *"IP22/GR2 PROM GE Microcode"* blobs.
 
+The 5.3 image also carries the Newport driver an Indy's own graphics board
+needs — *"Checking if REX3 present"*, *"Initializing XMAP9"*, *"Initializing
+CMAP"*, *"Initializing VC2"*, *"Initializing REX3"*, device names `NG1` and
+`ng1` — with REX3 at the same `0x1F0F0000`. That is the driver this core's
+Newport answers.
+
 ## Bring-up order a core must satisfy
 
-Straight from `indy-prom/HARDWARE.md` — this is the implementation order:
+Straight from [prom/HARDWARE.md](prom/HARDWARE.md#bring-up-order-a-core-should-satisfy):
 
 1. `MC_SYSID` and `MC_CPUCTRL0/1` must read back sanely.
 2. **`MC_RPSS_CTR` must advance** — `DELAY` and `calibrate_delay` busy-wait on
@@ -170,19 +196,14 @@ Straight from `indy-prom/HARDWARE.md` — this is the implementation order:
    the Command Monitor.
 8. `HAL2_REV` bit 15 set ⇒ audio skipped entirely.
 
-## Known-hard spots (from the sandbox's spoof list)
+This core meets all eight — item 6 within one load of the core, since nothing
+saves the NVRAM across a reload — and item 8 the way the list suggests:
+`HAL2_REV` reports audio absent. [chipset.md](chipset.md#order-of-dependencies)
+has the order in which it actually had to, which the list does not predict —
+the 8254 and the keyboard controller's status port are not on it.
 
-The sim carries these ROM patches, all currently disabled — they are a map of
-where the sandbox previously got stuck:
+## No patches
 
-| Address | Patch | Meaning |
-|---|---|---|
-| `0x1FC00560` | NOP the call | Skip the SDRAM test routine |
-| `0x1FC012A8`–`0x1FC012B3` | NOP | `cache` instructions raised an exception on aoR3000 |
-| `0x1FC03BF4` | NOP the call | Skip a serial routine |
-| `0x1FC04080` | NOP | Skip the endless loop after a self-test failure |
-| `0x1FC03C20` | force `jr $ra` (`0x03E00008`) | Early-return out of a routine |
-| `0x1FB80D13` (Indigo) | read `0xFFFFFFFF` | Spoof "serial port ready" |
-
-Getting to the point where none of these are needed is a good milestone
-definition.
+The core runs the SGI image byte for byte — no ROM patches, in simulation or on
+the board. `tests/run-prom.sh` boots `roms/IP24_Indy/ip24prom.070-9101-011.bin`
+as it is and fails if POST prints `Diagnostics failed`.
