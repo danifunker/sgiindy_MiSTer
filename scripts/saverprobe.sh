@@ -129,7 +129,7 @@ saver() {
     # nothing. Single quotes are one of the two things that quote the history
     # character, and `sh -c` then reads what is inside them. `set +H` is sent
     # once as well, for the shell that gets this wrong anyway.
-    ws "text:sh -c '$cmd >/dev/null 2>&1 & SP=\$!; sleep $live; kill \$SP' &"        "sleep:0.3" "kbdRaw:28"
+    ws "text:sh -c '$cmd > /root/s-$name.log 2>&1 & SP=\$!; sleep $live; kill \$SP' &"        "sleep:0.3" "kbdRaw:28"
     local i
     for i in 1 2 3; do
         sleep "$gap"
@@ -141,18 +141,41 @@ saver() {
     bash scripts/grab.sh "$OUTD/$name-after.png" >/dev/null 2>&1
 }
 
-# The 2D savers: X lines and points, which is I_LINE and F_LINE.
+# FIRST A CONTROL THAT CANNOT FAIL QUIETLY. xclock's analogue face is drawn
+# with lines and arcs and its second hand moves every update, so if these
+# three grabs differ the line path works and anything that follows and does
+# NOT move is that program's problem rather than the rasteriser's. It is the
+# cheapest way to tell "REX3 draws nothing" from "the saver never started",
+# which is a distinction two runs of this script have already got wrong.
+saver xclock '/usr/bin/X11/xclock -update 1 -geometry 300x300+420+140'
+
+# The 2D savers: X lines and points, which is I_LINE and F_LINE. Plain first,
+# then the form the desktop's saver framework actually uses - -besaver makes
+# xlock expect to be a child of ssaver, and it is worth knowing which of the
+# two is the one that does not run.
+saver qixw   '/usr/bin/X11/xlock -mode qix -nolock -inwindow'
 saver qix    '/usr/bin/X11/xlock -mode qix -besaver'
 saver swarm  '/usr/bin/X11/xlock -mode swarm -besaver'
 saver rotor  '/usr/bin/X11/xlock -mode rotor -besaver'
-saver pyro   '/usr/bin/X11/xlock -mode pyro -besaver'
-# The GL ones: shaded, dithered, blended spans.
-saver ep     '/usr/sbin/haven -n /usr/demos/bin/ep -S'
-saver bongo  '/usr/sbin/haven -n /usr/demos/bin/bongo'
-# And a GL application rather than a saver.
+
+# The GL ones. Run DIRECTLY as well as through haven: haven is the saver
+# wrapper that makes the full-screen window, so a demo that draws on its own
+# and not under haven says the wrapper is the problem, not GL.
+saver bongo  '/usr/demos/bin/bongo'
+saver ep     '/usr/demos/bin/ep'
 saver butter '/usr/demos/bin/buttonfly'
+saver havep  '/usr/sbin/haven -n /usr/demos/bin/ep -S'
 
 say "halting"
 ws "text:init 0" "sleep:0.3" "kbdRaw:28"
 rsh "sleep 75"
+
+# WHAT EACH ONE SAID. The guest is halted, so these come out of the image
+# with efsread rather than off a running machine - and they are the whole
+# difference between "it drew nothing" and "it never started".
+say "what each client printed:"
+for f in $(rsh "cd $DBG && python3 efsread.py '$IMG' ls /root 2>/dev/null | awk '/ s-.*\\.log/ {print \$3}'"); do
+    echo "---- $f ----" | tee -a "$LOG"
+    rsh "cd $DBG && python3 efsread.py '$IMG' cat /root/$f" 2>&1 | head -20 | tee -a "$LOG"
+done
 say "done -> $OUTD"
