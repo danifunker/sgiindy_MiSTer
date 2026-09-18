@@ -94,6 +94,7 @@ static uint64_t le64(const uint8_t *p) { return (uint64_t)le32(p) | ((uint64_t)l
 //============================================================================
 struct Options {
     std::string trace, outdir = "newport_replay_out", iris_rgb, iris_aux;
+    std::string init_rgb, init_aux;
     bool     iris_be = false, png = false, no_png = false, verbose = false;
     bool     fail_on_diff = false;
     bool     split64 = false, gl_coords = false, sync_reads = false;
@@ -114,6 +115,8 @@ static void usage(const char *argv0)
            "                      taking the index: e.g. iris/rgb_%%04u.bin\n"
            "  --iris-aux PATTERN  IRIS's auxiliary-plane dump for a marker\n"
            "  --iris-be           IRIS's dumps are big-endian u32 (IRIS's save_framebuffers)\n"
+           "  --init-rgb FILE     start from this drawing-plane dump instead of zeros\n"
+           "  --init-aux FILE     and this auxiliary-plane dump (IRIS's d00: power-on noise)\n"
            "  --mask-rgb HEX      slot bits compared, drawing planes (default 00ffffff)\n"
            "  --mask-aux HEX      slot bits compared, auxiliary planes (default 00ffffff)\n"
            "  --png               also write the core's planes as PNG at every marker\n"
@@ -142,6 +145,8 @@ static bool parse(int argc, char **argv)
         else if (a == "--iris-rgb")            O.iris_rgb = next();
         else if (a == "--iris-aux")            O.iris_aux = next();
         else if (a == "--iris-be")             O.iris_be = true;
+        else if (a == "--init-rgb")            O.init_rgb = next();
+        else if (a == "--init-aux")            O.init_aux = next();
         else if (a == "--mask-rgb")            O.mask_rgb = (uint32_t)strtoul(next(), nullptr, 16);
         else if (a == "--mask-aux")            O.mask_aux = (uint32_t)strtoul(next(), nullptr, 16);
         else if (a == "--png")                 O.png = true;
@@ -560,6 +565,40 @@ int main(int argc, char **argv)
     H->fb_lat = O.fb_lat;
     H->timeout = O.timeout;
     H->reset();
+
+    // THE STARTING PICTURE. IRIS never clears its frame buffers at power-on -
+    // they hold xorshift noise, which is its d00 dump - so a replay compared
+    // with IRIS's later dumps has to start from the same noise, or every
+    // pixel nobody wrote differs. Loaded in the core's own slot format: a
+    // drawing slot's byte 3 is its copy of the window ID (aux[3:0], which
+    // np_rex3's DR_CID keeps in step), and an auxiliary slot's byte 3 is
+    // never written, so it starts at zero.
+    if (!O.init_rgb.empty() || !O.init_aux.empty()) {
+        std::vector<uint32_t> rgb(1u << 21, 0), aux(1u << 21, 0);
+        auto load = [](const std::string &path, std::vector<uint32_t> &v) -> bool {
+            if (path.empty()) return true;
+            FILE *g = fopen(path.c_str(), "rb");
+            if (!g) { fprintf(stderr, "cannot open %s\n", path.c_str()); return false; }
+            std::vector<uint8_t> b((size_t)v.size() * 4);
+            size_t got = fread(b.data(), 1, b.size(), g);
+            fclose(g);
+            if (got != b.size()) {
+                fprintf(stderr, "%s: %zu bytes, expected %zu\n", path.c_str(), got, b.size());
+                return false;
+            }
+            for (size_t i = 0; i < v.size(); i++) v[i] = le32(&b[4 * i]);
+            return true;
+        };
+        if (!load(O.init_rgb, rgb) || !load(O.init_aux, aux)) return 2;
+        for (int y = 0; y < 1024; y++)
+            for (int x = 0; x < 2048; x++) {
+                uint32_t i = (uint32_t)y * 2048 + (uint32_t)x;
+                H->set_slot(x, y, true, aux[i] & 0x00FFFFFF);
+                H->set_slot(x, y, false, (rgb[i] & 0x00FFFFFF) | ((aux[i] & 0xF) << 24));
+            }
+        printf("  started from %s%s%s\n", O.init_rgb.empty() ? "zeros" : O.init_rgb.c_str(),
+               O.init_aux.empty() ? "" : " + ", O.init_aux.c_str());
+    }
 
     printf("newportreplay: %s - version %u, %u-byte records, %llu of them\n", O.trace.c_str(),
            version, recsize, (unsigned long long)nrec);
