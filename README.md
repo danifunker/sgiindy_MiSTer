@@ -22,8 +22,9 @@ programs drawn by a reimplementation of the Newport (XL) graphics board.
 
 - **Networking**: IRIX sees `ec0` but there is no Ethernet behind it, so it
   reports `no carrier`.
-- **Sound**: IRIX's audio driver finds the HAL2 and works, but nothing reaches
-  the MiSTer's audio output.
+- **Sound**: the HAL2 audio processor is not implemented. The core tells the
+  PROM and IRIX there is no audio hardware, and nothing reaches the MiSTer's
+  audio output.
 - **Saved PROM settings**: the PROM's environment (`setenv`) is not kept when
   the core is reloaded. The defaults boot from the disk at SCSI ID 1, which is
   all IRIX needs.
