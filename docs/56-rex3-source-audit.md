@@ -77,10 +77,15 @@ resets the line counter to the value in TOPSCAN(9:0)`, §5.4.0.1), and
 IRIS's compositor scrolls the display by TOPSCAN+1 while drawing at the raw
 row. Identical for new drawing; different the moment TOPSCAN changes.
 
-**3.4 XMAP9 mode-table writes take effect mid-frame.** The XMAP9 spec:
-"Writes to the Mode Register are fifoed so that the register is only
-updated during blanking." np_xmap9 applies them at once - the tear in
-buttonfly's grab.
+**3.4 XMAP9 mode-table writes take effect at once** where the chip holds
+them to blanking ("Writes to the Mode Register are fifoed so that the
+register is only updated during blanking"). CORRECTED by the display audit
+(4.5): that is not what tore buttonfly's frame. The chip's blanking window
+includes every line's horizontal blank, and the kernel writes the new mode
+word from the retrace interrupt; a swap stays whole on real hardware only
+because that interrupt runs inside the 41-line vertical blank. The tear
+says the core's write landed after line 40 - to be measured, not
+"fixed" by deferring it.
 
 **3.5 RGB windows bypass the colour maps.** XMAP9's pixel mode selects CI
 or one of three RGB Maps in CMAP (gamma); newport.sv (and IRIS) send
@@ -92,7 +97,12 @@ into 1280 - the "damaged glyph" bug.** Read straight out of DDR3
 Console text cells were all exact copies of their glyphs; the scaler's
 screen skips one frame buffer column every ~33.7 pixels (fb_x = screen_x x
 1.030), so strokes on a dropped column vanish ("echo" -> "ecro").
-`b43-fb-vs-screen-columns.png`. It is the display timing, not REX3.
+`b43-fb-vs-screen-columns.png`. It is the display timing, not REX3. The
+display audit (4.5) found the cause (re-checked): `np_vc2.sv:375` drives
+`de` from DSPLY_EN_RO_N, RO1's pixel-pipeline enable, 1318 pixels a line on
+this timing table; the visible window is VIS_LN_VC_N, "the active portion
+of the frame ... essentially the inverse of composite blanking" (VC2 §5.7),
+1296 pixels - which IRIS and MAME both use.
 
 **3.7 Speed.** The spec's REX3 (§1.6): shaded spans 50 Mpix/s, flat spans
 100, fast clear 400, screen-to-screen 40, lines 20. np_rex3 issues one
@@ -146,7 +156,7 @@ it with a hidden counter reset at every DOSETUP and row, and ignores
 LSSAVE/LSRESTORE, so dashes restart at every polyline vertex and wide
 stippled lines lose their phase. IRIS simplifies the same way, so it cannot
 be the oracle here; GL's wide-line code does LSSAVE once and LSRESTORE per
-pass.
+pass. (More in 4.2.)
 
 **No vertical sector clip.** Writes outside the 1344 x 1024 drawing area are
 culled (§3.3); np_rex3 wraps y modulo 1024, so anything drawn above or below
@@ -168,6 +178,136 @@ The kernel's context switch saves exactly the registers with a read format
 and converts all four slopes back to sign-magnitude; every one round-trips
 in the core. `tb_rex3draw.cpp` never writes the GL-format coordinates,
 SETUP, LSSAVE/LSRESTORE or a non-zero XYMOVE - which is where these hid.
+
+### 4.2 The walker: address modes, lines, patterns
+
+**0x14C is XENDF1, a GL float, and IRIS GL fills polygons through it -
+BREAKS GL.** Every IRIS GL polygon span (`__subtri`, `__subtri_rgb`,
+`__subtri_sh` and the z-buffered variants) is ONE 64-bit store to 0x948:
+XSTARTI plus XENDF1, with GO. So GL's polygons need the doubleword split
+(3.1), the 12.4(7) decode for XENDF1 (it holds `4096 + x` as a float), and
+the core's bench copied the integer reading (`tb_rex3draw.cpp:825`).
+
+**SETUP is also what IRIS GL's lrectwrite and both libraries'
+depth-buffered lines rely on** (`_mem32_to_fb`/`_mem8_to_fb`: SETUP, then
+one HOSTRW0|GO per word; `__glNptDepthLine`: SETUP, then ZPATTERN|GO per
+segment). **STEPZ** (0x0034) - "Enables ZPATTERN (Z test fail) for one
+iteration" - is only latched; IRIS GL's textured spans use it for z-failed
+texels, which the core draws.
+
+**LENGTH32 line segments.** "Segments II" lines end a GO after 32 pixels
+with the iterators on the next pixel; the core (after IRIS) never steps
+after a GO's last pixel, so each later segment redraws the previous one's
+last pixel, the per-segment z mask drifts a pixel per segment, and the
+colour DDAs double-step at every boundary. GL's depth lines use it.
+
+**Pattern iterators.** On the part the pattern registers themselves
+rotate, a host write restarts them at the msb, and neither DOSETUP nor a
+row end resets them; the core's separate cursors reset at DOSETUP and row
+ends and not on a register write. GL stippled polylines restart the dash at
+each vertex; GL depth lines start mid-word after an earlier line.
+
+**BRESROUND is ignored.** OpenGL programs BRESRNDINC2's octant rounding
+bits to 0x96 so lines are identical in both directions; the core always
+takes the diagonal on a tie. X programs 0xFF, which matches the core.
+
+**Line setup fidelity.** The F_LINE start-point E-test was deleted in REX3
+Rev 1 (§6) yet IRIS, MAME and the core all still do it; the F_LINE deltas
+are truncated; anti-aliased lines, the AWEIGHT table and the endpoint
+filter are not modelled (GL loads 0xFEDCBA98/0x87654321, which has no zero
+nibble, so the core's filter never fires). **LRONLY on a BLOCK** walks the
+rejected row stepping the DDAs where the chip aborts it. Reset octant,
+SPAN end state and point-mode SKIPFIRST differ in ways nothing observed
+depends on.
+
+**The glyph damage is not the walker**: X's glyph loop (Xsgi 0x100fa75c,
+dm0 0x9106, one ZPATTERN|GO per row) matches the spec's LENGTH32 BLOCK walk
+exactly - consistent with 3.6.
+
+### 4.3 The pixel path: colour, blend, formats, write masks
+
+**GL's colour masks are in the chip's physical bit layout (re-checked).**
+Spec §3.3: WRMASK "must match the bit positioning as described in Section
+3.9", whose Table 22 interleaves B/R/G bits across the 24 planes. OpenGL's
+`__glNptSwizzleRGB` builds glColorMask masks from 0x492492 (R), 0x249249
+(G) and 0x924924 (B); IRIS GL's `_swizz_wmask` interleaves bit by bit.
+The core stores R, G, B in whole bytes and applies WRMASK raw, so a
+per-channel mask writes the wrong planes. Buffer-select masks (0xFFF /
+0xFFF000, 0xF / 0xF0, 0xFF, 0xFFFFFF) and the PROM's aux masks (0x33, 0xCC,
+0xFFFF00) are identical in both layouts, which is why ordinary drawing and
+double buffering work. Fix without changing the frame buffer: permute
+WRMASK from physical to logical per (PLANES, DRAWDEPTH, RGBMODE) when a
+primitive starts - a few dozen ALMs.
+
+**BLENDALPHA gates the alpha channel only (re-checked against the spec
+text).** §3.8.5: "When BLENDALPHA is set to 0, the source multiplier for
+blending ALPHA is one instead of source alpha and destination multiplier is
+defined by DFACTOR." np_rex3 (`sa_src`, line 1286), IRIS and MAME all
+substitute 1.0 for the source factor of R, G and B too, which turns GL's
+standard SRC_ALPHA / ONE_MINUS_SRC_ALPHA blend additive - and both SGI
+libraries map GL_SRC_ALPHA to SFACTOR=4 without ever setting BLENDALPHA,
+as do all 46 blend shapes in the corpus. SGI's shipping GL would not have
+worked if the emulators' reading were right. IRIS's own note
+(`rules/rex3/blendalpha-and-alpha-blending.md`) records a visible haze
+from its reading and attributes it elsewhere. Best settled on real
+hardware; the spec and the binaries agree.
+
+**Host alpha below 32 bpp.** With ALPHAHOST and not COLORHOST the host
+field supplies alpha (IRIS GL's anti-aliased points put coverage in
+HOSTRW0[31:24] at HOSTDEPTH 0); the core, like IRIS, reads alpha 0.
+
+**COLORVRAM formatting.** "loading of COLORVRAM must be performed after
+DRAWMODE1 fields RGBMODE and DRAWDEPTH have been set" (§3.5.5): REX3 formats
+it. GL supplies BGR888 at every RGB depth and a pre-swizzled pattern for
+the overlay; the core is right at 24/12-bit RGB and CI and wrong at 8-bit
+RGB (a clear to red becomes white), 4-bit RGB and the overlay.
+
+**Rounding and CI dither.** With DITHER off REX3 rounds to nearest (§3.8.3;
+GL's own fast-clear tables reproduce the rule bit for bit); the core
+truncates, so a cleared area and a drawn area of the same colour differ by
+a step. CI dither and CI rounding are missing (12 corpus shapes shade CI
+with dither and come out banded). CICLAMP at 12 bpp tests the wrong bit.
+
+**Smaller:** blend arithmetic divides by 255 where the chip adds the MSB
+and divides by 256 (1 LSB on ~8 % of values); overlay nibble write masks and
+the 4+4 overlay; RGBA formats (video only); a blended SCR2SCR does not
+replicate; cross-depth views of the same planes scramble colour (the price
+of the logical layout). Colour compare in CI mode is missing and unused.
+
+### 4.5 The display: VC2, XMAP9, CMAP, BT445
+
+**The display enable (re-checked).** The PROM picks the timing table from
+the board and RAMDAC revisions the core reports (board 4, BT445 nibble 0):
+1680 x 1065 pixels a frame, visible lines 41-1064. On a visible line
+DSPLY_EN spans 1318 pixels and VIS_LN 1296; IRIX draws the desktop in
+columns 8-1287 (`bt445_bug_xbias` = 8 from the table's flags, applied by
+`newportValidateClip` to the window origin and screen masks - which is
+also why frame buffer columns 0-7 are empty). DE must be VIS_LN, with
+`pix_x` 0 at its leading edge (already so). For an unscaled 1280-wide
+picture the core may crop the 8-pixel margins; the real part shows them.
+
+**The cursor is drawn 10 pixels left of its hot spot** (derived from the
+VC2 spec's pipeline delays and IRIX's constants; needs one board check).
+The spec puts cursor column 0 at CUR_X + (HPOS - VIS_LN) + 7; np_vc2
+hard-codes CUR_X - 31, right only when HPOS leads VIS_LN by 38 pixels - on
+this table it is 28.
+
+**The BT445 gamma table is never applied, and its register map is not
+IRIX's.** IRIX loads a gamma ramp (Xsgi mentions a 1.7 default) through
+CRS1 palette writes; the core's BT445 decodes CRS0 as command and never
+looks up the table, so every pixel shows as if gamma bypass were set. The
+XMAP9 RGB maps (CMAP 0x1E00/0x1F00, used by X's DID 10) are bypassed too.
+
+**XMAP9 overlay/underlay modes 1, 6, 7 and OVL_Buf_Sel are misdecoded**
+(X uses mode 2 only; GL overlay/underlay windows would use the others).
+Smaller: VC2 Blackout ignored; VINTR enable not gated; the DID entry
+pointer and cursor X not latched to vertical blanking; DID runs under 3
+pixels; crosshair cursor; CMAP writes immediate (as the XMAP9's).
+
+X's own mode table (Xsgi .sdata, via ioctl 0x520e) - DIDs 0-10 carry an
+8-bit overlay on CMAP page 27: 0 4-bit CI, 1 4-bit RGB, 2-5 8-bit CI pages
+17-20, 6 8-bit RGB, 7 12-bit CI, 8 12-bit RGB, 9 24-bit RGB map 0, 10 24-bit
+RGB map 1; DID 11 is 8-bit CI page 21 with gamma bypass (the desktop).
 
 ## 5. Implementation plan
 
