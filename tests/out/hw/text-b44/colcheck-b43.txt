@@ -1,0 +1,18 @@
+screen 1280x1024, frame buffer 1280x1024 (columns 0..1279)
+palette: 33 indices seen
+bands of 32 columns: 30 with content, 10 flat
+offset by band ('=' is +8, '.' flat): -6 +1 -6 -5 . -3 -3 -2 -1 = -5 = -5 = -5 = -5 = -5 = = -5 = -5 = +3 +4 . . . . . . . . . +6 +6 = =
+  band at x=0: offset +2 explains 1340 of 1527 edge pixels
+  band at x=32: offset +9 explains 448 of 712 edge pixels
+  band at x=64: offset +2 explains 334 of 391 edge pixels
+  band at x=96: offset +3 explains 589 of 691 edge pixels
+  band at x=160: offset +5 explains 798 of 798 edge pixels
+  band at x=192: offset +5 explains 2525 of 3592 edge pixels
+  band at x=224: offset +6 explains 1883 of 3492 edge pixels
+  band at x=256: offset +7 explains 1764 of 3265 edge pixels
+  band at x=320: offset +3 explains 1810 of 3410 edge pixels
+  band at x=384: offset +3 explains 1753 of 3374 edge pixels
+  band at x=448: offset +3 explains 1781 of 3400 edge pixels
+  band at x=512: offset +3 explains 1729 of 3278 edge pixels
+at offset +8: 102277 of 1302528 pixels differ from their frame buffer column's colour
+COLCHECK: FAIL - 19 band(s) show a different column than frame buffer X + 8

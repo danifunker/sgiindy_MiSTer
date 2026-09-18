@@ -1,0 +1,20 @@
+[06:20:09] staged rbf: 889b69be4ee3b2248a61162b4dc6c078
+[06:20:36] +11s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 161 marker  0.2% 
+[06:20:47] +22s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[06:20:59] +34s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[06:21:10] +45s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 168 marker  0.2% 
+[06:21:21] +56s BOOTING    panicstr=0x00000000 panel9 11.9% idx16  0.0% indices 168 marker  0.1% 
+[06:21:32] +67s BOOTING    panicstr=0x00000000 panel9 11.9% idx16  0.0% indices 168 marker  0.1% 
+[06:21:44] +79s BOOTING    panicstr=0x00000000 panel9 11.9% idx16  0.0% indices 168 marker  0.1% 
+[06:21:55] +90s BOOTING    panicstr=0x00000000 panel9 11.9% idx16  0.0% indices 168 marker  0.1% 
+[06:22:06] +101s BOOTING    panicstr=0x00000000 panel9 11.9% idx16  0.0% indices 168 marker  0.1% 
+[06:22:17] +112s X-UP       panicstr=0x00000000 panel9  0.0% idx16 22.2% indices  19 marker  0.0% 
+[06:22:33] logging in as root
+[06:24:18] quitting Software Manager, pointer into the Console
+[06:26:16] grabbing
+FRESH tests/out/hw/text-b44/screen.png <- SGIIndy/20260918_062616-screen.png
+ok
+ok
+FRESH tests/out/hw/text-b44/screen2.png <- SGIIndy/20260918_062623-screen.png
+[06:26:26] halting
+[06:27:29] done -> tests/out/hw/text-b44
