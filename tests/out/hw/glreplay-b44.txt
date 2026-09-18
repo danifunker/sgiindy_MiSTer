@@ -1,0 +1,1327 @@
+[05:45:15] replay b44full: max records 50000000, bench /home/dani/npbench44, options: --show 40
+  started from /home/dani/gltrace/iris/rgb_0000.bin + /home/dani/gltrace/iris/aux_0000.bin
+newportreplay: /home/dani/gltrace/indy-irix53-gl.rx3 - version 1, 24-byte records, 43401483 of them
+  frame buffer latency 1, dumps to /home/dani/glreplay/b44full
+  marker 0 at record 0 (stamp 0, clock 39): dumped /home/dani/glreplay/b44full/core_rgb_0000.bin, /home/dani/glreplay/b44full/core_aux_0000.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  read mismatch #1 at record 3 (stamp 59810934): CPU read 32 0x0000 DRAWMODE1: iris 00007000, core 00000000
+  read mismatch #2 at record 5 (stamp 59812508): CPU read 32 0x1338 STATUS: iris 00000023, core 00000001
+  read mismatch #3 at record 11 (stamp 59812729): CPU read 32 0x0240 DCBDATA0: iris a0000000, core 00000000
+  read mismatch #4 at record 12 (stamp 59812733): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000001
+  read mismatch #5 at record 14 (stamp 59812739): CPU read 32 0x0240 DCBDATA0: iris 02000000, core 00000042
+  read mismatch #6 at record 15 (stamp 59812791): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000001
+  read mismatch #7 at record 18 (stamp 59812804): CPU read 32 0x1338 STATUS: iris 00000013, core 00000009
+  read mismatch #8 at record 19 (stamp 59812812): CPU read 32 0x1338 STATUS: iris 00000013, core 00000001
+  read mismatch #9 at record 20 (stamp 59812820): CPU read 32 0x1338 STATUS: iris 00000013, core 00000001
+  read mismatch #10 at record 21 (stamp 59812828): CPU read 32 0x1338 STATUS: iris 00000013, core 00000001
+  read mismatch #11 at record 22 (stamp 59812836): CPU read 32 0x1338 STATUS: iris 00000013, core 00000001
+  read mismatch #12 at record 25 (stamp 59812860): CPU read 32 0x0240 DCBDATA0: iris a2000000, core 000000a2
+  read mismatch #13 at record 35 (stamp 71577651): CPU read 32 0x0240 DCBDATA0: iris 03000000, core 00000003
+  read mismatch #14 at record 36 (stamp 71577655): CPU read 32 0x1338 STATUS: iris 00000023, core 00000001
+  read mismatch #15 at record 37 (stamp 71577671): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000001
+  read mismatch #16 at record 42 (stamp 71577757): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #17 at record 49 (stamp 71577774): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #18 at record 66 (stamp 71577798): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #19 at record 83 (stamp 71577825): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #20 at record 100 (stamp 71577847): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #21 at record 117 (stamp 71577872): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #22 at record 134 (stamp 71577897): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #23 at record 151 (stamp 71577922): CPU read 32 0x133c USER_STATUS: iris 00000003, core 00000009
+  read mismatch #24 at record 172 (stamp 118637011): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #25 at record 181 (stamp 130401771): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #26 at record 192 (stamp 130401818): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #27 at record 195 (stamp 130401849): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #28 at record 214 (stamp 130401990): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #29 at record 231 (stamp 130402123): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #30 at record 248 (stamp 130402256): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #31 at record 265 (stamp 130402389): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #32 at record 282 (stamp 130402522): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #33 at record 299 (stamp 130402655): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #34 at record 316 (stamp 130402788): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #35 at record 333 (stamp 130402921): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #36 at record 339 (stamp 130402973): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #37 at record 358 (stamp 130403114): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #38 at record 367 (stamp 130403159): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000001
+  read mismatch #39 at record 384 (stamp 130403261): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  read mismatch #40 at record 401 (stamp 130403361): CPU read 32 0x133c USER_STATUS: iris 00000023, core 00000009
+  ... 24576 records (0.1%), 9677146 clocks, 8690 records/s, 3.42 Mclocks/s, 1 markers, 16415 read mismatches
+  ... 40960 records (0.1%), 19327546 clocks, 7312 records/s, 3.45 Mclocks/s, 1 markers, 32794 read mismatches
+  ... 86016 records (0.2%), 31756027 clocks, 9387 records/s, 3.47 Mclocks/s, 1 markers, 68869 read mismatches
+  ... 114688 records (0.3%), 41397847 clocks, 9607 records/s, 3.47 Mclocks/s, 1 markers, 97536 read mismatches
+  ... 172032 records (0.4%), 48941839 clocks, 12247 records/s, 3.48 Mclocks/s, 1 markers, 150744 read mismatches
+  ... 212992 records (0.5%), 59192962 clocks, 12476 records/s, 3.47 Mclocks/s, 1 markers, 189194 read mismatches
+  ... 249856 records (0.6%), 68829043 clocks, 12574 records/s, 3.46 Mclocks/s, 1 markers, 226053 read mismatches
+  ... 352256 records (0.8%), 84018835 clocks, 14498 records/s, 3.46 Mclocks/s, 1 markers, 318111 read mismatches
+  ... 393216 records (0.9%), 93653590 clocks, 14492 records/s, 3.45 Mclocks/s, 1 markers, 359066 read mismatches
+  ... 507904 records (1.2%), 108383817 clocks, 16104 records/s, 3.44 Mclocks/s, 1 markers, 464888 read mismatches
+  ... 528384 records (1.2%), 117577648 clocks, 15442 records/s, 3.44 Mclocks/s, 1 markers, 485363 read mismatches
+  ... 667648 records (1.5%), 124827940 clocks, 18423 records/s, 3.44 Mclocks/s, 1 markers, 539446 read mismatches
+  marker 1 at record 788197 (stamp 6783237084, clock 131672652): dumped /home/dani/glreplay/b44full/core_rgb_0001.bin, /home/dani/glreplay/b44full/core_aux_0001.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 790528 records (1.8%), 136933916 clocks, 19909 records/s, 3.45 Mclocks/s, 2 markers, 540387 read mismatches
+  marker 2 at record 803428 (stamp 9390238605, clock 138557031): dumped /home/dani/glreplay/b44full/core_rgb_0002.bin, /home/dani/glreplay/b44full/core_aux_0002.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 917504 records (2.1%), 144020338 clocks, 21934 records/s, 3.44 Mclocks/s, 3 markers, 541805 read mismatches
+  marker 3 at record 941367 (stamp 11933650472, clock 145741547): dumped /home/dani/glreplay/b44full/core_rgb_0003.bin, /home/dani/glreplay/b44full/core_aux_0003.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 950272 records (2.2%), 150724963 clocks, 21611 records/s, 3.43 Mclocks/s, 4 markers, 543996 read mismatches
+  ... 1003520 records (2.3%), 160787129 clocks, 21342 records/s, 3.42 Mclocks/s, 4 markers, 594611 read mismatches
+  ... 1007616 records (2.3%), 173907655 clocks, 19628 records/s, 3.39 Mclocks/s, 4 markers, 597511 read mismatches
+  ... 1069056 records (2.5%), 193762093 clocks, 18429 records/s, 3.34 Mclocks/s, 4 markers, 657739 read mismatches
+  ... 1073152 records (2.5%), 206927074 clocks, 17208 records/s, 3.32 Mclocks/s, 4 markers, 657771 read mismatches
+  ... 1077248 records (2.5%), 213552116 clocks, 16695 records/s, 3.31 Mclocks/s, 4 markers, 657787 read mismatches
+  ... 1081344 records (2.5%), 220173698 clocks, 16211 records/s, 3.30 Mclocks/s, 4 markers, 657803 read mismatches
+  ... 1085440 records (2.5%), 226794585 clocks, 15761 records/s, 3.29 Mclocks/s, 4 markers, 657819 read mismatches
+  ... 1089536 records (2.5%), 233419177 clocks, 15320 records/s, 3.28 Mclocks/s, 4 markers, 657835 read mismatches
+  ... 1093632 records (2.5%), 240040604 clocks, 14911 records/s, 3.27 Mclocks/s, 4 markers, 657851 read mismatches
+  ... 1101824 records (2.5%), 246738089 clocks, 14570 records/s, 3.26 Mclocks/s, 4 markers, 657867 read mismatches
+  ... 1105920 records (2.5%), 253365106 clocks, 14205 records/s, 3.25 Mclocks/s, 4 markers, 657883 read mismatches
+  ... 1114112 records (2.6%), 260063286 clocks, 13905 records/s, 3.25 Mclocks/s, 4 markers, 657899 read mismatches
+  ... 1122304 records (2.6%), 266761281 clocks, 13625 records/s, 3.24 Mclocks/s, 4 markers, 657915 read mismatches
+  ... 1134592 records (2.6%), 273534384 clocks, 13399 records/s, 3.23 Mclocks/s, 4 markers, 657931 read mismatches
+  ... 1142784 records (2.6%), 280236459 clocks, 13146 records/s, 3.22 Mclocks/s, 4 markers, 657947 read mismatches
+  ... 1155072 records (2.7%), 287006592 clocks, 12946 records/s, 3.22 Mclocks/s, 4 markers, 657963 read mismatches
+  ... 1163264 records (2.7%), 293710447 clocks, 12713 records/s, 3.21 Mclocks/s, 4 markers, 657979 read mismatches
+  ... 1175552 records (2.7%), 300486685 clocks, 12533 records/s, 3.20 Mclocks/s, 4 markers, 657995 read mismatches
+  ... 1187840 records (2.7%), 307261088 clocks, 12356 records/s, 3.20 Mclocks/s, 4 markers, 658011 read mismatches
+  ... 1204224 records (2.8%), 314109714 clocks, 12227 records/s, 3.19 Mclocks/s, 4 markers, 658027 read mismatches
+  ... 1216512 records (2.8%), 320887017 clocks, 12073 records/s, 3.18 Mclocks/s, 4 markers, 658043 read mismatches
+  ... 1232896 records (2.8%), 327737928 clocks, 11963 records/s, 3.18 Mclocks/s, 4 markers, 658059 read mismatches
+  ... 1249280 records (2.9%), 334587839 clocks, 11858 records/s, 3.18 Mclocks/s, 4 markers, 658075 read mismatches
+  ... 1265664 records (2.9%), 341439635 clocks, 11754 records/s, 3.17 Mclocks/s, 4 markers, 658091 read mismatches
+  ... 1282048 records (3.0%), 348292596 clocks, 11656 records/s, 3.17 Mclocks/s, 4 markers, 658107 read mismatches
+  ... 1298432 records (3.0%), 355145842 clocks, 11564 records/s, 3.16 Mclocks/s, 4 markers, 658123 read mismatches
+  ... 1318912 records (3.0%), 362073071 clocks, 11509 records/s, 3.16 Mclocks/s, 4 markers, 658139 read mismatches
+  ... 1335296 records (3.1%), 368929392 clocks, 11417 records/s, 3.15 Mclocks/s, 4 markers, 658155 read mismatches
+  ... 1355776 records (3.1%), 375859261 clocks, 11366 records/s, 3.15 Mclocks/s, 4 markers, 658171 read mismatches
+  ... 1376256 records (3.2%), 382788980 clocks, 11316 records/s, 3.15 Mclocks/s, 4 markers, 658353 read mismatches
+  ... 1400832 records (3.2%), 389791667 clocks, 11298 records/s, 3.14 Mclocks/s, 4 markers, 658369 read mismatches
+  ... 1421312 records (3.3%), 396726376 clocks, 11252 records/s, 3.14 Mclocks/s, 4 markers, 658385 read mismatches
+  ... 1441792 records (3.3%), 403663000 clocks, 11209 records/s, 3.14 Mclocks/s, 4 markers, 658401 read mismatches
+  ... 1466368 records (3.4%), 410668312 clocks, 11192 records/s, 3.13 Mclocks/s, 4 markers, 658417 read mismatches
+  ... 1490944 records (3.4%), 417682924 clocks, 11183 records/s, 3.13 Mclocks/s, 4 markers, 658433 read mismatches
+  ... 1515520 records (3.5%), 424693721 clocks, 11174 records/s, 3.13 Mclocks/s, 4 markers, 658449 read mismatches
+  ... 1540096 records (3.5%), 431706008 clocks, 11160 records/s, 3.13 Mclocks/s, 4 markers, 658465 read mismatches
+  ... 1568768 records (3.6%), 438790085 clocks, 11180 records/s, 3.13 Mclocks/s, 4 markers, 658482 read mismatches
+  ... 1593344 records (3.7%), 445805394 clocks, 11171 records/s, 3.13 Mclocks/s, 4 markers, 658499 read mismatches
+  ... 1622016 records (3.7%), 452891839 clocks, 11190 records/s, 3.12 Mclocks/s, 4 markers, 658515 read mismatches
+  ... 1650688 records (3.8%), 459981319 clocks, 11209 records/s, 3.12 Mclocks/s, 4 markers, 658531 read mismatches
+  ... 1679360 records (3.9%), 467067084 clocks, 11224 records/s, 3.12 Mclocks/s, 4 markers, 658547 read mismatches
+  ... 1708032 records (3.9%), 474156389 clocks, 11237 records/s, 3.12 Mclocks/s, 4 markers, 658563 read mismatches
+  ... 1736704 records (4.0%), 481240479 clocks, 11254 records/s, 3.12 Mclocks/s, 4 markers, 658696 read mismatches
+  ... 1769472 records (4.1%), 488397532 clocks, 11292 records/s, 3.12 Mclocks/s, 4 markers, 658712 read mismatches
+  ... 1798144 records (4.1%), 495484627 clocks, 11308 records/s, 3.12 Mclocks/s, 4 markers, 658728 read mismatches
+  ... 1826816 records (4.2%), 502573477 clocks, 11321 records/s, 3.11 Mclocks/s, 4 markers, 658744 read mismatches
+  ... 1855488 records (4.3%), 509656747 clocks, 11332 records/s, 3.11 Mclocks/s, 4 markers, 658760 read mismatches
+  ... 1884160 records (4.3%), 516744102 clocks, 11345 records/s, 3.11 Mclocks/s, 4 markers, 658776 read mismatches
+  ... 1916928 records (4.4%), 523898330 clocks, 11379 records/s, 3.11 Mclocks/s, 4 markers, 658792 read mismatches
+  ... 1945600 records (4.5%), 530980370 clocks, 11388 records/s, 3.11 Mclocks/s, 4 markers, 658808 read mismatches
+  ... 1974272 records (4.5%), 538064970 clocks, 11399 records/s, 3.11 Mclocks/s, 4 markers, 658824 read mismatches
+  ... 2002944 records (4.6%), 545145300 clocks, 11411 records/s, 3.11 Mclocks/s, 4 markers, 658840 read mismatches
+  ... 2031616 records (4.7%), 552227925 clocks, 11422 records/s, 3.10 Mclocks/s, 4 markers, 658856 read mismatches
+  ... 2064384 records (4.8%), 559376933 clocks, 11454 records/s, 3.10 Mclocks/s, 4 markers, 658872 read mismatches
+  ... 2093056 records (4.8%), 566457948 clocks, 11464 records/s, 3.10 Mclocks/s, 4 markers, 658888 read mismatches
+  ... 2121728 records (4.9%), 573536543 clocks, 11474 records/s, 3.10 Mclocks/s, 4 markers, 658904 read mismatches
+  ... 2150400 records (5.0%), 580617468 clocks, 11485 records/s, 3.10 Mclocks/s, 4 markers, 658920 read mismatches
+  ... 2183168 records (5.0%), 587762691 clocks, 11513 records/s, 3.10 Mclocks/s, 4 markers, 658936 read mismatches
+  ... 2211840 records (5.1%), 594842196 clocks, 11523 records/s, 3.10 Mclocks/s, 4 markers, 658957 read mismatches
+  ... 2240512 records (5.2%), 601917671 clocks, 11533 records/s, 3.10 Mclocks/s, 4 markers, 658973 read mismatches
+  ... 2269184 records (5.2%), 608996391 clocks, 11542 records/s, 3.10 Mclocks/s, 4 markers, 658989 read mismatches
+  ... 2301952 records (5.3%), 616140464 clocks, 11570 records/s, 3.10 Mclocks/s, 4 markers, 659015 read mismatches
+  ... 2330624 records (5.4%), 623218869 clocks, 11577 records/s, 3.10 Mclocks/s, 4 markers, 659031 read mismatches
+  ... 2359296 records (5.4%), 630292704 clocks, 11585 records/s, 3.10 Mclocks/s, 4 markers, 659047 read mismatches
+  ... 2392064 records (5.5%), 637437547 clocks, 11613 records/s, 3.09 Mclocks/s, 4 markers, 659063 read mismatches
+  ... 2420736 records (5.6%), 644510282 clocks, 11622 records/s, 3.09 Mclocks/s, 4 markers, 659079 read mismatches
+  ... 2449408 records (5.6%), 651586537 clocks, 11632 records/s, 3.09 Mclocks/s, 4 markers, 659095 read mismatches
+  ... 2478080 records (5.7%), 658656937 clocks, 11642 records/s, 3.09 Mclocks/s, 4 markers, 659111 read mismatches
+  ... 2506752 records (5.8%), 665731717 clocks, 11652 records/s, 3.09 Mclocks/s, 4 markers, 659127 read mismatches
+  ... 2539520 records (5.9%), 672872210 clocks, 11680 records/s, 3.09 Mclocks/s, 4 markers, 659143 read mismatches
+  ... 2568192 records (5.9%), 679943150 clocks, 11690 records/s, 3.09 Mclocks/s, 4 markers, 659159 read mismatches
+  ... 2596864 records (6.0%), 687016440 clocks, 11699 records/s, 3.09 Mclocks/s, 4 markers, 659175 read mismatches
+  ... 2625536 records (6.0%), 694084440 clocks, 11707 records/s, 3.09 Mclocks/s, 4 markers, 659191 read mismatches
+  ... 2654208 records (6.1%), 701156235 clocks, 11716 records/s, 3.10 Mclocks/s, 4 markers, 659207 read mismatches
+  ... 2682880 records (6.2%), 708225420 clocks, 11724 records/s, 3.10 Mclocks/s, 4 markers, 659223 read mismatches
+  ... 2715648 records (6.3%), 715360943 clocks, 11747 records/s, 3.09 Mclocks/s, 4 markers, 659239 read mismatches
+  ... 2744320 records (6.3%), 722425168 clocks, 11755 records/s, 3.09 Mclocks/s, 4 markers, 659350 read mismatches
+  ... 2772992 records (6.4%), 729492863 clocks, 11763 records/s, 3.09 Mclocks/s, 4 markers, 659366 read mismatches
+  ... 2801664 records (6.5%), 736558978 clocks, 11771 records/s, 3.09 Mclocks/s, 4 markers, 659382 read mismatches
+  ... 2830336 records (6.5%), 743624008 clocks, 11779 records/s, 3.09 Mclocks/s, 4 markers, 659398 read mismatches
+  ... 2859008 records (6.6%), 750689138 clocks, 11787 records/s, 3.09 Mclocks/s, 4 markers, 659414 read mismatches
+  ... 2887680 records (6.7%), 757753508 clocks, 11794 records/s, 3.09 Mclocks/s, 4 markers, 659430 read mismatches
+  ... 2916352 records (6.7%), 764816633 clocks, 11801 records/s, 3.09 Mclocks/s, 4 markers, 659446 read mismatches
+  ... 2945024 records (6.8%), 771878833 clocks, 11809 records/s, 3.10 Mclocks/s, 4 markers, 659462 read mismatches
+  ... 2973696 records (6.9%), 778940203 clocks, 11816 records/s, 3.10 Mclocks/s, 4 markers, 659478 read mismatches
+  ... 3002368 records (6.9%), 786001098 clocks, 11824 records/s, 3.10 Mclocks/s, 4 markers, 659494 read mismatches
+  ... 3031040 records (7.0%), 793060003 clocks, 11830 records/s, 3.10 Mclocks/s, 4 markers, 659510 read mismatches
+  ... 3059712 records (7.0%), 800120433 clocks, 11837 records/s, 3.10 Mclocks/s, 4 markers, 659526 read mismatches
+  ... 3088384 records (7.1%), 807179233 clocks, 11844 records/s, 3.10 Mclocks/s, 4 markers, 659542 read mismatches
+  ... 3112960 records (7.2%), 814171117 clocks, 11835 records/s, 3.10 Mclocks/s, 4 markers, 659559 read mismatches
+  ... 3141632 records (7.2%), 821227202 clocks, 11841 records/s, 3.10 Mclocks/s, 4 markers, 659575 read mismatches
+  ... 3170304 records (7.3%), 828281667 clocks, 11848 records/s, 3.10 Mclocks/s, 4 markers, 659591 read mismatches
+  ... 3198976 records (7.4%), 835339767 clocks, 11855 records/s, 3.10 Mclocks/s, 4 markers, 659607 read mismatches
+  ... 3227648 records (7.4%), 842392272 clocks, 11861 records/s, 3.10 Mclocks/s, 4 markers, 659623 read mismatches
+  ... 3256320 records (7.5%), 849446007 clocks, 11868 records/s, 3.10 Mclocks/s, 4 markers, 659642 read mismatches
+  ... 3284992 records (7.6%), 856494832 clocks, 11874 records/s, 3.10 Mclocks/s, 4 markers, 660045 read mismatches
+  ... 3313664 records (7.6%), 863548842 clocks, 11880 records/s, 3.10 Mclocks/s, 4 markers, 660061 read mismatches
+  ... 3338240 records (7.7%), 870533839 clocks, 11872 records/s, 3.10 Mclocks/s, 4 markers, 660077 read mismatches
+  ... 3366912 records (7.8%), 877583509 clocks, 11878 records/s, 3.10 Mclocks/s, 4 markers, 660093 read mismatches
+  ... 3395584 records (7.8%), 884637819 clocks, 11884 records/s, 3.10 Mclocks/s, 4 markers, 660109 read mismatches
+  ... 3424256 records (7.9%), 891687814 clocks, 11889 records/s, 3.10 Mclocks/s, 4 markers, 660125 read mismatches
+  ... 3452928 records (8.0%), 898737864 clocks, 11894 records/s, 3.10 Mclocks/s, 4 markers, 660141 read mismatches
+  ... 3481600 records (8.0%), 905789149 clocks, 11901 records/s, 3.10 Mclocks/s, 4 markers, 660157 read mismatches
+  ... 3510272 records (8.1%), 912842424 clocks, 11905 records/s, 3.10 Mclocks/s, 4 markers, 660173 read mismatches
+  ... 3534848 records (8.1%), 919822121 clocks, 11897 records/s, 3.10 Mclocks/s, 4 markers, 660189 read mismatches
+  ... 3563520 records (8.2%), 926873951 clocks, 11903 records/s, 3.10 Mclocks/s, 4 markers, 660205 read mismatches
+  ... 3592192 records (8.3%), 933923986 clocks, 11909 records/s, 3.10 Mclocks/s, 4 markers, 660221 read mismatches
+  ... 3620864 records (8.3%), 940974848 clocks, 11912 records/s, 3.10 Mclocks/s, 4 markers, 660237 read mismatches
+  ... 3649536 records (8.4%), 948031151 clocks, 11917 records/s, 3.10 Mclocks/s, 4 markers, 660253 read mismatches
+  ... 3678208 records (8.5%), 955084191 clocks, 11922 records/s, 3.10 Mclocks/s, 4 markers, 660269 read mismatches
+  ... 3706880 records (8.5%), 962135841 clocks, 11923 records/s, 3.09 Mclocks/s, 4 markers, 660285 read mismatches
+  ... 3735552 records (8.6%), 969192576 clocks, 11926 records/s, 3.09 Mclocks/s, 4 markers, 660301 read mismatches
+  ... 3764224 records (8.7%), 976247776 clocks, 11930 records/s, 3.09 Mclocks/s, 4 markers, 660317 read mismatches
+  ... 3792896 records (8.7%), 983306116 clocks, 11932 records/s, 3.09 Mclocks/s, 4 markers, 660333 read mismatches
+  ... 3821568 records (8.8%), 990365011 clocks, 11935 records/s, 3.09 Mclocks/s, 4 markers, 660349 read mismatches
+  ... 3850240 records (8.9%), 997424256 clocks, 11938 records/s, 3.09 Mclocks/s, 4 markers, 660365 read mismatches
+  ... 3878912 records (8.9%), 1004486601 clocks, 11940 records/s, 3.09 Mclocks/s, 4 markers, 660381 read mismatches
+  ... 3907584 records (9.0%), 1011549146 clocks, 11943 records/s, 3.09 Mclocks/s, 4 markers, 660397 read mismatches
+  ... 3936256 records (9.1%), 1018613666 clocks, 11946 records/s, 3.09 Mclocks/s, 4 markers, 660413 read mismatches
+  ... 3964928 records (9.1%), 1025679866 clocks, 11949 records/s, 3.09 Mclocks/s, 4 markers, 660429 read mismatches
+  ... 3993600 records (9.2%), 1032746391 clocks, 11951 records/s, 3.09 Mclocks/s, 4 markers, 660445 read mismatches
+  ... 4022272 records (9.3%), 1039813637 clocks, 11953 records/s, 3.09 Mclocks/s, 4 markers, 660461 read mismatches
+  ... 4050944 records (9.3%), 1046878876 clocks, 11956 records/s, 3.09 Mclocks/s, 4 markers, 660751 read mismatches
+  ... 4079616 records (9.4%), 1053949481 clocks, 11960 records/s, 3.09 Mclocks/s, 4 markers, 660767 read mismatches
+  ... 4108288 records (9.5%), 1061020796 clocks, 11964 records/s, 3.09 Mclocks/s, 4 markers, 660783 read mismatches
+  ... 4136960 records (9.5%), 1068096376 clocks, 11965 records/s, 3.09 Mclocks/s, 4 markers, 660799 read mismatches
+  ... 4165632 records (9.6%), 1075170471 clocks, 11967 records/s, 3.09 Mclocks/s, 4 markers, 660815 read mismatches
+  ... 4194304 records (9.7%), 1082242476 clocks, 11969 records/s, 3.09 Mclocks/s, 4 markers, 660831 read mismatches
+  ... 4222976 records (9.7%), 1089319221 clocks, 11970 records/s, 3.09 Mclocks/s, 4 markers, 660847 read mismatches
+  ... 4251648 records (9.8%), 1096397446 clocks, 11972 records/s, 3.09 Mclocks/s, 4 markers, 660863 read mismatches
+  ... 4280320 records (9.9%), 1103474101 clocks, 11974 records/s, 3.09 Mclocks/s, 4 markers, 660879 read mismatches
+  ... 4313088 records (9.9%), 1110622464 clocks, 11987 records/s, 3.09 Mclocks/s, 4 markers, 660895 read mismatches
+  ... 4341760 records (10.0%), 1117700864 clocks, 11990 records/s, 3.09 Mclocks/s, 4 markers, 660911 read mismatches
+  ... 4370432 records (10.1%), 1124779594 clocks, 11992 records/s, 3.09 Mclocks/s, 4 markers, 660927 read mismatches
+  ... 4399104 records (10.1%), 1131860494 clocks, 11994 records/s, 3.09 Mclocks/s, 4 markers, 660943 read mismatches
+  ... 4427776 records (10.2%), 1138937934 clocks, 11996 records/s, 3.09 Mclocks/s, 4 markers, 660959 read mismatches
+  ... 4456448 records (10.3%), 1146020294 clocks, 11999 records/s, 3.09 Mclocks/s, 4 markers, 660975 read mismatches
+  ... 4485120 records (10.3%), 1153099734 clocks, 12001 records/s, 3.09 Mclocks/s, 4 markers, 660991 read mismatches
+  ... 4517888 records (10.4%), 1160251197 clocks, 12012 records/s, 3.08 Mclocks/s, 4 markers, 661007 read mismatches
+  ... 4546560 records (10.5%), 1167330722 clocks, 12014 records/s, 3.08 Mclocks/s, 4 markers, 661023 read mismatches
+  ... 4575232 records (10.5%), 1174410668 clocks, 12016 records/s, 3.08 Mclocks/s, 4 markers, 661039 read mismatches
+  ... 4603904 records (10.6%), 1181492002 clocks, 12019 records/s, 3.08 Mclocks/s, 4 markers, 661055 read mismatches
+  ... 4632576 records (10.7%), 1188568577 clocks, 12021 records/s, 3.08 Mclocks/s, 4 markers, 661071 read mismatches
+  ... 4661248 records (10.7%), 1195649037 clocks, 12024 records/s, 3.08 Mclocks/s, 4 markers, 661087 read mismatches
+  ... 4689920 records (10.8%), 1202727637 clocks, 12026 records/s, 3.08 Mclocks/s, 4 markers, 661103 read mismatches
+  ... 4722688 records (10.9%), 1209874265 clocks, 12038 records/s, 3.08 Mclocks/s, 4 markers, 661119 read mismatches
+  ... 4751360 records (10.9%), 1216951435 clocks, 12038 records/s, 3.08 Mclocks/s, 4 markers, 661135 read mismatches
+  ... 4780032 records (11.0%), 1224028550 clocks, 12040 records/s, 3.08 Mclocks/s, 4 markers, 661151 read mismatches
+  ... 4808704 records (11.1%), 1231104290 clocks, 12043 records/s, 3.08 Mclocks/s, 4 markers, 661167 read mismatches
+  ... 4837376 records (11.1%), 1238180275 clocks, 12044 records/s, 3.08 Mclocks/s, 4 markers, 661183 read mismatches
+  ... 4866048 records (11.2%), 1245257800 clocks, 12044 records/s, 3.08 Mclocks/s, 4 markers, 661199 read mismatches
+  ... 4894720 records (11.3%), 1252332815 clocks, 12047 records/s, 3.08 Mclocks/s, 4 markers, 661215 read mismatches
+  ... 4923392 records (11.3%), 1259405930 clocks, 12050 records/s, 3.08 Mclocks/s, 4 markers, 661231 read mismatches
+  ... 4952064 records (11.4%), 1266477645 clocks, 12051 records/s, 3.08 Mclocks/s, 4 markers, 661247 read mismatches
+  ... 4980736 records (11.5%), 1273551135 clocks, 12053 records/s, 3.08 Mclocks/s, 4 markers, 661263 read mismatches
+  ... 5009408 records (11.5%), 1280623265 clocks, 12052 records/s, 3.08 Mclocks/s, 4 markers, 661279 read mismatches
+  ... 5038080 records (11.6%), 1287694175 clocks, 12053 records/s, 3.08 Mclocks/s, 4 markers, 661295 read mismatches
+  ... 5066752 records (11.7%), 1294763945 clocks, 12056 records/s, 3.08 Mclocks/s, 4 markers, 661311 read mismatches
+  ... 5095424 records (11.7%), 1301833565 clocks, 12057 records/s, 3.08 Mclocks/s, 4 markers, 661327 read mismatches
+  ... 5124096 records (11.8%), 1308901650 clocks, 12057 records/s, 3.08 Mclocks/s, 4 markers, 661343 read mismatches
+  ... 5152768 records (11.9%), 1315969035 clocks, 12061 records/s, 3.08 Mclocks/s, 4 markers, 661359 read mismatches
+  ... 5181440 records (11.9%), 1323035586 clocks, 12064 records/s, 3.08 Mclocks/s, 4 markers, 661375 read mismatches
+  ... 5210112 records (12.0%), 1330102815 clocks, 12067 records/s, 3.08 Mclocks/s, 4 markers, 661391 read mismatches
+  ... 5238784 records (12.1%), 1337170065 clocks, 12070 records/s, 3.08 Mclocks/s, 4 markers, 661407 read mismatches
+  ... 5267456 records (12.1%), 1344234155 clocks, 12072 records/s, 3.08 Mclocks/s, 4 markers, 661423 read mismatches
+  ... 5296128 records (12.2%), 1351295740 clocks, 12075 records/s, 3.08 Mclocks/s, 4 markers, 661439 read mismatches
+  ... 5324800 records (12.3%), 1358357845 clocks, 12078 records/s, 3.08 Mclocks/s, 4 markers, 661455 read mismatches
+  ... 5353472 records (12.3%), 1365419990 clocks, 12081 records/s, 3.08 Mclocks/s, 4 markers, 661471 read mismatches
+  ... 5382144 records (12.4%), 1372481330 clocks, 12084 records/s, 3.08 Mclocks/s, 4 markers, 661487 read mismatches
+  ... 5410816 records (12.5%), 1379544395 clocks, 12086 records/s, 3.08 Mclocks/s, 4 markers, 661503 read mismatches
+  ... 5439488 records (12.5%), 1386603505 clocks, 12089 records/s, 3.08 Mclocks/s, 4 markers, 661519 read mismatches
+  ... 5464064 records (12.6%), 1393595887 clocks, 12083 records/s, 3.08 Mclocks/s, 4 markers, 661535 read mismatches
+  ... 5492736 records (12.7%), 1400654902 clocks, 12086 records/s, 3.08 Mclocks/s, 4 markers, 661551 read mismatches
+  ... 5521408 records (12.7%), 1407711632 clocks, 12088 records/s, 3.08 Mclocks/s, 4 markers, 661567 read mismatches
+  ... 5550080 records (12.8%), 1414770897 clocks, 12091 records/s, 3.08 Mclocks/s, 4 markers, 661583 read mismatches
+  ... 5578752 records (12.9%), 1421826177 clocks, 12094 records/s, 3.08 Mclocks/s, 4 markers, 661599 read mismatches
+  ... 5607424 records (12.9%), 1428883182 clocks, 12097 records/s, 3.08 Mclocks/s, 4 markers, 661615 read mismatches
+  ... 5636096 records (13.0%), 1435941112 clocks, 12099 records/s, 3.08 Mclocks/s, 4 markers, 661631 read mismatches
+  ... 5664768 records (13.1%), 1442995752 clocks, 12102 records/s, 3.08 Mclocks/s, 4 markers, 661647 read mismatches
+  ... 5689344 records (13.1%), 1449984024 clocks, 12096 records/s, 3.08 Mclocks/s, 4 markers, 661663 read mismatches
+  ... 5718016 records (13.2%), 1457038594 clocks, 12099 records/s, 3.08 Mclocks/s, 4 markers, 661679 read mismatches
+  ... 5746688 records (13.2%), 1464091839 clocks, 12101 records/s, 3.08 Mclocks/s, 4 markers, 661695 read mismatches
+  ... 5775360 records (13.3%), 1471148999 clocks, 12102 records/s, 3.08 Mclocks/s, 4 markers, 661711 read mismatches
+  ... 5804032 records (13.4%), 1478201965 clocks, 12104 records/s, 3.08 Mclocks/s, 4 markers, 661727 read mismatches
+  ... 5832704 records (13.4%), 1485257584 clocks, 12106 records/s, 3.08 Mclocks/s, 4 markers, 661743 read mismatches
+  ... 5861376 records (13.5%), 1492312204 clocks, 12108 records/s, 3.08 Mclocks/s, 4 markers, 661759 read mismatches
+  ... 5885952 records (13.6%), 1499298811 clocks, 12102 records/s, 3.08 Mclocks/s, 4 markers, 661775 read mismatches
+  ... 5914624 records (13.6%), 1506353221 clocks, 12104 records/s, 3.08 Mclocks/s, 4 markers, 661791 read mismatches
+  ... 5943296 records (13.7%), 1513405996 clocks, 12106 records/s, 3.08 Mclocks/s, 4 markers, 661807 read mismatches
+  ... 5971968 records (13.8%), 1520462241 clocks, 12108 records/s, 3.08 Mclocks/s, 4 markers, 661823 read mismatches
+  ... 6000640 records (13.8%), 1527514896 clocks, 12111 records/s, 3.08 Mclocks/s, 4 markers, 661839 read mismatches
+  ... 6029312 records (13.9%), 1534568406 clocks, 12113 records/s, 3.08 Mclocks/s, 4 markers, 661855 read mismatches
+  ... 6057984 records (14.0%), 1541625296 clocks, 12114 records/s, 3.08 Mclocks/s, 4 markers, 661871 read mismatches
+  ... 6086656 records (14.0%), 1548681276 clocks, 12115 records/s, 3.08 Mclocks/s, 4 markers, 661887 read mismatches
+  ... 6111232 records (14.1%), 1555667948 clocks, 12109 records/s, 3.08 Mclocks/s, 4 markers, 661903 read mismatches
+  ... 6139904 records (14.1%), 1562722388 clocks, 12111 records/s, 3.08 Mclocks/s, 4 markers, 661919 read mismatches
+  ... 6168576 records (14.2%), 1569773763 clocks, 12112 records/s, 3.08 Mclocks/s, 4 markers, 662322 read mismatches
+  ... 6197248 records (14.3%), 1576829488 clocks, 12114 records/s, 3.08 Mclocks/s, 4 markers, 662338 read mismatches
+  ... 6225920 records (14.3%), 1583884598 clocks, 12116 records/s, 3.08 Mclocks/s, 4 markers, 662354 read mismatches
+  ... 6254592 records (14.4%), 1590941263 clocks, 12117 records/s, 3.08 Mclocks/s, 4 markers, 662370 read mismatches
+  ... 6283264 records (14.5%), 1597997338 clocks, 12119 records/s, 3.08 Mclocks/s, 4 markers, 662389 read mismatches
+  ... 6311936 records (14.5%), 1605054553 clocks, 12120 records/s, 3.08 Mclocks/s, 4 markers, 662434 read mismatches
+  ... 6340608 records (14.6%), 1612112730 clocks, 12122 records/s, 3.08 Mclocks/s, 4 markers, 662451 read mismatches
+  ... 6369280 records (14.7%), 1619172275 clocks, 12124 records/s, 3.08 Mclocks/s, 4 markers, 662468 read mismatches
+  ... 6397952 records (14.7%), 1626231775 clocks, 12126 records/s, 3.08 Mclocks/s, 4 markers, 662484 read mismatches
+  ... 6426624 records (14.8%), 1633291720 clocks, 12128 records/s, 3.08 Mclocks/s, 4 markers, 662500 read mismatches
+  ... 6455296 records (14.9%), 1640352230 clocks, 12130 records/s, 3.08 Mclocks/s, 4 markers, 662516 read mismatches
+  ... 6483968 records (14.9%), 1647415165 clocks, 12132 records/s, 3.08 Mclocks/s, 4 markers, 662532 read mismatches
+  ... 6512640 records (15.0%), 1654478690 clocks, 12133 records/s, 3.08 Mclocks/s, 4 markers, 662548 read mismatches
+  ... 6541312 records (15.1%), 1661540980 clocks, 12135 records/s, 3.08 Mclocks/s, 4 markers, 662564 read mismatches
+  ... 6569984 records (15.1%), 1668607380 clocks, 12137 records/s, 3.08 Mclocks/s, 4 markers, 662580 read mismatches
+  ... 6598656 records (15.2%), 1675671330 clocks, 12138 records/s, 3.08 Mclocks/s, 4 markers, 662596 read mismatches
+  ... 6631424 records (15.3%), 1682807773 clocks, 12146 records/s, 3.08 Mclocks/s, 4 markers, 662612 read mismatches
+  ... 6660096 records (15.3%), 1689874123 clocks, 12148 records/s, 3.08 Mclocks/s, 4 markers, 662628 read mismatches
+  ... 6688768 records (15.4%), 1696941618 clocks, 12150 records/s, 3.08 Mclocks/s, 4 markers, 662644 read mismatches
+  ... 6717440 records (15.5%), 1704009043 clocks, 12152 records/s, 3.08 Mclocks/s, 4 markers, 662660 read mismatches
+  ... 6746112 records (15.5%), 1711078978 clocks, 12153 records/s, 3.08 Mclocks/s, 4 markers, 662676 read mismatches
+  ... 6774784 records (15.6%), 1718150813 clocks, 12155 records/s, 3.08 Mclocks/s, 4 markers, 662692 read mismatches
+  ... 6803456 records (15.7%), 1725220823 clocks, 12155 records/s, 3.08 Mclocks/s, 4 markers, 662708 read mismatches
+  ... 6832128 records (15.7%), 1732291098 clocks, 12154 records/s, 3.08 Mclocks/s, 4 markers, 662724 read mismatches
+  ... 6860800 records (15.8%), 1739365458 clocks, 12154 records/s, 3.08 Mclocks/s, 4 markers, 662740 read mismatches
+  ... 6889472 records (15.9%), 1746438788 clocks, 12155 records/s, 3.08 Mclocks/s, 4 markers, 662756 read mismatches
+  ... 6922240 records (15.9%), 1753580816 clocks, 12162 records/s, 3.08 Mclocks/s, 4 markers, 662772 read mismatches
+  ... 6950912 records (16.0%), 1760654581 clocks, 12163 records/s, 3.08 Mclocks/s, 4 markers, 662788 read mismatches
+  ... 6979584 records (16.1%), 1767728961 clocks, 12162 records/s, 3.08 Mclocks/s, 4 markers, 662804 read mismatches
+  ... 7008256 records (16.1%), 1774803081 clocks, 12161 records/s, 3.08 Mclocks/s, 4 markers, 662820 read mismatches
+  ... 7036928 records (16.2%), 1781878031 clocks, 12160 records/s, 3.08 Mclocks/s, 4 markers, 662836 read mismatches
+  ... 7065600 records (16.3%), 1788952156 clocks, 12161 records/s, 3.08 Mclocks/s, 4 markers, 662852 read mismatches
+  ... 7098368 records (16.4%), 1796096439 clocks, 12168 records/s, 3.08 Mclocks/s, 4 markers, 662868 read mismatches
+  ... 7127040 records (16.4%), 1803170134 clocks, 12169 records/s, 3.08 Mclocks/s, 4 markers, 662884 read mismatches
+  ... 7155712 records (16.5%), 1810244564 clocks, 12170 records/s, 3.08 Mclocks/s, 4 markers, 662900 read mismatches
+  ... 7184384 records (16.6%), 1817320684 clocks, 12171 records/s, 3.08 Mclocks/s, 4 markers, 662916 read mismatches
+  ... 7213056 records (16.6%), 1824393464 clocks, 12171 records/s, 3.08 Mclocks/s, 4 markers, 662932 read mismatches
+  ... 7241728 records (16.7%), 1831469624 clocks, 12170 records/s, 3.08 Mclocks/s, 4 markers, 662948 read mismatches
+  ... 7274496 records (16.8%), 1838609847 clocks, 12177 records/s, 3.08 Mclocks/s, 4 markers, 662964 read mismatches
+  ... 7303168 records (16.8%), 1845683677 clocks, 12177 records/s, 3.08 Mclocks/s, 4 markers, 662980 read mismatches
+  ... 7331840 records (16.9%), 1852755837 clocks, 12177 records/s, 3.08 Mclocks/s, 4 markers, 662996 read mismatches
+  ... 7360512 records (17.0%), 1859829247 clocks, 12178 records/s, 3.08 Mclocks/s, 4 markers, 663012 read mismatches
+  ... 7389184 records (17.0%), 1866899912 clocks, 12178 records/s, 3.08 Mclocks/s, 4 markers, 663028 read mismatches
+  ... 7417856 records (17.1%), 1873969052 clocks, 12179 records/s, 3.08 Mclocks/s, 4 markers, 663097 read mismatches
+  ... 7446528 records (17.2%), 1881038184 clocks, 12179 records/s, 3.08 Mclocks/s, 4 markers, 663113 read mismatches
+  ... 7475200 records (17.2%), 1888106242 clocks, 12180 records/s, 3.08 Mclocks/s, 4 markers, 663129 read mismatches
+  ... 7503872 records (17.3%), 1895173887 clocks, 12180 records/s, 3.08 Mclocks/s, 4 markers, 663145 read mismatches
+  ... 7532544 records (17.4%), 1902240657 clocks, 12180 records/s, 3.08 Mclocks/s, 4 markers, 663161 read mismatches
+  ... 7561216 records (17.4%), 1909305507 clocks, 12180 records/s, 3.08 Mclocks/s, 4 markers, 663177 read mismatches
+  ... 7585792 records (17.5%), 1916308189 clocks, 12160 records/s, 3.07 Mclocks/s, 4 markers, 663193 read mismatches
+  ... 7614464 records (17.5%), 1923367904 clocks, 12158 records/s, 3.07 Mclocks/s, 4 markers, 663209 read mismatches
+  ... 7643136 records (17.6%), 1930421879 clocks, 12159 records/s, 3.07 Mclocks/s, 4 markers, 663443 read mismatches
+  ... 7671808 records (17.7%), 1937476899 clocks, 12159 records/s, 3.07 Mclocks/s, 4 markers, 663459 read mismatches
+  ... 7696384 records (17.7%), 1944473001 clocks, 12153 records/s, 3.07 Mclocks/s, 4 markers, 663475 read mismatches
+  ... 7725056 records (17.8%), 1951519101 clocks, 12153 records/s, 3.07 Mclocks/s, 4 markers, 663491 read mismatches
+  ... 7753728 records (17.9%), 1958564521 clocks, 12154 records/s, 3.07 Mclocks/s, 4 markers, 663507 read mismatches
+  ... 7782400 records (17.9%), 1965583216 clocks, 12155 records/s, 3.07 Mclocks/s, 4 markers, 665628 read mismatches
+  ... 7806976 records (18.0%), 1972564553 clocks, 12150 records/s, 3.07 Mclocks/s, 4 markers, 665644 read mismatches
+  ... 7831552 records (18.0%), 1979547290 clocks, 12145 records/s, 3.07 Mclocks/s, 4 markers, 665660 read mismatches
+  ... 7860224 records (18.1%), 1986570435 clocks, 12145 records/s, 3.07 Mclocks/s, 4 markers, 665676 read mismatches
+  ... 7884800 records (18.2%), 1993540287 clocks, 12140 records/s, 3.07 Mclocks/s, 4 markers, 665692 read mismatches
+  ... 7909376 records (18.2%), 2000507499 clocks, 12133 records/s, 3.07 Mclocks/s, 4 markers, 665708 read mismatches
+  ... 7938048 records (18.3%), 2007512789 clocks, 12130 records/s, 3.07 Mclocks/s, 4 markers, 665724 read mismatches
+  ... 7962624 records (18.3%), 2014466131 clocks, 12125 records/s, 3.07 Mclocks/s, 4 markers, 665740 read mismatches
+  ... 7987200 records (18.4%), 2021414023 clocks, 12119 records/s, 3.07 Mclocks/s, 4 markers, 665756 read mismatches
+  ... 8011776 records (18.5%), 2028355605 clocks, 12114 records/s, 3.07 Mclocks/s, 4 markers, 665772 read mismatches
+  ... 8036352 records (18.5%), 2035291152 clocks, 12108 records/s, 3.07 Mclocks/s, 4 markers, 665788 read mismatches
+  ... 8060928 records (18.6%), 2042219124 clocks, 12104 records/s, 3.07 Mclocks/s, 4 markers, 665804 read mismatches
+  ... 8085504 records (18.6%), 2049139741 clocks, 12099 records/s, 3.07 Mclocks/s, 4 markers, 665820 read mismatches
+  ... 8105984 records (18.7%), 2056020600 clocks, 12089 records/s, 3.07 Mclocks/s, 4 markers, 665836 read mismatches
+  ... 8130560 records (18.7%), 2062923247 clocks, 12085 records/s, 3.07 Mclocks/s, 4 markers, 665852 read mismatches
+  ... 8155136 records (18.8%), 2069820579 clocks, 12081 records/s, 3.07 Mclocks/s, 4 markers, 665868 read mismatches
+  ... 8175616 records (18.8%), 2076681203 clocks, 12071 records/s, 3.07 Mclocks/s, 4 markers, 665884 read mismatches
+  ... 8200192 records (18.9%), 2083560560 clocks, 12067 records/s, 3.07 Mclocks/s, 4 markers, 665900 read mismatches
+  ... 8220672 records (18.9%), 2090406469 clocks, 12056 records/s, 3.07 Mclocks/s, 4 markers, 665916 read mismatches
+  ... 8245248 records (19.0%), 2097269301 clocks, 12053 records/s, 3.07 Mclocks/s, 4 markers, 665932 read mismatches
+  ... 8265728 records (19.0%), 2104101116 clocks, 12043 records/s, 3.07 Mclocks/s, 4 markers, 665948 read mismatches
+  ... 8286208 records (19.1%), 2110922424 clocks, 12034 records/s, 3.07 Mclocks/s, 4 markers, 665964 read mismatches
+  ... 8310784 records (19.1%), 2117763321 clocks, 12030 records/s, 3.07 Mclocks/s, 4 markers, 665980 read mismatches
+  ... 8331264 records (19.2%), 2124571740 clocks, 12021 records/s, 3.07 Mclocks/s, 4 markers, 665996 read mismatches
+  ... 8351744 records (19.2%), 2131369044 clocks, 12012 records/s, 3.07 Mclocks/s, 4 markers, 666843 read mismatches
+  ... 8376320 records (19.3%), 2138192746 clocks, 12008 records/s, 3.07 Mclocks/s, 4 markers, 666859 read mismatches
+  ... 8396800 records (19.3%), 2144984255 clocks, 11999 records/s, 3.07 Mclocks/s, 4 markers, 666875 read mismatches
+  ... 8417280 records (19.4%), 2151769564 clocks, 11990 records/s, 3.07 Mclocks/s, 4 markers, 666891 read mismatches
+  ... 8437760 records (19.4%), 2158547743 clocks, 11981 records/s, 3.07 Mclocks/s, 4 markers, 666907 read mismatches
+  ... 8458240 records (19.5%), 2165320852 clocks, 11973 records/s, 3.06 Mclocks/s, 4 markers, 666923 read mismatches
+  ... 8478720 records (19.5%), 2172090431 clocks, 11964 records/s, 3.06 Mclocks/s, 4 markers, 666939 read mismatches
+  ... 8499200 records (19.6%), 2178856435 clocks, 11955 records/s, 3.06 Mclocks/s, 4 markers, 666955 read mismatches
+  ... 8519680 records (19.6%), 2185619689 clocks, 11946 records/s, 3.06 Mclocks/s, 4 markers, 666971 read mismatches
+  ... 8540160 records (19.7%), 2192379573 clocks, 11938 records/s, 3.06 Mclocks/s, 4 markers, 666987 read mismatches
+  ... 8560640 records (19.7%), 2199139627 clocks, 11930 records/s, 3.06 Mclocks/s, 4 markers, 667003 read mismatches
+  ... 8581120 records (19.8%), 2205895146 clocks, 11922 records/s, 3.06 Mclocks/s, 4 markers, 667019 read mismatches
+  ... 8601600 records (19.8%), 2212649520 clocks, 11913 records/s, 3.06 Mclocks/s, 4 markers, 667035 read mismatches
+  ... 8617984 records (19.9%), 2219354556 clocks, 11899 records/s, 3.06 Mclocks/s, 4 markers, 667051 read mismatches
+  ... 8638464 records (19.9%), 2226106825 clocks, 11891 records/s, 3.06 Mclocks/s, 4 markers, 667067 read mismatches
+  ... 8658944 records (20.0%), 2232860144 clocks, 11880 records/s, 3.06 Mclocks/s, 4 markers, 667083 read mismatches
+  ... 8679424 records (20.0%), 2239611978 clocks, 11872 records/s, 3.06 Mclocks/s, 4 markers, 667099 read mismatches
+  ... 8699904 records (20.0%), 2246362517 clocks, 11863 records/s, 3.06 Mclocks/s, 4 markers, 667115 read mismatches
+  ... 8724480 records (20.1%), 2253143984 clocks, 11861 records/s, 3.06 Mclocks/s, 4 markers, 669450 read mismatches
+  ... 8744960 records (20.1%), 2259897623 clocks, 11853 records/s, 3.06 Mclocks/s, 4 markers, 669466 read mismatches
+  ... 8765440 records (20.2%), 2266652342 clocks, 11845 records/s, 3.06 Mclocks/s, 4 markers, 669482 read mismatches
+  ... 8785920 records (20.2%), 2273408281 clocks, 11838 records/s, 3.06 Mclocks/s, 4 markers, 669498 read mismatches
+  ... 8806400 records (20.3%), 2280168115 clocks, 11830 records/s, 3.06 Mclocks/s, 4 markers, 669514 read mismatches
+  ... 8826880 records (20.3%), 2286931054 clocks, 11822 records/s, 3.06 Mclocks/s, 4 markers, 669530 read mismatches
+  ... 8847360 records (20.4%), 2293693923 clocks, 11811 records/s, 3.06 Mclocks/s, 4 markers, 669546 read mismatches
+  ... 8867840 records (20.4%), 2300463742 clocks, 11791 records/s, 3.06 Mclocks/s, 4 markers, 669562 read mismatches
+  ... 8888320 records (20.5%), 2307232546 clocks, 11782 records/s, 3.06 Mclocks/s, 4 markers, 669578 read mismatches
+  ... 8912896 records (20.5%), 2314070188 clocks, 11778 records/s, 3.06 Mclocks/s, 4 markers, 669594 read mismatches
+  ... 8933376 records (20.6%), 2320851662 clocks, 11769 records/s, 3.06 Mclocks/s, 4 markers, 669610 read mismatches
+  ... 8953856 records (20.6%), 2327636626 clocks, 11762 records/s, 3.06 Mclocks/s, 4 markers, 669626 read mismatches
+  ... 8978432 records (20.7%), 2334491798 clocks, 11759 records/s, 3.06 Mclocks/s, 4 markers, 669642 read mismatches
+  ... 8998912 records (20.7%), 2341289027 clocks, 11752 records/s, 3.06 Mclocks/s, 4 markers, 669658 read mismatches
+  ... 9023488 records (20.8%), 2348156799 clocks, 11749 records/s, 3.06 Mclocks/s, 4 markers, 669674 read mismatches
+  ... 9043968 records (20.8%), 2354963903 clocks, 11742 records/s, 3.06 Mclocks/s, 4 markers, 669690 read mismatches
+  ... 9068544 records (20.9%), 2361843845 clocks, 11739 records/s, 3.06 Mclocks/s, 4 markers, 669706 read mismatches
+  ... 9089024 records (20.9%), 2368663924 clocks, 11731 records/s, 3.06 Mclocks/s, 4 markers, 669722 read mismatches
+  ... 9113600 records (21.0%), 2375555921 clocks, 11729 records/s, 3.06 Mclocks/s, 4 markers, 669738 read mismatches
+  ... 9138176 records (21.1%), 2382450593 clocks, 11727 records/s, 3.06 Mclocks/s, 4 markers, 669764 read mismatches
+  ... 9158656 records (21.1%), 2389286532 clocks, 11719 records/s, 3.06 Mclocks/s, 4 markers, 669780 read mismatches
+  ... 9183232 records (21.2%), 2396193899 clocks, 11717 records/s, 3.06 Mclocks/s, 4 markers, 669796 read mismatches
+  ... 9207808 records (21.2%), 2403107561 clocks, 11714 records/s, 3.06 Mclocks/s, 4 markers, 669812 read mismatches
+  ... 9232384 records (21.3%), 2410023978 clocks, 11712 records/s, 3.06 Mclocks/s, 4 markers, 669828 read mismatches
+  ... 9256960 records (21.3%), 2416946675 clocks, 11709 records/s, 3.06 Mclocks/s, 4 markers, 669844 read mismatches
+  ... 9281536 records (21.4%), 2423874722 clocks, 11707 records/s, 3.06 Mclocks/s, 4 markers, 669860 read mismatches
+  ... 9306112 records (21.4%), 2430807729 clocks, 11704 records/s, 3.06 Mclocks/s, 4 markers, 669876 read mismatches
+  ... 9330688 records (21.5%), 2437743496 clocks, 11701 records/s, 3.06 Mclocks/s, 4 markers, 669892 read mismatches
+  ... 9355264 records (21.6%), 2444683973 clocks, 11698 records/s, 3.06 Mclocks/s, 4 markers, 669908 read mismatches
+  ... 9383936 records (21.6%), 2451698748 clocks, 11701 records/s, 3.06 Mclocks/s, 4 markers, 669924 read mismatches
+  ... 9408512 records (21.7%), 2458650880 clocks, 11698 records/s, 3.06 Mclocks/s, 4 markers, 669940 read mismatches
+  ... 9433088 records (21.7%), 2465604257 clocks, 11696 records/s, 3.06 Mclocks/s, 4 markers, 669956 read mismatches
+  ... 9457664 records (21.8%), 2472559964 clocks, 11693 records/s, 3.06 Mclocks/s, 4 markers, 669972 read mismatches
+  ... 9486336 records (21.9%), 2479592164 clocks, 11695 records/s, 3.06 Mclocks/s, 4 markers, 669988 read mismatches
+  ... 9510912 records (21.9%), 2486556771 clocks, 11693 records/s, 3.06 Mclocks/s, 4 markers, 670004 read mismatches
+  ... 9539584 records (22.0%), 2493591926 clocks, 11695 records/s, 3.06 Mclocks/s, 4 markers, 670020 read mismatches
+  ... 9564160 records (22.0%), 2500564083 clocks, 11692 records/s, 3.06 Mclocks/s, 4 markers, 670042 read mismatches
+  ... 9592832 records (22.1%), 2507605253 clocks, 11694 records/s, 3.06 Mclocks/s, 4 markers, 670058 read mismatches
+  ... 9617408 records (22.2%), 2514582700 clocks, 11692 records/s, 3.06 Mclocks/s, 4 markers, 670074 read mismatches
+  ... 9646080 records (22.2%), 2521629925 clocks, 11694 records/s, 3.06 Mclocks/s, 4 markers, 670090 read mismatches
+  ... 9670656 records (22.3%), 2528612012 clocks, 11691 records/s, 3.06 Mclocks/s, 4 markers, 670106 read mismatches
+  ... 9699328 records (22.3%), 2535663737 clocks, 11693 records/s, 3.06 Mclocks/s, 4 markers, 670122 read mismatches
+  ... 9728000 records (22.4%), 2542718242 clocks, 11695 records/s, 3.06 Mclocks/s, 4 markers, 670138 read mismatches
+  ... 9752576 records (22.5%), 2549708014 clocks, 11692 records/s, 3.06 Mclocks/s, 4 markers, 670154 read mismatches
+  ... 9781248 records (22.5%), 2556766359 clocks, 11694 records/s, 3.06 Mclocks/s, 4 markers, 670170 read mismatches
+  ... 9809920 records (22.6%), 2563829189 clocks, 11696 records/s, 3.06 Mclocks/s, 4 markers, 670186 read mismatches
+  ... 9838592 records (22.7%), 2570891189 clocks, 11698 records/s, 3.06 Mclocks/s, 4 markers, 670202 read mismatches
+  ... 9863168 records (22.7%), 2577886271 clocks, 11695 records/s, 3.06 Mclocks/s, 4 markers, 670218 read mismatches
+  ... 9891840 records (22.8%), 2584952531 clocks, 11697 records/s, 3.06 Mclocks/s, 4 markers, 670234 read mismatches
+  ... 9920512 records (22.9%), 2592019891 clocks, 11699 records/s, 3.06 Mclocks/s, 4 markers, 670250 read mismatches
+  ... 9949184 records (22.9%), 2599086926 clocks, 11701 records/s, 3.06 Mclocks/s, 4 markers, 670266 read mismatches
+  ... 9977856 records (23.0%), 2606158481 clocks, 11703 records/s, 3.06 Mclocks/s, 4 markers, 670282 read mismatches
+  ... 10006528 records (23.1%), 2613228936 clocks, 11706 records/s, 3.06 Mclocks/s, 4 markers, 670298 read mismatches
+  ... 10035200 records (23.1%), 2620298516 clocks, 11708 records/s, 3.06 Mclocks/s, 4 markers, 670314 read mismatches
+  ... 10063872 records (23.2%), 2627369811 clocks, 11710 records/s, 3.06 Mclocks/s, 4 markers, 670330 read mismatches
+  ... 10092544 records (23.3%), 2634443171 clocks, 11712 records/s, 3.06 Mclocks/s, 4 markers, 670346 read mismatches
+  ... 10121216 records (23.3%), 2641516281 clocks, 11714 records/s, 3.06 Mclocks/s, 4 markers, 670434 read mismatches
+  ... 10149888 records (23.4%), 2648590571 clocks, 11716 records/s, 3.06 Mclocks/s, 4 markers, 670450 read mismatches
+  ... 10178560 records (23.5%), 2655666056 clocks, 11718 records/s, 3.06 Mclocks/s, 4 markers, 670466 read mismatches
+  ... 10207232 records (23.5%), 2662742601 clocks, 11720 records/s, 3.06 Mclocks/s, 4 markers, 670482 read mismatches
+  ... 10235904 records (23.6%), 2669818986 clocks, 11722 records/s, 3.06 Mclocks/s, 4 markers, 670498 read mismatches
+  ... 10264576 records (23.7%), 2676896076 clocks, 11723 records/s, 3.06 Mclocks/s, 4 markers, 670514 read mismatches
+  ... 10293248 records (23.7%), 2683972856 clocks, 11725 records/s, 3.06 Mclocks/s, 4 markers, 670530 read mismatches
+  ... 10321920 records (23.8%), 2691048456 clocks, 11727 records/s, 3.06 Mclocks/s, 4 markers, 670546 read mismatches
+  ... 10350592 records (23.8%), 2698125846 clocks, 11728 records/s, 3.06 Mclocks/s, 4 markers, 670673 read mismatches
+  ... 10379264 records (23.9%), 2705202941 clocks, 11730 records/s, 3.06 Mclocks/s, 4 markers, 670765 read mismatches
+  ... 10407936 records (24.0%), 2712280926 clocks, 11732 records/s, 3.06 Mclocks/s, 4 markers, 670781 read mismatches
+  ... 10436608 records (24.0%), 2719358626 clocks, 11734 records/s, 3.06 Mclocks/s, 4 markers, 670797 read mismatches
+  ... 10469376 records (24.1%), 2726506854 clocks, 11739 records/s, 3.06 Mclocks/s, 4 markers, 670813 read mismatches
+  ... 10498048 records (24.2%), 2733583264 clocks, 11741 records/s, 3.06 Mclocks/s, 4 markers, 670829 read mismatches
+  ... 10526720 records (24.3%), 2740664089 clocks, 11743 records/s, 3.06 Mclocks/s, 4 markers, 670845 read mismatches
+  ... 10555392 records (24.3%), 2747742484 clocks, 11744 records/s, 3.06 Mclocks/s, 4 markers, 670861 read mismatches
+  ... 10584064 records (24.4%), 2754820569 clocks, 11746 records/s, 3.06 Mclocks/s, 4 markers, 670877 read mismatches
+  ... 10612736 records (24.5%), 2761900734 clocks, 11748 records/s, 3.06 Mclocks/s, 4 markers, 670893 read mismatches
+  ... 10641408 records (24.5%), 2768979589 clocks, 11748 records/s, 3.06 Mclocks/s, 4 markers, 670909 read mismatches
+  ... 10670080 records (24.6%), 2776058834 clocks, 11750 records/s, 3.06 Mclocks/s, 4 markers, 670925 read mismatches
+  ... 10702848 records (24.7%), 2783207617 clocks, 11756 records/s, 3.06 Mclocks/s, 4 markers, 670941 read mismatches
+  ... 10731520 records (24.7%), 2790283742 clocks, 11758 records/s, 3.06 Mclocks/s, 4 markers, 670957 read mismatches
+  ... 10760192 records (24.8%), 2797363632 clocks, 11759 records/s, 3.06 Mclocks/s, 4 markers, 670973 read mismatches
+  ... 10788864 records (24.9%), 2804439477 clocks, 11759 records/s, 3.06 Mclocks/s, 4 markers, 670989 read mismatches
+  ... 10817536 records (24.9%), 2811517917 clocks, 11761 records/s, 3.06 Mclocks/s, 4 markers, 671005 read mismatches
+  ... 10846208 records (25.0%), 2818593267 clocks, 11763 records/s, 3.06 Mclocks/s, 4 markers, 671021 read mismatches
+  ... 10874880 records (25.1%), 2825669292 clocks, 11764 records/s, 3.06 Mclocks/s, 4 markers, 671037 read mismatches
+  ... 10907648 records (25.1%), 2832813035 clocks, 11769 records/s, 3.06 Mclocks/s, 4 markers, 671053 read mismatches
+  ... 10936320 records (25.2%), 2839888330 clocks, 11771 records/s, 3.06 Mclocks/s, 4 markers, 671069 read mismatches
+  ... 10964992 records (25.3%), 2846964005 clocks, 11773 records/s, 3.06 Mclocks/s, 4 markers, 671085 read mismatches
+  ... 10993664 records (25.3%), 2854037775 clocks, 11775 records/s, 3.06 Mclocks/s, 4 markers, 671101 read mismatches
+  ... 11022336 records (25.4%), 2861114410 clocks, 11776 records/s, 3.06 Mclocks/s, 4 markers, 671117 read mismatches
+  ... 11051008 records (25.5%), 2868188116 clocks, 11777 records/s, 3.06 Mclocks/s, 4 markers, 671133 read mismatches
+  ... 11083776 records (25.5%), 2875329073 clocks, 11782 records/s, 3.06 Mclocks/s, 4 markers, 671149 read mismatches
+  ... 11112448 records (25.6%), 2882403388 clocks, 11783 records/s, 3.06 Mclocks/s, 4 markers, 671165 read mismatches
+  ... 11141120 records (25.7%), 2889475783 clocks, 11784 records/s, 3.06 Mclocks/s, 4 markers, 671181 read mismatches
+  ... 11169792 records (25.7%), 2896550683 clocks, 11785 records/s, 3.06 Mclocks/s, 4 markers, 671197 read mismatches
+  ... 11198464 records (25.8%), 2903625073 clocks, 11786 records/s, 3.06 Mclocks/s, 4 markers, 671213 read mismatches
+  ... 11227136 records (25.9%), 2910699008 clocks, 11787 records/s, 3.06 Mclocks/s, 4 markers, 671229 read mismatches
+  ... 11255808 records (25.9%), 2917771693 clocks, 11788 records/s, 3.06 Mclocks/s, 4 markers, 671245 read mismatches
+  ... 11284480 records (26.0%), 2924843233 clocks, 11789 records/s, 3.06 Mclocks/s, 4 markers, 671261 read mismatches
+  ... 11313152 records (26.1%), 2931914873 clocks, 11790 records/s, 3.06 Mclocks/s, 4 markers, 671277 read mismatches
+  ... 11341824 records (26.1%), 2938985353 clocks, 11791 records/s, 3.06 Mclocks/s, 4 markers, 671293 read mismatches
+  ... 11370496 records (26.2%), 2946056338 clocks, 11793 records/s, 3.06 Mclocks/s, 4 markers, 671309 read mismatches
+  ... 11399168 records (26.3%), 2953126253 clocks, 11794 records/s, 3.06 Mclocks/s, 4 markers, 671325 read mismatches
+  ... 11427840 records (26.3%), 2960196003 clocks, 11794 records/s, 3.06 Mclocks/s, 4 markers, 671341 read mismatches
+  ... 11456512 records (26.4%), 2967263888 clocks, 11795 records/s, 3.06 Mclocks/s, 4 markers, 671357 read mismatches
+  ... 11485184 records (26.5%), 2974331768 clocks, 11796 records/s, 3.05 Mclocks/s, 4 markers, 671373 read mismatches
+  ... 11513856 records (26.5%), 2981398623 clocks, 11797 records/s, 3.05 Mclocks/s, 4 markers, 671389 read mismatches
+  ... 11542528 records (26.6%), 2988462298 clocks, 11799 records/s, 3.05 Mclocks/s, 4 markers, 671405 read mismatches
+  ... 11571200 records (26.7%), 2995524983 clocks, 11799 records/s, 3.05 Mclocks/s, 4 markers, 671421 read mismatches
+  ... 11599872 records (26.7%), 3002586838 clocks, 11800 records/s, 3.05 Mclocks/s, 4 markers, 671437 read mismatches
+  ... 11628544 records (26.8%), 3009648728 clocks, 11801 records/s, 3.05 Mclocks/s, 4 markers, 671453 read mismatches
+  ... 11657216 records (26.9%), 3016708588 clocks, 11803 records/s, 3.05 Mclocks/s, 4 markers, 671560 read mismatches
+  ... 11681792 records (26.9%), 3023703750 clocks, 11800 records/s, 3.05 Mclocks/s, 4 markers, 671576 read mismatches
+  ... 11710464 records (27.0%), 3030761455 clocks, 11802 records/s, 3.05 Mclocks/s, 4 markers, 671592 read mismatches
+  ... 11739136 records (27.0%), 3037817070 clocks, 11803 records/s, 3.05 Mclocks/s, 4 markers, 671608 read mismatches
+  ... 11767808 records (27.1%), 3044869165 clocks, 11804 records/s, 3.05 Mclocks/s, 4 markers, 671624 read mismatches
+  ... 11796480 records (27.2%), 3051922935 clocks, 11805 records/s, 3.05 Mclocks/s, 4 markers, 671640 read mismatches
+  ... 11825152 records (27.2%), 3058971790 clocks, 11806 records/s, 3.05 Mclocks/s, 4 markers, 671656 read mismatches
+  ... 11853824 records (27.3%), 3066021160 clocks, 11801 records/s, 3.05 Mclocks/s, 4 markers, 671672 read mismatches
+  ... 11878400 records (27.4%), 3073006347 clocks, 11799 records/s, 3.05 Mclocks/s, 4 markers, 671688 read mismatches
+  ... 11907072 records (27.4%), 3080053617 clocks, 11801 records/s, 3.05 Mclocks/s, 4 markers, 671704 read mismatches
+  ... 11935744 records (27.5%), 3087095552 clocks, 11802 records/s, 3.05 Mclocks/s, 4 markers, 671720 read mismatches
+  ... 11964416 records (27.6%), 3094137682 clocks, 11803 records/s, 3.05 Mclocks/s, 4 markers, 671736 read mismatches
+  ... 11993088 records (27.6%), 3101179177 clocks, 11802 records/s, 3.05 Mclocks/s, 4 markers, 671752 read mismatches
+  ... 12017664 records (27.7%), 3108157739 clocks, 11796 records/s, 3.05 Mclocks/s, 4 markers, 671768 read mismatches
+  ... 12046336 records (27.8%), 3115192179 clocks, 11793 records/s, 3.05 Mclocks/s, 4 markers, 671784 read mismatches
+  ... 12075008 records (27.8%), 3122226304 clocks, 11790 records/s, 3.05 Mclocks/s, 4 markers, 671800 read mismatches
+  ... 12099584 records (27.9%), 3129200076 clocks, 11783 records/s, 3.05 Mclocks/s, 4 markers, 671816 read mismatches
+  ... 12128256 records (27.9%), 3136230871 clocks, 11780 records/s, 3.05 Mclocks/s, 4 markers, 671832 read mismatches
+  ... 12156928 records (28.0%), 3143257876 clocks, 11777 records/s, 3.05 Mclocks/s, 4 markers, 671848 read mismatches
+  ... 12181504 records (28.1%), 3150225303 clocks, 11771 records/s, 3.04 Mclocks/s, 4 markers, 671864 read mismatches
+  ... 12210176 records (28.1%), 3157248088 clocks, 11768 records/s, 3.04 Mclocks/s, 4 markers, 671880 read mismatches
+  ... 12238848 records (28.2%), 3164268048 clocks, 11765 records/s, 3.04 Mclocks/s, 4 markers, 671896 read mismatches
+  ... 12263424 records (28.3%), 3171230895 clocks, 11759 records/s, 3.04 Mclocks/s, 4 markers, 671912 read mismatches
+  ... 12292096 records (28.3%), 3178246250 clocks, 11757 records/s, 3.04 Mclocks/s, 4 markers, 672035 read mismatches
+  ... 12320768 records (28.4%), 3185260180 clocks, 11754 records/s, 3.04 Mclocks/s, 4 markers, 672051 read mismatches
+  ... 12345344 records (28.4%), 3192214422 clocks, 11748 records/s, 3.04 Mclocks/s, 4 markers, 672067 read mismatches
+  ... 12374016 records (28.5%), 3199224947 clocks, 11745 records/s, 3.04 Mclocks/s, 4 markers, 672083 read mismatches
+  ... 12398592 records (28.6%), 3206175334 clocks, 11738 records/s, 3.04 Mclocks/s, 4 markers, 672099 read mismatches
+  ... 12427264 records (28.6%), 3213181564 clocks, 11735 records/s, 3.03 Mclocks/s, 4 markers, 672115 read mismatches
+  ... 12451840 records (28.7%), 3220128416 clocks, 11727 records/s, 3.03 Mclocks/s, 4 markers, 672131 read mismatches
+  ... 12476416 records (28.7%), 3227073733 clocks, 11720 records/s, 3.03 Mclocks/s, 4 markers, 672147 read mismatches
+  ... 12505088 records (28.8%), 3234069278 clocks, 11716 records/s, 3.03 Mclocks/s, 4 markers, 672163 read mismatches
+  ... 12529664 records (28.9%), 3241008010 clocks, 11708 records/s, 3.03 Mclocks/s, 4 markers, 672442 read mismatches
+  ... 12558336 records (28.9%), 3247998505 clocks, 11706 records/s, 3.03 Mclocks/s, 4 markers, 672458 read mismatches
+  ... 12582912 records (29.0%), 3254932882 clocks, 11699 records/s, 3.03 Mclocks/s, 4 markers, 672474 read mismatches
+  ... 12607488 records (29.0%), 3261866544 clocks, 11691 records/s, 3.02 Mclocks/s, 4 markers, 672490 read mismatches
+  ... 12632064 records (29.1%), 3268798311 clocks, 11684 records/s, 3.02 Mclocks/s, 4 markers, 672506 read mismatches
+  ... 12660736 records (29.2%), 3275778631 clocks, 11681 records/s, 3.02 Mclocks/s, 4 markers, 672522 read mismatches
+  ... 12685312 records (29.2%), 3282705238 clocks, 11674 records/s, 3.02 Mclocks/s, 4 markers, 672538 read mismatches
+  ... 12709888 records (29.3%), 3289631080 clocks, 11668 records/s, 3.02 Mclocks/s, 4 markers, 672554 read mismatches
+  ... 12734464 records (29.3%), 3296554037 clocks, 11660 records/s, 3.02 Mclocks/s, 4 markers, 672570 read mismatches
+  ... 12759040 records (29.4%), 3303473624 clocks, 11654 records/s, 3.02 Mclocks/s, 4 markers, 672586 read mismatches
+  ... 12787712 records (29.5%), 3310447109 clocks, 11651 records/s, 3.02 Mclocks/s, 4 markers, 672602 read mismatches
+  ... 12812288 records (29.5%), 3317367386 clocks, 11644 records/s, 3.01 Mclocks/s, 4 markers, 672619 read mismatches
+  ... 12836864 records (29.6%), 3324284753 clocks, 11637 records/s, 3.01 Mclocks/s, 4 markers, 672635 read mismatches
+  ... 12861440 records (29.6%), 3331202970 clocks, 11631 records/s, 3.01 Mclocks/s, 4 markers, 672651 read mismatches
+  ... 12886016 records (29.7%), 3338118382 clocks, 11624 records/s, 3.01 Mclocks/s, 4 markers, 672667 read mismatches
+  ... 12910592 records (29.7%), 3345036544 clocks, 11618 records/s, 3.01 Mclocks/s, 4 markers, 672683 read mismatches
+  ... 12935168 records (29.8%), 3351952371 clocks, 11612 records/s, 3.01 Mclocks/s, 4 markers, 672699 read mismatches
+  ... 12959744 records (29.9%), 3358870513 clocks, 11605 records/s, 3.01 Mclocks/s, 4 markers, 672715 read mismatches
+  ... 12988416 records (29.9%), 3365853138 clocks, 11602 records/s, 3.01 Mclocks/s, 4 markers, 672731 read mismatches
+  ... 13012992 records (30.0%), 3372773450 clocks, 11595 records/s, 3.01 Mclocks/s, 4 markers, 672747 read mismatches
+  ... 13037568 records (30.0%), 3379694197 clocks, 11590 records/s, 3.00 Mclocks/s, 4 markers, 672763 read mismatches
+  ... 13062144 records (30.1%), 3386616989 clocks, 11584 records/s, 3.00 Mclocks/s, 4 markers, 672779 read mismatches
+  ... 13086720 records (30.2%), 3393539146 clocks, 11577 records/s, 3.00 Mclocks/s, 4 markers, 672795 read mismatches
+  ... 13111296 records (30.2%), 3400464423 clocks, 11571 records/s, 3.00 Mclocks/s, 4 markers, 672811 read mismatches
+  ... 13135872 records (30.3%), 3407390115 clocks, 11564 records/s, 3.00 Mclocks/s, 4 markers, 672827 read mismatches
+  ... 13164544 records (30.3%), 3414386085 clocks, 11561 records/s, 3.00 Mclocks/s, 4 markers, 672843 read mismatches
+  ... 13189120 records (30.4%), 3421313242 clocks, 11556 records/s, 3.00 Mclocks/s, 4 markers, 672859 read mismatches
+  ... 13213696 records (30.4%), 3428241269 clocks, 11550 records/s, 3.00 Mclocks/s, 4 markers, 672875 read mismatches
+  ... 13238272 records (30.5%), 3435173101 clocks, 11544 records/s, 3.00 Mclocks/s, 4 markers, 672891 read mismatches
+  ... 13266944 records (30.6%), 3442166331 clocks, 11540 records/s, 2.99 Mclocks/s, 4 markers, 672907 read mismatches
+  ... 13291520 records (30.6%), 3449097908 clocks, 11534 records/s, 2.99 Mclocks/s, 4 markers, 672923 read mismatches
+  ... 13316096 records (30.7%), 3456030495 clocks, 11527 records/s, 2.99 Mclocks/s, 4 markers, 672939 read mismatches
+  ... 13344768 records (30.7%), 3463022077 clocks, 11524 records/s, 2.99 Mclocks/s, 4 markers, 672955 read mismatches
+  ... 13369344 records (30.8%), 3469953172 clocks, 11517 records/s, 2.99 Mclocks/s, 4 markers, 672971 read mismatches
+  ... 13393920 records (30.9%), 3476884069 clocks, 11509 records/s, 2.99 Mclocks/s, 4 markers, 672987 read mismatches
+  ... 13418496 records (30.9%), 3483814461 clocks, 11502 records/s, 2.99 Mclocks/s, 4 markers, 673003 read mismatches
+  ... 13443072 records (31.0%), 3490748023 clocks, 11498 records/s, 2.99 Mclocks/s, 4 markers, 673019 read mismatches
+  ... 13471744 records (31.0%), 3497718103 clocks, 11496 records/s, 2.98 Mclocks/s, 4 markers, 673035 read mismatches
+  ... 13496320 records (31.1%), 3504641920 clocks, 11491 records/s, 2.98 Mclocks/s, 4 markers, 673051 read mismatches
+  ... 13520896 records (31.2%), 3511565387 clocks, 11485 records/s, 2.98 Mclocks/s, 4 markers, 673067 read mismatches
+  ... 13545472 records (31.2%), 3518488629 clocks, 11480 records/s, 2.98 Mclocks/s, 4 markers, 673083 read mismatches
+  ... 13570048 records (31.3%), 3525410741 clocks, 11476 records/s, 2.98 Mclocks/s, 4 markers, 673099 read mismatches
+  ... 13594624 records (31.3%), 3532330848 clocks, 11470 records/s, 2.98 Mclocks/s, 4 markers, 673127 read mismatches
+  ... 13619200 records (31.4%), 3539248310 clocks, 11464 records/s, 2.98 Mclocks/s, 4 markers, 673143 read mismatches
+  ... 13643776 records (31.4%), 3546162667 clocks, 11460 records/s, 2.98 Mclocks/s, 4 markers, 673159 read mismatches
+  ... 13668352 records (31.5%), 3553074374 clocks, 11455 records/s, 2.98 Mclocks/s, 4 markers, 673175 read mismatches
+  ... 13692928 records (31.5%), 3559983591 clocks, 11450 records/s, 2.98 Mclocks/s, 4 markers, 673191 read mismatches
+  ... 13717504 records (31.6%), 3566889068 clocks, 11445 records/s, 2.98 Mclocks/s, 4 markers, 673207 read mismatches
+  ... 13742080 records (31.7%), 3573790520 clocks, 11440 records/s, 2.97 Mclocks/s, 4 markers, 673223 read mismatches
+  ... 13766656 records (31.7%), 3580688392 clocks, 11433 records/s, 2.97 Mclocks/s, 4 markers, 673239 read mismatches
+  ... 13791232 records (31.8%), 3587581659 clocks, 11429 records/s, 2.97 Mclocks/s, 4 markers, 673255 read mismatches
+  ... 13815808 records (31.8%), 3594469751 clocks, 11424 records/s, 2.97 Mclocks/s, 4 markers, 673271 read mismatches
+  ... 13836288 records (31.9%), 3601326470 clocks, 11416 records/s, 2.97 Mclocks/s, 4 markers, 673287 read mismatches
+  ... 13860864 records (31.9%), 3608200457 clocks, 11411 records/s, 2.97 Mclocks/s, 4 markers, 673303 read mismatches
+  ... 13885440 records (32.0%), 3615066564 clocks, 11406 records/s, 2.97 Mclocks/s, 4 markers, 673319 read mismatches
+  ... 13910016 records (32.0%), 3621926461 clocks, 11400 records/s, 2.97 Mclocks/s, 4 markers, 673335 read mismatches
+  ... 13930496 records (32.1%), 3628755435 clocks, 11391 records/s, 2.97 Mclocks/s, 4 markers, 673625 read mismatches
+  ... 13955072 records (32.2%), 3635600407 clocks, 11385 records/s, 2.97 Mclocks/s, 4 markers, 673641 read mismatches
+  ... 13975552 records (32.2%), 3642411826 clocks, 11377 records/s, 2.97 Mclocks/s, 4 markers, 673657 read mismatches
+  ... 14000128 records (32.3%), 3649243273 clocks, 11375 records/s, 2.96 Mclocks/s, 4 markers, 673673 read mismatches
+  ... 14020608 records (32.3%), 3656036267 clocks, 11371 records/s, 2.97 Mclocks/s, 4 markers, 673690 read mismatches
+  ... 14045184 records (32.4%), 3662855629 clocks, 11369 records/s, 2.96 Mclocks/s, 4 markers, 673706 read mismatches
+  ... 14065664 records (32.4%), 3669636903 clocks, 11356 records/s, 2.96 Mclocks/s, 4 markers, 673722 read mismatches
+  ... 14086144 records (32.5%), 3676404917 clocks, 11343 records/s, 2.96 Mclocks/s, 4 markers, 673738 read mismatches
+  ... 14106624 records (32.5%), 3683165696 clocks, 11337 records/s, 2.96 Mclocks/s, 4 markers, 673754 read mismatches
+  ... 14131200 records (32.6%), 3689970483 clocks, 11333 records/s, 2.96 Mclocks/s, 4 markers, 673770 read mismatches
+  ... 14151680 records (32.6%), 3696726022 clocks, 11328 records/s, 2.96 Mclocks/s, 4 markers, 673786 read mismatches
+  ... 14172160 records (32.7%), 3703475091 clocks, 11321 records/s, 2.96 Mclocks/s, 4 markers, 673802 read mismatches
+  ... 14192640 records (32.7%), 3710220835 clocks, 11313 records/s, 2.96 Mclocks/s, 4 markers, 673818 read mismatches
+  ... 14213120 records (32.7%), 3716963199 clocks, 11306 records/s, 2.96 Mclocks/s, 4 markers, 673834 read mismatches
+  ... 14233600 records (32.8%), 3723707093 clocks, 11299 records/s, 2.96 Mclocks/s, 4 markers, 673850 read mismatches
+  ... 14254080 records (32.8%), 3730450408 clocks, 11293 records/s, 2.96 Mclocks/s, 4 markers, 673866 read mismatches
+  ... 14278656 records (32.9%), 3737256189 clocks, 11289 records/s, 2.95 Mclocks/s, 4 markers, 673882 read mismatches
+  ... 14299136 records (32.9%), 3744003708 clocks, 11283 records/s, 2.95 Mclocks/s, 4 markers, 673898 read mismatches
+  ... 14319616 records (33.0%), 3750752837 clocks, 11277 records/s, 2.95 Mclocks/s, 4 markers, 673914 read mismatches
+  ... 14340096 records (33.0%), 3757502277 clocks, 11271 records/s, 2.95 Mclocks/s, 4 markers, 673930 read mismatches
+  ... 14364672 records (33.1%), 3764326968 clocks, 11267 records/s, 2.95 Mclocks/s, 4 markers, 673946 read mismatches
+  ... 14385152 records (33.1%), 3771086182 clocks, 11261 records/s, 2.95 Mclocks/s, 4 markers, 673962 read mismatches
+  ... 14405632 records (33.2%), 3777851286 clocks, 11255 records/s, 2.95 Mclocks/s, 4 markers, 673978 read mismatches
+  ... 14430208 records (33.2%), 3784691193 clocks, 11252 records/s, 2.95 Mclocks/s, 4 markers, 673994 read mismatches
+  ... 14450688 records (33.3%), 3791469352 clocks, 11246 records/s, 2.95 Mclocks/s, 4 markers, 674010 read mismatches
+  ... 14475264 records (33.4%), 3798323629 clocks, 11243 records/s, 2.95 Mclocks/s, 4 markers, 674026 read mismatches
+  ... 14499840 records (33.4%), 3805184176 clocks, 11239 records/s, 2.95 Mclocks/s, 4 markers, 674042 read mismatches
+  ... 14524416 records (33.5%), 3812051968 clocks, 11235 records/s, 2.95 Mclocks/s, 4 markers, 674058 read mismatches
+  ... 14544896 records (33.5%), 3818854357 clocks, 11228 records/s, 2.95 Mclocks/s, 4 markers, 674074 read mismatches
+  ... 14569472 records (33.6%), 3825730964 clocks, 11224 records/s, 2.95 Mclocks/s, 4 markers, 674090 read mismatches
+  ... 14594048 records (33.6%), 3832614801 clocks, 11219 records/s, 2.95 Mclocks/s, 4 markers, 674106 read mismatches
+  ... 14618624 records (33.7%), 3839503548 clocks, 11214 records/s, 2.95 Mclocks/s, 4 markers, 674122 read mismatches
+  ... 14643200 records (33.7%), 3846399350 clocks, 11210 records/s, 2.94 Mclocks/s, 4 markers, 674138 read mismatches
+  ... 14667776 records (33.8%), 3853299832 clocks, 11205 records/s, 2.94 Mclocks/s, 4 markers, 674154 read mismatches
+  ... 14696448 records (33.9%), 3860276657 clocks, 11204 records/s, 2.94 Mclocks/s, 4 markers, 674170 read mismatches
+  ... 14721024 records (33.9%), 3867187589 clocks, 11200 records/s, 2.94 Mclocks/s, 4 markers, 674186 read mismatches
+  ... 14745600 records (34.0%), 3874108416 clocks, 11197 records/s, 2.94 Mclocks/s, 4 markers, 674202 read mismatches
+  ... 14774272 records (34.0%), 3881102881 clocks, 11196 records/s, 2.94 Mclocks/s, 4 markers, 674218 read mismatches
+  ... 14798848 records (34.1%), 3888038148 clocks, 11192 records/s, 2.94 Mclocks/s, 4 markers, 674234 read mismatches
+  ... 14823424 records (34.2%), 3894982265 clocks, 11189 records/s, 2.94 Mclocks/s, 4 markers, 674250 read mismatches
+  ... 14852096 records (34.2%), 3901995525 clocks, 11188 records/s, 2.94 Mclocks/s, 4 markers, 674266 read mismatches
+  ... 14876672 records (34.3%), 3908951672 clocks, 11184 records/s, 2.94 Mclocks/s, 4 markers, 674282 read mismatches
+  ... 14905344 records (34.3%), 3915975882 clocks, 11183 records/s, 2.94 Mclocks/s, 4 markers, 674298 read mismatches
+  ... 14934016 records (34.4%), 3923005062 clocks, 11182 records/s, 2.94 Mclocks/s, 4 markers, 674314 read mismatches
+  ... 14958592 records (34.5%), 3929974724 clocks, 11178 records/s, 2.94 Mclocks/s, 4 markers, 674330 read mismatches
+  ... 14987264 records (34.5%), 3937008044 clocks, 11178 records/s, 2.94 Mclocks/s, 4 markers, 674346 read mismatches
+  ... 15015936 records (34.6%), 3944047814 clocks, 11176 records/s, 2.94 Mclocks/s, 4 markers, 674362 read mismatches
+  ... 15040512 records (34.7%), 3951027616 clocks, 11173 records/s, 2.94 Mclocks/s, 4 markers, 674378 read mismatches
+  ... 15069184 records (34.7%), 3958066101 clocks, 11171 records/s, 2.93 Mclocks/s, 4 markers, 674394 read mismatches
+  ... 15097856 records (34.8%), 3965108496 clocks, 11171 records/s, 2.93 Mclocks/s, 4 markers, 674410 read mismatches
+  ... 15126528 records (34.9%), 3972149901 clocks, 11170 records/s, 2.93 Mclocks/s, 4 markers, 674426 read mismatches
+  ... 15151104 records (34.9%), 3979135263 clocks, 11166 records/s, 2.93 Mclocks/s, 4 markers, 674442 read mismatches
+  ... 15179776 records (35.0%), 3986176043 clocks, 11165 records/s, 2.93 Mclocks/s, 4 markers, 674458 read mismatches
+  ... 15208448 records (35.0%), 3993214688 clocks, 11164 records/s, 2.93 Mclocks/s, 4 markers, 674474 read mismatches
+  ... 15233024 records (35.1%), 4000197690 clocks, 11159 records/s, 2.93 Mclocks/s, 4 markers, 674490 read mismatches
+  ... 15261696 records (35.2%), 4007230765 clocks, 11158 records/s, 2.93 Mclocks/s, 4 markers, 674506 read mismatches
+  ... 15286272 records (35.2%), 4014211262 clocks, 11153 records/s, 2.93 Mclocks/s, 4 markers, 674522 read mismatches
+  ... 15314944 records (35.3%), 4021236692 clocks, 11152 records/s, 2.93 Mclocks/s, 4 markers, 674538 read mismatches
+  ... 15339520 records (35.3%), 4028211089 clocks, 11147 records/s, 2.93 Mclocks/s, 4 markers, 674554 read mismatches
+  ... 15368192 records (35.4%), 4035227629 clocks, 11146 records/s, 2.93 Mclocks/s, 4 markers, 674750 read mismatches
+  ... 15392768 records (35.5%), 4042191991 clocks, 11143 records/s, 2.93 Mclocks/s, 4 markers, 674766 read mismatches
+  ... 15421440 records (35.5%), 4049202146 clocks, 11140 records/s, 2.93 Mclocks/s, 4 markers, 674782 read mismatches
+  ... 15446016 records (35.6%), 4056157358 clocks, 11136 records/s, 2.92 Mclocks/s, 4 markers, 674798 read mismatches
+  ... 15470592 records (35.6%), 4063108565 clocks, 11133 records/s, 2.92 Mclocks/s, 4 markers, 674814 read mismatches
+  ... 15495168 records (35.7%), 4070055842 clocks, 11129 records/s, 2.92 Mclocks/s, 4 markers, 674830 read mismatches
+  ... 15519744 records (35.8%), 4076996564 clocks, 11124 records/s, 2.92 Mclocks/s, 4 markers, 674846 read mismatches
+  ... 15544320 records (35.8%), 4083931991 clocks, 11121 records/s, 2.92 Mclocks/s, 4 markers, 674862 read mismatches
+  ... 15568896 records (35.9%), 4090861718 clocks, 11117 records/s, 2.92 Mclocks/s, 4 markers, 674878 read mismatches
+  ... 15593472 records (35.9%), 4097785135 clocks, 11113 records/s, 2.92 Mclocks/s, 4 markers, 674894 read mismatches
+  ... 15618048 records (36.0%), 4104703632 clocks, 11110 records/s, 2.92 Mclocks/s, 4 markers, 674910 read mismatches
+  ... 15638528 records (36.0%), 4111573721 clocks, 11103 records/s, 2.92 Mclocks/s, 4 markers, 674926 read mismatches
+  ... 15663104 records (36.1%), 4118478223 clocks, 11099 records/s, 2.92 Mclocks/s, 4 markers, 674942 read mismatches
+  ... 15687680 records (36.1%), 4125379855 clocks, 11095 records/s, 2.92 Mclocks/s, 4 markers, 674958 read mismatches
+  ... 15708160 records (36.2%), 4132232489 clocks, 11089 records/s, 2.92 Mclocks/s, 4 markers, 674974 read mismatches
+  ... 15732736 records (36.2%), 4139121141 clocks, 11085 records/s, 2.92 Mclocks/s, 4 markers, 674990 read mismatches
+  ... 15757312 records (36.3%), 4146006233 clocks, 11080 records/s, 2.92 Mclocks/s, 4 markers, 675006 read mismatches
+  ... 15777792 records (36.4%), 4152842602 clocks, 11073 records/s, 2.91 Mclocks/s, 4 markers, 675022 read mismatches
+  ... 15798272 records (36.4%), 4159676011 clocks, 11065 records/s, 2.91 Mclocks/s, 4 markers, 675038 read mismatches
+  ... 15822848 records (36.5%), 4166545413 clocks, 11060 records/s, 2.91 Mclocks/s, 4 markers, 675054 read mismatches
+  ... 15843328 records (36.5%), 4173369797 clocks, 11052 records/s, 2.91 Mclocks/s, 4 markers, 675070 read mismatches
+  ... 15863808 records (36.6%), 4180189601 clocks, 11047 records/s, 2.91 Mclocks/s, 4 markers, 675086 read mismatches
+  ... 15888384 records (36.6%), 4187049643 clocks, 11044 records/s, 2.91 Mclocks/s, 4 markers, 675141 read mismatches
+  ... 15908864 records (36.7%), 4193861757 clocks, 11040 records/s, 2.91 Mclocks/s, 4 markers, 675157 read mismatches
+  ... 15929344 records (36.7%), 4200672111 clocks, 11032 records/s, 2.91 Mclocks/s, 4 markers, 675173 read mismatches
+  ... 15949824 records (36.7%), 4207478070 clocks, 11023 records/s, 2.91 Mclocks/s, 4 markers, 675189 read mismatches
+  ... 15970304 records (36.8%), 4214283119 clocks, 11016 records/s, 2.91 Mclocks/s, 4 markers, 675205 read mismatches
+  ... 15990784 records (36.8%), 4221085588 clocks, 11007 records/s, 2.91 Mclocks/s, 4 markers, 675221 read mismatches
+  ... 16015360 records (36.9%), 4227934130 clocks, 11001 records/s, 2.90 Mclocks/s, 4 markers, 675237 read mismatches
+  ... 16035840 records (36.9%), 4234734174 clocks, 10994 records/s, 2.90 Mclocks/s, 4 markers, 675253 read mismatches
+  ... 16056320 records (37.0%), 4241530403 clocks, 10984 records/s, 2.90 Mclocks/s, 4 markers, 675269 read mismatches
+  ... 16076800 records (37.0%), 4248329477 clocks, 10977 records/s, 2.90 Mclocks/s, 4 markers, 675285 read mismatches
+  ... 16097280 records (37.1%), 4255127421 clocks, 10968 records/s, 2.90 Mclocks/s, 4 markers, 675301 read mismatches
+  ... 16117760 records (37.1%), 4261922845 clocks, 10961 records/s, 2.90 Mclocks/s, 4 markers, 675317 read mismatches
+  ... 16138240 records (37.2%), 4268720054 clocks, 10952 records/s, 2.90 Mclocks/s, 4 markers, 675379 read mismatches
+  ... 16158720 records (37.2%), 4275517678 clocks, 10945 records/s, 2.90 Mclocks/s, 4 markers, 675395 read mismatches
+  ... 16179200 records (37.3%), 4282315552 clocks, 10937 records/s, 2.89 Mclocks/s, 4 markers, 675411 read mismatches
+  ... 16199680 records (37.3%), 4289114691 clocks, 10929 records/s, 2.89 Mclocks/s, 4 markers, 675427 read mismatches
+  ... 16220160 records (37.4%), 4295913640 clocks, 10920 records/s, 2.89 Mclocks/s, 4 markers, 675443 read mismatches
+  ... 16240640 records (37.4%), 4302716589 clocks, 10913 records/s, 2.89 Mclocks/s, 4 markers, 675459 read mismatches
+  ... 16261120 records (37.5%), 4309518133 clocks, 10908 records/s, 2.89 Mclocks/s, 4 markers, 675475 read mismatches
+  ... 16285696 records (37.5%), 4316382305 clocks, 10905 records/s, 2.89 Mclocks/s, 4 markers, 675500 read mismatches
+  ... 16306176 records (37.6%), 4323190024 clocks, 10901 records/s, 2.89 Mclocks/s, 4 markers, 675516 read mismatches
+  ... 16326656 records (37.6%), 4329999313 clocks, 10898 records/s, 2.89 Mclocks/s, 4 markers, 675532 read mismatches
+  ... 16347136 records (37.7%), 4336810742 clocks, 10892 records/s, 2.89 Mclocks/s, 4 markers, 675548 read mismatches
+  ... 16371712 records (37.7%), 4343687624 clocks, 10890 records/s, 2.89 Mclocks/s, 4 markers, 675564 read mismatches
+  ... 16392192 records (37.8%), 4350504063 clocks, 10885 records/s, 2.89 Mclocks/s, 4 markers, 675580 read mismatches
+  ... 16412672 records (37.8%), 4357323767 clocks, 10879 records/s, 2.89 Mclocks/s, 4 markers, 675596 read mismatches
+  ... 16437248 records (37.9%), 4364208734 clocks, 10877 records/s, 2.89 Mclocks/s, 4 markers, 675612 read mismatches
+  ... 16457728 records (37.9%), 4371034828 clocks, 10872 records/s, 2.89 Mclocks/s, 4 markers, 675628 read mismatches
+  ... 16478208 records (38.0%), 4377864557 clocks, 10866 records/s, 2.89 Mclocks/s, 4 markers, 675644 read mismatches
+  ... 16502784 records (38.0%), 4384759144 clocks, 10863 records/s, 2.89 Mclocks/s, 4 markers, 675660 read mismatches
+  ... 16523264 records (38.1%), 4391595788 clocks, 10857 records/s, 2.89 Mclocks/s, 4 markers, 675676 read mismatches
+  ... 16547840 records (38.1%), 4398499640 clocks, 10854 records/s, 2.88 Mclocks/s, 4 markers, 675751 read mismatches
+  ... 16572416 records (38.2%), 4405407442 clocks, 10850 records/s, 2.88 Mclocks/s, 4 markers, 675767 read mismatches
+  ... 16592896 records (38.2%), 4412253266 clocks, 10843 records/s, 2.88 Mclocks/s, 4 markers, 675783 read mismatches
+  ... 16617472 records (38.3%), 4419169228 clocks, 10839 records/s, 2.88 Mclocks/s, 4 markers, 675799 read mismatches
+  ... 16642048 records (38.3%), 4426088635 clocks, 10838 records/s, 2.88 Mclocks/s, 4 markers, 675815 read mismatches
+  ... 16666624 records (38.4%), 4433011432 clocks, 10838 records/s, 2.88 Mclocks/s, 4 markers, 675831 read mismatches
+  ... 16687104 records (38.4%), 4439870506 clocks, 10835 records/s, 2.88 Mclocks/s, 4 markers, 675847 read mismatches
+  ... 16711680 records (38.5%), 4446802058 clocks, 10834 records/s, 2.88 Mclocks/s, 4 markers, 675863 read mismatches
+  ... 16736256 records (38.6%), 4453736425 clocks, 10834 records/s, 2.88 Mclocks/s, 4 markers, 675879 read mismatches
+  ... 16760832 records (38.6%), 4460673167 clocks, 10833 records/s, 2.88 Mclocks/s, 4 markers, 675896 read mismatches
+  ... 16785408 records (38.7%), 4467615224 clocks, 10830 records/s, 2.88 Mclocks/s, 4 markers, 675912 read mismatches
+  ... 16814080 records (38.7%), 4474628374 clocks, 10830 records/s, 2.88 Mclocks/s, 4 markers, 676030 read mismatches
+  ... 16838656 records (38.8%), 4481575431 clocks, 10829 records/s, 2.88 Mclocks/s, 4 markers, 676046 read mismatches
+  ... 16863232 records (38.9%), 4488527898 clocks, 10828 records/s, 2.88 Mclocks/s, 4 markers, 676062 read mismatches
+  ... 16887808 records (38.9%), 4495483885 clocks, 10826 records/s, 2.88 Mclocks/s, 4 markers, 676078 read mismatches
+  ... 16916480 records (39.0%), 4502511870 clocks, 10827 records/s, 2.88 Mclocks/s, 4 markers, 676094 read mismatches
+  ... 16941056 records (39.0%), 4509474397 clocks, 10825 records/s, 2.88 Mclocks/s, 4 markers, 676219 read mismatches
+  ... 16965632 records (39.1%), 4516438394 clocks, 10824 records/s, 2.88 Mclocks/s, 4 markers, 676235 read mismatches
+  ... 16994304 records (39.2%), 4523475524 clocks, 10824 records/s, 2.88 Mclocks/s, 4 markers, 676251 read mismatches
+  ... 17018880 records (39.2%), 4530448701 clocks, 10823 records/s, 2.88 Mclocks/s, 4 markers, 676267 read mismatches
+  ... 17047552 records (39.3%), 4537491181 clocks, 10824 records/s, 2.88 Mclocks/s, 4 markers, 676283 read mismatches
+  ... 17072128 records (39.3%), 4544469843 clocks, 10823 records/s, 2.88 Mclocks/s, 4 markers, 676299 read mismatches
+  ... 17100800 records (39.4%), 4551522338 clocks, 10824 records/s, 2.88 Mclocks/s, 4 markers, 676315 read mismatches
+  ... 17129472 records (39.5%), 4558570918 clocks, 10825 records/s, 2.88 Mclocks/s, 4 markers, 676401 read mismatches
+  ... 17154048 records (39.5%), 4565556810 clocks, 10824 records/s, 2.88 Mclocks/s, 4 markers, 676417 read mismatches
+  ... 17182720 records (39.6%), 4572609790 clocks, 10825 records/s, 2.88 Mclocks/s, 4 markers, 676604 read mismatches
+  ... 17211392 records (39.7%), 4579669935 clocks, 10822 records/s, 2.88 Mclocks/s, 4 markers, 676620 read mismatches
+  ... 17240064 records (39.7%), 4586730380 clocks, 10822 records/s, 2.88 Mclocks/s, 4 markers, 676636 read mismatches
+  ... 17268736 records (39.8%), 4593793655 clocks, 10819 records/s, 2.88 Mclocks/s, 4 markers, 676652 read mismatches
+  ... 17293312 records (39.8%), 4600789112 clocks, 10815 records/s, 2.88 Mclocks/s, 4 markers, 676668 read mismatches
+  ... 17321984 records (39.9%), 4607853472 clocks, 10813 records/s, 2.88 Mclocks/s, 4 markers, 676684 read mismatches
+  ... 17350656 records (40.0%), 4614918297 clocks, 10811 records/s, 2.88 Mclocks/s, 4 markers, 676700 read mismatches
+  ... 17379328 records (40.0%), 4621985567 clocks, 10809 records/s, 2.87 Mclocks/s, 4 markers, 676716 read mismatches
+  ... 17408000 records (40.1%), 4629056932 clocks, 10807 records/s, 2.87 Mclocks/s, 4 markers, 676732 read mismatches
+  ... 17436672 records (40.2%), 4636127057 clocks, 10805 records/s, 2.87 Mclocks/s, 4 markers, 676748 read mismatches
+  ... 17465344 records (40.2%), 4643198127 clocks, 10804 records/s, 2.87 Mclocks/s, 4 markers, 676764 read mismatches
+  ... 17494016 records (40.3%), 4650271552 clocks, 10801 records/s, 2.87 Mclocks/s, 4 markers, 676780 read mismatches
+  ... 17522688 records (40.4%), 4657346447 clocks, 10804 records/s, 2.87 Mclocks/s, 4 markers, 676796 read mismatches
+  ... 17551360 records (40.4%), 4664422457 clocks, 10806 records/s, 2.87 Mclocks/s, 4 markers, 676812 read mismatches
+  ... 17580032 records (40.5%), 4671499512 clocks, 10808 records/s, 2.87 Mclocks/s, 4 markers, 676828 read mismatches
+  ... 17608704 records (40.6%), 4678573577 clocks, 10810 records/s, 2.87 Mclocks/s, 4 markers, 676844 read mismatches
+  ... 17637376 records (40.6%), 4685651147 clocks, 10812 records/s, 2.87 Mclocks/s, 4 markers, 676860 read mismatches
+  ... 17666048 records (40.7%), 4692730052 clocks, 10814 records/s, 2.87 Mclocks/s, 4 markers, 676876 read mismatches
+  ... 17694720 records (40.8%), 4699811962 clocks, 10816 records/s, 2.87 Mclocks/s, 4 markers, 676892 read mismatches
+  ... 17723392 records (40.8%), 4706893092 clocks, 10819 records/s, 2.87 Mclocks/s, 4 markers, 676908 read mismatches
+  ... 17752064 records (40.9%), 4713972972 clocks, 10821 records/s, 2.87 Mclocks/s, 4 markers, 676924 read mismatches
+  ... 17780736 records (41.0%), 4721054252 clocks, 10823 records/s, 2.87 Mclocks/s, 4 markers, 676940 read mismatches
+  ... 17813504 records (41.0%), 4728204995 clocks, 10826 records/s, 2.87 Mclocks/s, 4 markers, 676956 read mismatches
+  ... 17842176 records (41.1%), 4735285415 clocks, 10828 records/s, 2.87 Mclocks/s, 4 markers, 676972 read mismatches
+  ... 17870848 records (41.2%), 4742366090 clocks, 10830 records/s, 2.87 Mclocks/s, 4 markers, 676988 read mismatches
+  ... 17899520 records (41.2%), 4749446665 clocks, 10833 records/s, 2.87 Mclocks/s, 4 markers, 677004 read mismatches
+  ... 17928192 records (41.3%), 4756528675 clocks, 10835 records/s, 2.87 Mclocks/s, 4 markers, 677020 read mismatches
+  ... 17956864 records (41.4%), 4763606270 clocks, 10836 records/s, 2.87 Mclocks/s, 4 markers, 677104 read mismatches
+  ... 17985536 records (41.4%), 4770688855 clocks, 10838 records/s, 2.87 Mclocks/s, 4 markers, 677120 read mismatches
+  ... 18014208 records (41.5%), 4777771145 clocks, 10840 records/s, 2.87 Mclocks/s, 4 markers, 677136 read mismatches
+  ... 18042880 records (41.6%), 4784850670 clocks, 10841 records/s, 2.87 Mclocks/s, 4 markers, 677152 read mismatches
+  ... 18075648 records (41.6%), 4792000828 clocks, 10845 records/s, 2.88 Mclocks/s, 4 markers, 677168 read mismatches
+  ... 18104320 records (41.7%), 4799082028 clocks, 10847 records/s, 2.88 Mclocks/s, 4 markers, 677184 read mismatches
+  ... 18132992 records (41.8%), 4806163063 clocks, 10848 records/s, 2.88 Mclocks/s, 4 markers, 677200 read mismatches
+  ... 18161664 records (41.8%), 4813242143 clocks, 10850 records/s, 2.88 Mclocks/s, 4 markers, 677216 read mismatches
+  ... 18190336 records (41.9%), 4820323583 clocks, 10852 records/s, 2.88 Mclocks/s, 4 markers, 677232 read mismatches
+  ... 18219008 records (42.0%), 4827400163 clocks, 10854 records/s, 2.88 Mclocks/s, 4 markers, 677350 read mismatches
+  ... 18247680 records (42.0%), 4834480793 clocks, 10856 records/s, 2.88 Mclocks/s, 4 markers, 677366 read mismatches
+  ... 18276352 records (42.1%), 4841561748 clocks, 10858 records/s, 2.88 Mclocks/s, 4 markers, 677382 read mismatches
+  ... 18305024 records (42.2%), 4848641318 clocks, 10860 records/s, 2.88 Mclocks/s, 4 markers, 677398 read mismatches
+  ... 18333696 records (42.2%), 4855719773 clocks, 10862 records/s, 2.88 Mclocks/s, 4 markers, 677414 read mismatches
+  ... 18366464 records (42.3%), 4862867201 clocks, 10866 records/s, 2.88 Mclocks/s, 4 markers, 677430 read mismatches
+  ... 18395136 records (42.4%), 4869945466 clocks, 10868 records/s, 2.88 Mclocks/s, 4 markers, 677446 read mismatches
+  ... 18423808 records (42.4%), 4877024156 clocks, 10869 records/s, 2.88 Mclocks/s, 4 markers, 677462 read mismatches
+  ... 18452480 records (42.5%), 4884101171 clocks, 10871 records/s, 2.88 Mclocks/s, 4 markers, 677478 read mismatches
+  ... 18481152 records (42.6%), 4891178031 clocks, 10873 records/s, 2.88 Mclocks/s, 4 markers, 677494 read mismatches
+  ... 18509824 records (42.6%), 4898255146 clocks, 10874 records/s, 2.88 Mclocks/s, 4 markers, 677510 read mismatches
+  ... 18538496 records (42.7%), 4905333671 clocks, 10876 records/s, 2.88 Mclocks/s, 4 markers, 677526 read mismatches
+  ... 18567168 records (42.8%), 4912410251 clocks, 10878 records/s, 2.88 Mclocks/s, 4 markers, 677542 read mismatches
+  ... 18595840 records (42.8%), 4919483496 clocks, 10880 records/s, 2.88 Mclocks/s, 4 markers, 677558 read mismatches
+  ... 18624512 records (42.9%), 4926559601 clocks, 10882 records/s, 2.88 Mclocks/s, 4 markers, 677574 read mismatches
+  ... 18653184 records (43.0%), 4933635076 clocks, 10883 records/s, 2.88 Mclocks/s, 4 markers, 677590 read mismatches
+  ... 18681856 records (43.0%), 4940712456 clocks, 10886 records/s, 2.88 Mclocks/s, 4 markers, 677606 read mismatches
+  ... 18710528 records (43.1%), 4947787036 clocks, 10888 records/s, 2.88 Mclocks/s, 4 markers, 677622 read mismatches
+  ... 18739200 records (43.2%), 4954862466 clocks, 10890 records/s, 2.88 Mclocks/s, 4 markers, 677638 read mismatches
+  ... 18767872 records (43.2%), 4961936881 clocks, 10892 records/s, 2.88 Mclocks/s, 4 markers, 677654 read mismatches
+  ... 18796544 records (43.3%), 4969011721 clocks, 10894 records/s, 2.88 Mclocks/s, 4 markers, 677670 read mismatches
+  ... 18825216 records (43.4%), 4976085756 clocks, 10896 records/s, 2.88 Mclocks/s, 4 markers, 677686 read mismatches
+  ... 18853888 records (43.4%), 4983159811 clocks, 10898 records/s, 2.88 Mclocks/s, 4 markers, 677702 read mismatches
+  ... 18882560 records (43.5%), 4990235676 clocks, 10900 records/s, 2.88 Mclocks/s, 4 markers, 677718 read mismatches
+  ... 18915328 records (43.6%), 4997378399 clocks, 10904 records/s, 2.88 Mclocks/s, 4 markers, 677734 read mismatches
+  ... 18944000 records (43.6%), 5004453044 clocks, 10906 records/s, 2.88 Mclocks/s, 4 markers, 677750 read mismatches
+  ... 18972672 records (43.7%), 5011527549 clocks, 10908 records/s, 2.88 Mclocks/s, 4 markers, 677766 read mismatches
+  ... 19001344 records (43.8%), 5018602784 clocks, 10910 records/s, 2.88 Mclocks/s, 4 markers, 677782 read mismatches
+  ... 19030016 records (43.8%), 5025678284 clocks, 10911 records/s, 2.88 Mclocks/s, 4 markers, 677798 read mismatches
+  ... 19058688 records (43.9%), 5032753399 clocks, 10913 records/s, 2.88 Mclocks/s, 4 markers, 677814 read mismatches
+  ... 19087360 records (44.0%), 5039829519 clocks, 10915 records/s, 2.88 Mclocks/s, 4 markers, 677830 read mismatches
+  ... 19116032 records (44.0%), 5046899804 clocks, 10916 records/s, 2.88 Mclocks/s, 4 markers, 678286 read mismatches
+  ... 19144704 records (44.1%), 5053975894 clocks, 10918 records/s, 2.88 Mclocks/s, 4 markers, 678302 read mismatches
+  ... 19173376 records (44.2%), 5061052894 clocks, 10919 records/s, 2.88 Mclocks/s, 4 markers, 678318 read mismatches
+  ... 19202048 records (44.2%), 5068128969 clocks, 10921 records/s, 2.88 Mclocks/s, 4 markers, 678334 read mismatches
+  ... 19230720 records (44.3%), 5075206494 clocks, 10923 records/s, 2.88 Mclocks/s, 4 markers, 678350 read mismatches
+  marker 4 at record 19257296 (stamp 13488322738, clock 5082246980): dumped /home/dani/glreplay/b44full/core_rgb_0004.bin, /home/dani/glreplay/b44full/core_aux_0004.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 19259392 records (44.4%), 5082284290 clocks, 10925 records/s, 2.88 Mclocks/s, 5 markers, 678366 read mismatches
+  ... 19288064 records (44.4%), 5089361560 clocks, 10926 records/s, 2.88 Mclocks/s, 5 markers, 678383 read mismatches
+  ... 19316736 records (44.5%), 5096439040 clocks, 10928 records/s, 2.88 Mclocks/s, 5 markers, 678399 read mismatches
+  ... 19345408 records (44.6%), 5103516820 clocks, 10930 records/s, 2.88 Mclocks/s, 5 markers, 678415 read mismatches
+  ... 19374080 records (44.6%), 5110595100 clocks, 10932 records/s, 2.88 Mclocks/s, 5 markers, 678431 read mismatches
+  ... 19402752 records (44.7%), 5117673170 clocks, 10929 records/s, 2.88 Mclocks/s, 5 markers, 678447 read mismatches
+  ... 19431424 records (44.8%), 5124753351 clocks, 10924 records/s, 2.88 Mclocks/s, 5 markers, 678453 read mismatches
+  ... 19460096 records (44.8%), 5131831066 clocks, 10922 records/s, 2.88 Mclocks/s, 5 markers, 678469 read mismatches
+  ... 19488768 records (44.9%), 5138909396 clocks, 10923 records/s, 2.88 Mclocks/s, 5 markers, 678485 read mismatches
+  ... 19517440 records (45.0%), 5145987411 clocks, 10922 records/s, 2.88 Mclocks/s, 5 markers, 678501 read mismatches
+  ... 19546112 records (45.0%), 5153065506 clocks, 10918 records/s, 2.88 Mclocks/s, 5 markers, 678517 read mismatches
+  ... 19574784 records (45.1%), 5160143491 clocks, 10913 records/s, 2.88 Mclocks/s, 5 markers, 678533 read mismatches
+  ... 19603456 records (45.2%), 5167222021 clocks, 10915 records/s, 2.88 Mclocks/s, 5 markers, 678549 read mismatches
+  ... 19632128 records (45.2%), 5174299806 clocks, 10917 records/s, 2.88 Mclocks/s, 5 markers, 678565 read mismatches
+  ... 19660800 records (45.3%), 5181377966 clocks, 10919 records/s, 2.88 Mclocks/s, 5 markers, 678581 read mismatches
+  ... 19689472 records (45.4%), 5188455691 clocks, 10919 records/s, 2.88 Mclocks/s, 5 markers, 678597 read mismatches
+  ... 19718144 records (45.4%), 5195531176 clocks, 10921 records/s, 2.88 Mclocks/s, 5 markers, 678755 read mismatches
+  ... 19746816 records (45.5%), 5202609201 clocks, 10922 records/s, 2.88 Mclocks/s, 5 markers, 678771 read mismatches
+  ... 19775488 records (45.6%), 5209687501 clocks, 10924 records/s, 2.88 Mclocks/s, 5 markers, 678787 read mismatches
+  ... 19804160 records (45.6%), 5216764021 clocks, 10925 records/s, 2.88 Mclocks/s, 5 markers, 678803 read mismatches
+  ... 19832832 records (45.7%), 5223839891 clocks, 10926 records/s, 2.88 Mclocks/s, 5 markers, 678819 read mismatches
+  ... 19861504 records (45.8%), 5230916066 clocks, 10927 records/s, 2.88 Mclocks/s, 5 markers, 678835 read mismatches
+  ... 19890176 records (45.8%), 5237992046 clocks, 10929 records/s, 2.88 Mclocks/s, 5 markers, 678851 read mismatches
+  ... 19918848 records (45.9%), 5245069466 clocks, 10931 records/s, 2.88 Mclocks/s, 5 markers, 678867 read mismatches
+  ... 19947520 records (46.0%), 5252145156 clocks, 10933 records/s, 2.88 Mclocks/s, 5 markers, 678883 read mismatches
+  ... 19976192 records (46.0%), 5259221731 clocks, 10935 records/s, 2.88 Mclocks/s, 5 markers, 678899 read mismatches
+  ... 20000768 records (46.1%), 5266230228 clocks, 10935 records/s, 2.88 Mclocks/s, 5 markers, 678915 read mismatches
+  ... 20029440 records (46.1%), 5273305508 clocks, 10937 records/s, 2.88 Mclocks/s, 5 markers, 678931 read mismatches
+  ... 20058112 records (46.2%), 5280380153 clocks, 10938 records/s, 2.88 Mclocks/s, 5 markers, 678947 read mismatches
+  ... 20086784 records (46.3%), 5287453993 clocks, 10940 records/s, 2.88 Mclocks/s, 5 markers, 678963 read mismatches
+  ... 20115456 records (46.3%), 5294524028 clocks, 10942 records/s, 2.88 Mclocks/s, 5 markers, 678979 read mismatches
+  ... 20144128 records (46.4%), 5301596313 clocks, 10944 records/s, 2.88 Mclocks/s, 5 markers, 678995 read mismatches
+  ... 20172800 records (46.5%), 5308667593 clocks, 10946 records/s, 2.88 Mclocks/s, 5 markers, 679011 read mismatches
+  ... 20201472 records (46.5%), 5315738398 clocks, 10947 records/s, 2.88 Mclocks/s, 5 markers, 679027 read mismatches
+  ... 20230144 records (46.6%), 5322806993 clocks, 10948 records/s, 2.88 Mclocks/s, 5 markers, 679043 read mismatches
+  ... 20258816 records (46.7%), 5329874368 clocks, 10950 records/s, 2.88 Mclocks/s, 5 markers, 679059 read mismatches
+  ... 20287488 records (46.7%), 5336941163 clocks, 10950 records/s, 2.88 Mclocks/s, 5 markers, 679075 read mismatches
+  ... 20316160 records (46.8%), 5344008403 clocks, 10949 records/s, 2.88 Mclocks/s, 5 markers, 679091 read mismatches
+  ... 20344832 records (46.9%), 5351071158 clocks, 10950 records/s, 2.88 Mclocks/s, 5 markers, 679107 read mismatches
+  ... 20373504 records (46.9%), 5358135498 clocks, 10951 records/s, 2.88 Mclocks/s, 5 markers, 679123 read mismatches
+  ... 20398080 records (47.0%), 5365133415 clocks, 10950 records/s, 2.88 Mclocks/s, 5 markers, 679139 read mismatches
+  ... 20426752 records (47.1%), 5372194190 clocks, 10951 records/s, 2.88 Mclocks/s, 5 markers, 679155 read mismatches
+  ... 20455424 records (47.1%), 5379258590 clocks, 10952 records/s, 2.88 Mclocks/s, 5 markers, 679171 read mismatches
+  ... 20484096 records (47.2%), 5386316945 clocks, 10953 records/s, 2.88 Mclocks/s, 5 markers, 679368 read mismatches
+  ... 20512768 records (47.3%), 5393376965 clocks, 10954 records/s, 2.88 Mclocks/s, 5 markers, 679384 read mismatches
+  ... 20541440 records (47.3%), 5400436670 clocks, 10955 records/s, 2.88 Mclocks/s, 5 markers, 679400 read mismatches
+  ... 20566016 records (47.4%), 5407430412 clocks, 10954 records/s, 2.88 Mclocks/s, 5 markers, 679416 read mismatches
+  ... 20594688 records (47.5%), 5414486982 clocks, 10956 records/s, 2.88 Mclocks/s, 5 markers, 679560 read mismatches
+  ... 20623360 records (47.5%), 5421545987 clocks, 10958 records/s, 2.88 Mclocks/s, 5 markers, 679576 read mismatches
+  ... 20652032 records (47.6%), 5428601972 clocks, 10960 records/s, 2.88 Mclocks/s, 5 markers, 679592 read mismatches
+  ... 20680704 records (47.6%), 5435660512 clocks, 10962 records/s, 2.88 Mclocks/s, 5 markers, 679608 read mismatches
+  ... 20705280 records (47.7%), 5442649659 clocks, 10962 records/s, 2.88 Mclocks/s, 5 markers, 679624 read mismatches
+  ... 20733952 records (47.8%), 5449706399 clocks, 10963 records/s, 2.88 Mclocks/s, 5 markers, 679640 read mismatches
+  ... 20762624 records (47.8%), 5456764434 clocks, 10965 records/s, 2.88 Mclocks/s, 5 markers, 679656 read mismatches
+  ... 20791296 records (47.9%), 5463818699 clocks, 10967 records/s, 2.88 Mclocks/s, 5 markers, 679766 read mismatches
+  ... 20819968 records (48.0%), 5470875469 clocks, 10969 records/s, 2.88 Mclocks/s, 5 markers, 679782 read mismatches
+  ... 20844544 records (48.0%), 5477866086 clocks, 10969 records/s, 2.88 Mclocks/s, 5 markers, 679798 read mismatches
+  ... 20873216 records (48.1%), 5484922441 clocks, 10971 records/s, 2.88 Mclocks/s, 5 markers, 679814 read mismatches
+  ... 20901888 records (48.2%), 5491979466 clocks, 10973 records/s, 2.88 Mclocks/s, 5 markers, 679830 read mismatches
+  ... 20930560 records (48.2%), 5499039106 clocks, 10975 records/s, 2.88 Mclocks/s, 5 markers, 679846 read mismatches
+  ... 20955136 records (48.3%), 5506027343 clocks, 10974 records/s, 2.88 Mclocks/s, 5 markers, 679862 read mismatches
+  ... 20983808 records (48.3%), 5513084658 clocks, 10976 records/s, 2.88 Mclocks/s, 5 markers, 679878 read mismatches
+  ... 21012480 records (48.4%), 5520143953 clocks, 10978 records/s, 2.88 Mclocks/s, 5 markers, 679894 read mismatches
+  ... 21041152 records (48.5%), 5527199138 clocks, 10980 records/s, 2.88 Mclocks/s, 5 markers, 679910 read mismatches
+  ... 21069824 records (48.5%), 5534259638 clocks, 10982 records/s, 2.88 Mclocks/s, 5 markers, 679926 read mismatches
+  ... 21094400 records (48.6%), 5541250170 clocks, 10982 records/s, 2.88 Mclocks/s, 5 markers, 679942 read mismatches
+  ... 21123072 records (48.7%), 5548308340 clocks, 10983 records/s, 2.88 Mclocks/s, 5 markers, 679958 read mismatches
+  ... 21151744 records (48.7%), 5555369015 clocks, 10984 records/s, 2.88 Mclocks/s, 5 markers, 679974 read mismatches
+  ... 21180416 records (48.8%), 5562427000 clocks, 10986 records/s, 2.89 Mclocks/s, 5 markers, 679990 read mismatches
+  ... 21209088 records (48.9%), 5569490605 clocks, 10987 records/s, 2.89 Mclocks/s, 5 markers, 680006 read mismatches
+  ... 21237760 records (48.9%), 5576550735 clocks, 10988 records/s, 2.89 Mclocks/s, 5 markers, 680022 read mismatches
+  ... 21262336 records (49.0%), 5583544702 clocks, 10988 records/s, 2.89 Mclocks/s, 5 markers, 680038 read mismatches
+  ... 21291008 records (49.1%), 5590607992 clocks, 10990 records/s, 2.89 Mclocks/s, 5 markers, 680054 read mismatches
+  ... 21319680 records (49.1%), 5597672602 clocks, 10992 records/s, 2.89 Mclocks/s, 5 markers, 680070 read mismatches
+  ... 21348352 records (49.2%), 5604737732 clocks, 10994 records/s, 2.89 Mclocks/s, 5 markers, 680086 read mismatches
+  ... 21377024 records (49.3%), 5611801502 clocks, 10996 records/s, 2.89 Mclocks/s, 5 markers, 680102 read mismatches
+  ... 21405696 records (49.3%), 5618867157 clocks, 10998 records/s, 2.89 Mclocks/s, 5 markers, 680118 read mismatches
+  ... 21434368 records (49.4%), 5625936242 clocks, 11000 records/s, 2.89 Mclocks/s, 5 markers, 680134 read mismatches
+  ... 21463040 records (49.5%), 5633002037 clocks, 11001 records/s, 2.89 Mclocks/s, 5 markers, 680150 read mismatches
+  ... 21487616 records (49.5%), 5640001274 clocks, 11001 records/s, 2.89 Mclocks/s, 5 markers, 680166 read mismatches
+  ... 21516288 records (49.6%), 5647072284 clocks, 11003 records/s, 2.89 Mclocks/s, 5 markers, 680182 read mismatches
+  ... 21544960 records (49.6%), 5654142014 clocks, 11005 records/s, 2.89 Mclocks/s, 5 markers, 680198 read mismatches
+  ... 21573632 records (49.7%), 5661213389 clocks, 11007 records/s, 2.89 Mclocks/s, 5 markers, 680214 read mismatches
+  ... 21602304 records (49.8%), 5668283124 clocks, 11008 records/s, 2.89 Mclocks/s, 5 markers, 680230 read mismatches
+  ... 21630976 records (49.8%), 5675355309 clocks, 11010 records/s, 2.89 Mclocks/s, 5 markers, 680246 read mismatches
+  ... 21659648 records (49.9%), 5682429704 clocks, 11012 records/s, 2.89 Mclocks/s, 5 markers, 680262 read mismatches
+  ... 21688320 records (50.0%), 5689503284 clocks, 11014 records/s, 2.89 Mclocks/s, 5 markers, 680280 read mismatches
+  ... 21716992 records (50.0%), 5696578469 clocks, 11016 records/s, 2.89 Mclocks/s, 5 markers, 680296 read mismatches
+  ... 21745664 records (50.1%), 5703653429 clocks, 11018 records/s, 2.89 Mclocks/s, 5 markers, 680312 read mismatches
+  ... 21774336 records (50.2%), 5710729674 clocks, 11019 records/s, 2.89 Mclocks/s, 5 markers, 680328 read mismatches
+  ... 21803008 records (50.2%), 5717805484 clocks, 11021 records/s, 2.89 Mclocks/s, 5 markers, 680344 read mismatches
+  ... 21831680 records (50.3%), 5724882644 clocks, 11023 records/s, 2.89 Mclocks/s, 5 markers, 680360 read mismatches
+  ... 21860352 records (50.4%), 5731961254 clocks, 11025 records/s, 2.89 Mclocks/s, 5 markers, 680376 read mismatches
+  ... 21889024 records (50.4%), 5739038534 clocks, 11027 records/s, 2.89 Mclocks/s, 5 markers, 680392 read mismatches
+  ... 21917696 records (50.5%), 5746116044 clocks, 11028 records/s, 2.89 Mclocks/s, 5 markers, 680408 read mismatches
+  ... 21946368 records (50.6%), 5753192734 clocks, 11030 records/s, 2.89 Mclocks/s, 5 markers, 680424 read mismatches
+  ... 21979136 records (50.6%), 5760336167 clocks, 11034 records/s, 2.89 Mclocks/s, 5 markers, 680440 read mismatches
+  ... 22007808 records (50.7%), 5767413097 clocks, 11036 records/s, 2.89 Mclocks/s, 5 markers, 680456 read mismatches
+  ... 22036480 records (50.8%), 5774492077 clocks, 11038 records/s, 2.89 Mclocks/s, 5 markers, 680472 read mismatches
+  ... 22065152 records (50.8%), 5781568192 clocks, 11040 records/s, 2.89 Mclocks/s, 5 markers, 680488 read mismatches
+  ... 22093824 records (50.9%), 5788641227 clocks, 11042 records/s, 2.89 Mclocks/s, 5 markers, 680615 read mismatches
+  ... 22122496 records (51.0%), 5795717577 clocks, 11043 records/s, 2.89 Mclocks/s, 5 markers, 680631 read mismatches
+  ... 22151168 records (51.0%), 5802783977 clocks, 11045 records/s, 2.89 Mclocks/s, 5 markers, 681242 read mismatches
+  ... 22179840 records (51.1%), 5809860012 clocks, 11047 records/s, 2.89 Mclocks/s, 5 markers, 681258 read mismatches
+  ... 22208512 records (51.2%), 5816933392 clocks, 11049 records/s, 2.89 Mclocks/s, 5 markers, 681274 read mismatches
+  ... 22237184 records (51.2%), 5824004652 clocks, 11051 records/s, 2.89 Mclocks/s, 5 markers, 681290 read mismatches
+  ... 22269952 records (51.3%), 5831141890 clocks, 11055 records/s, 2.89 Mclocks/s, 5 markers, 681306 read mismatches
+  ... 22298624 records (51.4%), 5838213855 clocks, 11056 records/s, 2.89 Mclocks/s, 5 markers, 681322 read mismatches
+  ... 22327296 records (51.4%), 5845284980 clocks, 11058 records/s, 2.90 Mclocks/s, 5 markers, 681338 read mismatches
+  ... 22355968 records (51.5%), 5852354145 clocks, 11060 records/s, 2.90 Mclocks/s, 5 markers, 681354 read mismatches
+  ... 22384640 records (51.6%), 5859422055 clocks, 11062 records/s, 2.90 Mclocks/s, 5 markers, 681370 read mismatches
+  ... 22413312 records (51.6%), 5866491030 clocks, 11064 records/s, 2.90 Mclocks/s, 5 markers, 681386 read mismatches
+  ... 22441984 records (51.7%), 5873559045 clocks, 11065 records/s, 2.90 Mclocks/s, 5 markers, 681402 read mismatches
+  ... 22470656 records (51.8%), 5880624635 clocks, 11067 records/s, 2.90 Mclocks/s, 5 markers, 681418 read mismatches
+  ... 22499328 records (51.8%), 5887690240 clocks, 11069 records/s, 2.90 Mclocks/s, 5 markers, 681434 read mismatches
+  ... 22528000 records (51.9%), 5894755000 clocks, 11071 records/s, 2.90 Mclocks/s, 5 markers, 681450 read mismatches
+  ... 22556672 records (52.0%), 5901820995 clocks, 11072 records/s, 2.90 Mclocks/s, 5 markers, 681466 read mismatches
+  ... 22585344 records (52.0%), 5908886755 clocks, 11074 records/s, 2.90 Mclocks/s, 5 markers, 681482 read mismatches
+  ... 22614016 records (52.1%), 5915950875 clocks, 11076 records/s, 2.90 Mclocks/s, 5 markers, 681498 read mismatches
+  ... 22642688 records (52.2%), 5923014405 clocks, 11078 records/s, 2.90 Mclocks/s, 5 markers, 681514 read mismatches
+  ... 22671360 records (52.2%), 5930078060 clocks, 11080 records/s, 2.90 Mclocks/s, 5 markers, 681530 read mismatches
+  ... 22700032 records (52.3%), 5937140515 clocks, 11081 records/s, 2.90 Mclocks/s, 5 markers, 681546 read mismatches
+  ... 22728704 records (52.4%), 5944203265 clocks, 11083 records/s, 2.90 Mclocks/s, 5 markers, 681562 read mismatches
+  ... 22757376 records (52.4%), 5951265250 clocks, 11085 records/s, 2.90 Mclocks/s, 5 markers, 681578 read mismatches
+  ... 22786048 records (52.5%), 5958326705 clocks, 11086 records/s, 2.90 Mclocks/s, 5 markers, 681594 read mismatches
+  ... 22814720 records (52.6%), 5965388595 clocks, 11088 records/s, 2.90 Mclocks/s, 5 markers, 681610 read mismatches
+  ... 22843392 records (52.6%), 5972451510 clocks, 11090 records/s, 2.90 Mclocks/s, 5 markers, 681626 read mismatches
+  ... 22872064 records (52.7%), 5979513185 clocks, 11091 records/s, 2.90 Mclocks/s, 5 markers, 681642 read mismatches
+  ... 22900736 records (52.8%), 5986573500 clocks, 11093 records/s, 2.90 Mclocks/s, 5 markers, 681658 read mismatches
+  ... 22929408 records (52.8%), 5993633730 clocks, 11095 records/s, 2.90 Mclocks/s, 5 markers, 681674 read mismatches
+  ... 22958080 records (52.9%), 6000694525 clocks, 11097 records/s, 2.90 Mclocks/s, 5 markers, 681690 read mismatches
+  ... 22986752 records (53.0%), 6007756720 clocks, 11098 records/s, 2.90 Mclocks/s, 5 markers, 681706 read mismatches
+  ... 23015424 records (53.0%), 6014817475 clocks, 11100 records/s, 2.90 Mclocks/s, 5 markers, 681722 read mismatches
+  ... 23044096 records (53.1%), 6021879555 clocks, 11102 records/s, 2.90 Mclocks/s, 5 markers, 681738 read mismatches
+  ... 23072768 records (53.2%), 6028943235 clocks, 11103 records/s, 2.90 Mclocks/s, 5 markers, 681754 read mismatches
+  ... 23101440 records (53.2%), 6036005635 clocks, 11105 records/s, 2.90 Mclocks/s, 5 markers, 681770 read mismatches
+  ... 23130112 records (53.3%), 6043068560 clocks, 11107 records/s, 2.90 Mclocks/s, 5 markers, 681786 read mismatches
+  ... 23158784 records (53.4%), 6050132710 clocks, 11109 records/s, 2.90 Mclocks/s, 5 markers, 681802 read mismatches
+  ... 23187456 records (53.4%), 6057197900 clocks, 11110 records/s, 2.90 Mclocks/s, 5 markers, 681818 read mismatches
+  ... 23216128 records (53.5%), 6064264290 clocks, 11111 records/s, 2.90 Mclocks/s, 5 markers, 681834 read mismatches
+  ... 23244800 records (53.6%), 6071332105 clocks, 11113 records/s, 2.90 Mclocks/s, 5 markers, 681850 read mismatches
+  ... 23273472 records (53.6%), 6078401290 clocks, 11114 records/s, 2.90 Mclocks/s, 5 markers, 681866 read mismatches
+  ... 23302144 records (53.7%), 6085469575 clocks, 11116 records/s, 2.90 Mclocks/s, 5 markers, 681882 read mismatches
+  ... 23330816 records (53.8%), 6092539990 clocks, 11118 records/s, 2.90 Mclocks/s, 5 markers, 681899 read mismatches
+  ... 23359488 records (53.8%), 6099610800 clocks, 11119 records/s, 2.90 Mclocks/s, 5 markers, 681915 read mismatches
+  ... 23388160 records (53.9%), 6106683725 clocks, 11120 records/s, 2.90 Mclocks/s, 5 markers, 681931 read mismatches
+  ... 23416832 records (54.0%), 6113756115 clocks, 11121 records/s, 2.90 Mclocks/s, 5 markers, 681947 read mismatches
+  ... 23449600 records (54.0%), 6120898528 clocks, 11125 records/s, 2.90 Mclocks/s, 5 markers, 681963 read mismatches
+  ... 23478272 records (54.1%), 6127975583 clocks, 11126 records/s, 2.90 Mclocks/s, 5 markers, 681979 read mismatches
+  ... 23506944 records (54.2%), 6135050418 clocks, 11128 records/s, 2.90 Mclocks/s, 5 markers, 681995 read mismatches
+  ... 23535616 records (54.2%), 6142125608 clocks, 11129 records/s, 2.90 Mclocks/s, 5 markers, 682011 read mismatches
+  ... 23564288 records (54.3%), 6149203638 clocks, 11130 records/s, 2.90 Mclocks/s, 5 markers, 682027 read mismatches
+  ... 23592960 records (54.4%), 6156280903 clocks, 11131 records/s, 2.90 Mclocks/s, 5 markers, 682043 read mismatches
+  ... 23621632 records (54.4%), 6163361293 clocks, 11133 records/s, 2.90 Mclocks/s, 5 markers, 682059 read mismatches
+  ... 23654400 records (54.5%), 6170508921 clocks, 11136 records/s, 2.90 Mclocks/s, 5 markers, 682075 read mismatches
+  ... 23683072 records (54.6%), 6177589806 clocks, 11137 records/s, 2.91 Mclocks/s, 5 markers, 682091 read mismatches
+  ... 23711744 records (54.6%), 6184671696 clocks, 11138 records/s, 2.91 Mclocks/s, 5 markers, 682107 read mismatches
+  ... 23740416 records (54.7%), 6191752136 clocks, 11140 records/s, 2.91 Mclocks/s, 5 markers, 682123 read mismatches
+  ... 23769088 records (54.8%), 6198834996 clocks, 11141 records/s, 2.91 Mclocks/s, 5 markers, 682139 read mismatches
+  ... 23801856 records (54.8%), 6205984004 clocks, 11144 records/s, 2.91 Mclocks/s, 5 markers, 682155 read mismatches
+  ... 23830528 records (54.9%), 6213067629 clocks, 11145 records/s, 2.91 Mclocks/s, 5 markers, 682171 read mismatches
+  ... 23859200 records (55.0%), 6220150769 clocks, 11147 records/s, 2.91 Mclocks/s, 5 markers, 682187 read mismatches
+  ... 23887872 records (55.0%), 6227232624 clocks, 11148 records/s, 2.91 Mclocks/s, 5 markers, 682203 read mismatches
+  ... 23916544 records (55.1%), 6234316499 clocks, 11149 records/s, 2.91 Mclocks/s, 5 markers, 682219 read mismatches
+  ... 23949312 records (55.2%), 6241469682 clocks, 11152 records/s, 2.91 Mclocks/s, 5 markers, 682235 read mismatches
+  ... 23977984 records (55.2%), 6248551607 clocks, 11153 records/s, 2.91 Mclocks/s, 5 markers, 682251 read mismatches
+  ... 24006656 records (55.3%), 6255634247 clocks, 11155 records/s, 2.91 Mclocks/s, 5 markers, 682267 read mismatches
+  ... 24035328 records (55.4%), 6262716742 clocks, 11156 records/s, 2.91 Mclocks/s, 5 markers, 682361 read mismatches
+  ... 24068096 records (55.5%), 6269867320 clocks, 11159 records/s, 2.91 Mclocks/s, 5 markers, 682377 read mismatches
+  ... 24096768 records (55.5%), 6276947955 clocks, 11160 records/s, 2.91 Mclocks/s, 5 markers, 682393 read mismatches
+  ... 24125440 records (55.6%), 6284027790 clocks, 11162 records/s, 2.91 Mclocks/s, 5 markers, 682409 read mismatches
+  ... 24158208 records (55.7%), 6291177553 clocks, 11165 records/s, 2.91 Mclocks/s, 5 markers, 682425 read mismatches
+  ... 24186880 records (55.7%), 6298257083 clocks, 11166 records/s, 2.91 Mclocks/s, 5 markers, 682441 read mismatches
+  ... 24215552 records (55.8%), 6305338368 clocks, 11167 records/s, 2.91 Mclocks/s, 5 markers, 682457 read mismatches
+  ... 24244224 records (55.9%), 6312418393 clocks, 11168 records/s, 2.91 Mclocks/s, 5 markers, 682473 read mismatches
+  ... 24276992 records (55.9%), 6319565781 clocks, 11171 records/s, 2.91 Mclocks/s, 5 markers, 682489 read mismatches
+  ... 24305664 records (56.0%), 6326644186 clocks, 11172 records/s, 2.91 Mclocks/s, 5 markers, 682505 read mismatches
+  ... 24334336 records (56.1%), 6333723131 clocks, 11173 records/s, 2.91 Mclocks/s, 5 markers, 682521 read mismatches
+  ... 24367104 records (56.1%), 6340869679 clocks, 11176 records/s, 2.91 Mclocks/s, 5 markers, 682537 read mismatches
+  ... 24395776 records (56.2%), 6347947449 clocks, 11177 records/s, 2.91 Mclocks/s, 5 markers, 682553 read mismatches
+  ... 24424448 records (56.3%), 6355023699 clocks, 11179 records/s, 2.91 Mclocks/s, 5 markers, 682569 read mismatches
+  ... 24457216 records (56.4%), 6362167632 clocks, 11182 records/s, 2.91 Mclocks/s, 5 markers, 682585 read mismatches
+  ... 24485888 records (56.4%), 6369245047 clocks, 11183 records/s, 2.91 Mclocks/s, 5 markers, 682601 read mismatches
+  ... 24514560 records (56.5%), 6376321982 clocks, 11184 records/s, 2.91 Mclocks/s, 5 markers, 682617 read mismatches
+  ... 24547328 records (56.6%), 6383466405 clocks, 11187 records/s, 2.91 Mclocks/s, 5 markers, 682633 read mismatches
+  ... 24576000 records (56.6%), 6390541850 clocks, 11188 records/s, 2.91 Mclocks/s, 5 markers, 682649 read mismatches
+  ... 24604672 records (56.7%), 6397617390 clocks, 11189 records/s, 2.91 Mclocks/s, 5 markers, 682665 read mismatches
+  ... 24637440 records (56.8%), 6404760423 clocks, 11192 records/s, 2.91 Mclocks/s, 5 markers, 682681 read mismatches
+  ... 24666112 records (56.8%), 6411836963 clocks, 11193 records/s, 2.91 Mclocks/s, 5 markers, 682697 read mismatches
+  ... 24694784 records (56.9%), 6418911273 clocks, 11194 records/s, 2.91 Mclocks/s, 5 markers, 682713 read mismatches
+  ... 24727552 records (57.0%), 6426050461 clocks, 11197 records/s, 2.91 Mclocks/s, 5 markers, 682729 read mismatches
+  ... 24756224 records (57.0%), 6433123811 clocks, 11198 records/s, 2.91 Mclocks/s, 5 markers, 682745 read mismatches
+  ... 24784896 records (57.1%), 6440198391 clocks, 11199 records/s, 2.91 Mclocks/s, 5 markers, 682761 read mismatches
+  ... 24813568 records (57.2%), 6447271271 clocks, 11201 records/s, 2.91 Mclocks/s, 5 markers, 682777 read mismatches
+  ... 24846336 records (57.2%), 6454408924 clocks, 11204 records/s, 2.91 Mclocks/s, 5 markers, 682793 read mismatches
+  ... 24875008 records (57.3%), 6461477734 clocks, 11205 records/s, 2.91 Mclocks/s, 5 markers, 682809 read mismatches
+  ... 24903680 records (57.4%), 6468549104 clocks, 11206 records/s, 2.91 Mclocks/s, 5 markers, 682825 read mismatches
+  ... 24932352 records (57.4%), 6475597614 clocks, 11208 records/s, 2.91 Mclocks/s, 5 markers, 684373 read mismatches
+  ... 24961024 records (57.5%), 6482667389 clocks, 11209 records/s, 2.91 Mclocks/s, 5 markers, 684389 read mismatches
+  ... 24989696 records (57.6%), 6489733674 clocks, 11210 records/s, 2.91 Mclocks/s, 5 markers, 684405 read mismatches
+  ... 25018368 records (57.6%), 6496799374 clocks, 11211 records/s, 2.91 Mclocks/s, 5 markers, 684421 read mismatches
+  ... 25047040 records (57.7%), 6503861874 clocks, 11212 records/s, 2.91 Mclocks/s, 5 markers, 684437 read mismatches
+  ... 25075712 records (57.8%), 6510921019 clocks, 11214 records/s, 2.91 Mclocks/s, 5 markers, 684453 read mismatches
+  ... 25104384 records (57.8%), 6517977839 clocks, 11215 records/s, 2.91 Mclocks/s, 5 markers, 684469 read mismatches
+  ... 25133056 records (57.9%), 6525033954 clocks, 11216 records/s, 2.91 Mclocks/s, 5 markers, 684485 read mismatches
+  ... 25161728 records (58.0%), 6532086534 clocks, 11217 records/s, 2.91 Mclocks/s, 5 markers, 684501 read mismatches
+  ... 25190400 records (58.0%), 6539136064 clocks, 11218 records/s, 2.91 Mclocks/s, 5 markers, 684517 read mismatches
+  ... 25214976 records (58.1%), 6546127621 clocks, 11218 records/s, 2.91 Mclocks/s, 5 markers, 684533 read mismatches
+  ... 25243648 records (58.2%), 6553171241 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684549 read mismatches
+  ... 25272320 records (58.2%), 6560208751 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684565 read mismatches
+  ... 25296896 records (58.3%), 6567193663 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684585 read mismatches
+  ... 25325568 records (58.4%), 6574223228 clocks, 11220 records/s, 2.91 Mclocks/s, 5 markers, 684601 read mismatches
+  ... 25350144 records (58.4%), 6581199725 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684617 read mismatches
+  ... 25378816 records (58.5%), 6588216785 clocks, 11220 records/s, 2.91 Mclocks/s, 5 markers, 684633 read mismatches
+  ... 25403392 records (58.5%), 6595184242 clocks, 11220 records/s, 2.91 Mclocks/s, 5 markers, 684649 read mismatches
+  ... 25427968 records (58.6%), 6602148074 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684665 read mismatches
+  ... 25456640 records (58.7%), 6609147179 clocks, 11220 records/s, 2.91 Mclocks/s, 5 markers, 684681 read mismatches
+  ... 25481216 records (58.7%), 6616098171 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 684697 read mismatches
+  ... 25505792 records (58.8%), 6623039098 clocks, 11218 records/s, 2.91 Mclocks/s, 5 markers, 684713 read mismatches
+  ... 25530368 records (58.8%), 6629976275 clocks, 11217 records/s, 2.91 Mclocks/s, 5 markers, 684729 read mismatches
+  ... 25559040 records (58.9%), 6636927960 clocks, 11219 records/s, 2.91 Mclocks/s, 5 markers, 687651 read mismatches
+  ... 25579520 records (58.9%), 6643815739 clocks, 11216 records/s, 2.91 Mclocks/s, 5 markers, 687667 read mismatches
+  ... 25604096 records (59.0%), 6650728671 clocks, 11216 records/s, 2.91 Mclocks/s, 5 markers, 687683 read mismatches
+  ... 25628672 records (59.1%), 6657633258 clocks, 11215 records/s, 2.91 Mclocks/s, 5 markers, 687699 read mismatches
+  ... 25649152 records (59.1%), 6664505492 clocks, 11213 records/s, 2.91 Mclocks/s, 5 markers, 687715 read mismatches
+  ... 25673728 records (59.2%), 6671391039 clocks, 11212 records/s, 2.91 Mclocks/s, 5 markers, 687731 read mismatches
+  ... 25698304 records (59.2%), 6678270216 clocks, 11212 records/s, 2.91 Mclocks/s, 5 markers, 687747 read mismatches
+  ... 25718784 records (59.3%), 6685116845 clocks, 11210 records/s, 2.91 Mclocks/s, 5 markers, 687763 read mismatches
+  ... 25739264 records (59.3%), 6691956914 clocks, 11207 records/s, 2.91 Mclocks/s, 5 markers, 687779 read mismatches
+  ... 25763840 records (59.4%), 6698812126 clocks, 11206 records/s, 2.91 Mclocks/s, 5 markers, 687795 read mismatches
+  ... 25784320 records (59.4%), 6705638570 clocks, 11204 records/s, 2.91 Mclocks/s, 5 markers, 687811 read mismatches
+  ... 25804800 records (59.5%), 6712457074 clocks, 11201 records/s, 2.91 Mclocks/s, 5 markers, 687827 read mismatches
+  ... 25825280 records (59.5%), 6719268703 clocks, 11198 records/s, 2.91 Mclocks/s, 5 markers, 687843 read mismatches
+  ... 25845760 records (59.6%), 6726073862 clocks, 11196 records/s, 2.91 Mclocks/s, 5 markers, 687859 read mismatches
+  ... 25866240 records (59.6%), 6732873111 clocks, 11194 records/s, 2.91 Mclocks/s, 5 markers, 687875 read mismatches
+  ... 25886720 records (59.6%), 6739667765 clocks, 11191 records/s, 2.91 Mclocks/s, 5 markers, 687891 read mismatches
+  ... 25907200 records (59.7%), 6746457974 clocks, 11189 records/s, 2.91 Mclocks/s, 5 markers, 687914 read mismatches
+  ... 25927680 records (59.7%), 6753245063 clocks, 11187 records/s, 2.91 Mclocks/s, 5 markers, 687930 read mismatches
+  ... 25948160 records (59.8%), 6760029697 clocks, 11184 records/s, 2.91 Mclocks/s, 5 markers, 687946 read mismatches
+  ... 25968640 records (59.8%), 6766810251 clocks, 11182 records/s, 2.91 Mclocks/s, 5 markers, 687962 read mismatches
+  ... 25989120 records (59.9%), 6773587510 clocks, 11180 records/s, 2.91 Mclocks/s, 5 markers, 687978 read mismatches
+  ... 26009600 records (59.9%), 6780362989 clocks, 11177 records/s, 2.91 Mclocks/s, 5 markers, 687994 read mismatches
+  ... 26030080 records (60.0%), 6787121968 clocks, 11175 records/s, 2.91 Mclocks/s, 5 markers, 689650 read mismatches
+  ... 26050560 records (60.0%), 6793892032 clocks, 11173 records/s, 2.91 Mclocks/s, 5 markers, 689666 read mismatches
+  ... 26071040 records (60.1%), 6800661786 clocks, 11171 records/s, 2.91 Mclocks/s, 5 markers, 689682 read mismatches
+  ... 26091520 records (60.1%), 6807429970 clocks, 11169 records/s, 2.91 Mclocks/s, 5 markers, 689698 read mismatches
+  ... 26112000 records (60.2%), 6814198039 clocks, 11167 records/s, 2.91 Mclocks/s, 5 markers, 689714 read mismatches
+  ... 26132480 records (60.2%), 6820965678 clocks, 11165 records/s, 2.91 Mclocks/s, 5 markers, 689732 read mismatches
+  ... 26152960 records (60.3%), 6827731592 clocks, 11163 records/s, 2.91 Mclocks/s, 5 markers, 689748 read mismatches
+  ... 26177536 records (60.3%), 6834558069 clocks, 11163 records/s, 2.91 Mclocks/s, 5 markers, 689764 read mismatches
+  ... 26198016 records (60.4%), 6841326143 clocks, 11161 records/s, 2.91 Mclocks/s, 5 markers, 689780 read mismatches
+  ... 26218496 records (60.4%), 6848097767 clocks, 11159 records/s, 2.91 Mclocks/s, 5 markers, 689796 read mismatches
+  ... 26238976 records (60.5%), 6854870231 clocks, 11157 records/s, 2.91 Mclocks/s, 5 markers, 689812 read mismatches
+  ... 26259456 records (60.5%), 6861644820 clocks, 11155 records/s, 2.91 Mclocks/s, 5 markers, 689828 read mismatches
+  ... 26284032 records (60.6%), 6868481767 clocks, 11154 records/s, 2.91 Mclocks/s, 5 markers, 689844 read mismatches
+  ... 26304512 records (60.6%), 6875263171 clocks, 11152 records/s, 2.91 Mclocks/s, 5 markers, 689860 read mismatches
+  ... 26324992 records (60.7%), 6882045645 clocks, 11150 records/s, 2.91 Mclocks/s, 5 markers, 689876 read mismatches
+  ... 26349568 records (60.7%), 6888894677 clocks, 11149 records/s, 2.91 Mclocks/s, 5 markers, 689892 read mismatches
+  ... 26370048 records (60.8%), 6895686466 clocks, 11147 records/s, 2.91 Mclocks/s, 5 markers, 689908 read mismatches
+  ... 26394624 records (60.8%), 6902547138 clocks, 11147 records/s, 2.92 Mclocks/s, 5 markers, 689924 read mismatches
+  ... 26415104 records (60.9%), 6909348097 clocks, 11145 records/s, 2.92 Mclocks/s, 5 markers, 689940 read mismatches
+  ... 26439680 records (60.9%), 6916220809 clocks, 11144 records/s, 2.92 Mclocks/s, 5 markers, 689956 read mismatches
+  ... 26464256 records (61.0%), 6923097786 clocks, 11143 records/s, 2.92 Mclocks/s, 5 markers, 689972 read mismatches
+  ... 26488832 records (61.0%), 6929983333 clocks, 11141 records/s, 2.91 Mclocks/s, 5 markers, 689988 read mismatches
+  ... 26509312 records (61.1%), 6936807012 clocks, 11138 records/s, 2.91 Mclocks/s, 5 markers, 690004 read mismatches
+  ... 26533888 records (61.1%), 6943704574 clocks, 11137 records/s, 2.91 Mclocks/s, 5 markers, 690020 read mismatches
+  ... 26558464 records (61.2%), 6950608941 clocks, 11136 records/s, 2.91 Mclocks/s, 5 markers, 690036 read mismatches
+  ... 26587136 records (61.3%), 6957568901 clocks, 11137 records/s, 2.91 Mclocks/s, 5 markers, 691373 read mismatches
+  ... 26611712 records (61.3%), 6964484503 clocks, 11136 records/s, 2.91 Mclocks/s, 5 markers, 691389 read mismatches
+  ... 26636288 records (61.4%), 6971403925 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691405 read mismatches
+  ... 26660864 records (61.4%), 6978330832 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691421 read mismatches
+  ... 26689536 records (61.5%), 6985331042 clocks, 11136 records/s, 2.91 Mclocks/s, 5 markers, 691437 read mismatches
+  ... 26714112 records (61.6%), 6992267519 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691453 read mismatches
+  ... 26738688 records (61.6%), 6999206321 clocks, 11134 records/s, 2.91 Mclocks/s, 5 markers, 691469 read mismatches
+  ... 26767360 records (61.7%), 7006221016 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691485 read mismatches
+  ... 26791936 records (61.7%), 7013167163 clocks, 11134 records/s, 2.91 Mclocks/s, 5 markers, 691501 read mismatches
+  ... 26820608 records (61.8%), 7020189178 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691517 read mismatches
+  ... 26849280 records (61.9%), 7027214638 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691540 read mismatches
+  ... 26873856 records (61.9%), 7034174545 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691556 read mismatches
+  ... 26902528 records (62.0%), 7041205565 clocks, 11135 records/s, 2.91 Mclocks/s, 5 markers, 691572 read mismatches
+  ... 26931200 records (62.1%), 7048240765 clocks, 11136 records/s, 2.91 Mclocks/s, 5 markers, 691588 read mismatches
+  ... 26959872 records (62.1%), 7055269185 clocks, 11138 records/s, 2.91 Mclocks/s, 5 markers, 692218 read mismatches
+  ... 26988544 records (62.2%), 7062311190 clocks, 11139 records/s, 2.91 Mclocks/s, 5 markers, 692234 read mismatches
+  ... 27017216 records (62.2%), 7069353235 clocks, 11140 records/s, 2.92 Mclocks/s, 5 markers, 692250 read mismatches
+  ... 27041792 records (62.3%), 7076329682 clocks, 11140 records/s, 2.92 Mclocks/s, 5 markers, 692266 read mismatches
+  ... 27070464 records (62.4%), 7083379097 clocks, 11141 records/s, 2.92 Mclocks/s, 5 markers, 692282 read mismatches
+  ... 27099136 records (62.4%), 7090429757 clocks, 11143 records/s, 2.92 Mclocks/s, 5 markers, 692298 read mismatches
+  ... 27127808 records (62.5%), 7097482787 clocks, 11144 records/s, 2.92 Mclocks/s, 5 markers, 692314 read mismatches
+  ... 27160576 records (62.6%), 7104606535 clocks, 11147 records/s, 2.92 Mclocks/s, 5 markers, 692330 read mismatches
+  ... 27189248 records (62.6%), 7111662805 clocks, 11148 records/s, 2.92 Mclocks/s, 5 markers, 692346 read mismatches
+  ... 27217920 records (62.7%), 7118723910 clocks, 11149 records/s, 2.92 Mclocks/s, 5 markers, 692362 read mismatches
+  ... 27246592 records (62.8%), 7125783925 clocks, 11150 records/s, 2.92 Mclocks/s, 5 markers, 692378 read mismatches
+  ... 27275264 records (62.8%), 7132846450 clocks, 11151 records/s, 2.92 Mclocks/s, 5 markers, 692394 read mismatches
+  ... 27303936 records (62.9%), 7139909645 clocks, 11152 records/s, 2.92 Mclocks/s, 5 markers, 692410 read mismatches
+  ... 27332608 records (63.0%), 7146973815 clocks, 11153 records/s, 2.92 Mclocks/s, 5 markers, 692426 read mismatches
+  ... 27361280 records (63.0%), 7154040820 clocks, 11154 records/s, 2.92 Mclocks/s, 5 markers, 692442 read mismatches
+  ... 27394048 records (63.1%), 7161181763 clocks, 11155 records/s, 2.92 Mclocks/s, 5 markers, 692458 read mismatches
+  ... 27422720 records (63.2%), 7168250158 clocks, 11156 records/s, 2.92 Mclocks/s, 5 markers, 692474 read mismatches
+  ... 27451392 records (63.2%), 7175322318 clocks, 11156 records/s, 2.92 Mclocks/s, 5 markers, 692490 read mismatches
+  ... 27480064 records (63.3%), 7182393188 clocks, 11156 records/s, 2.92 Mclocks/s, 5 markers, 692506 read mismatches
+  ... 27508736 records (63.4%), 7189467633 clocks, 11157 records/s, 2.92 Mclocks/s, 5 markers, 692522 read mismatches
+  ... 27537408 records (63.4%), 7196543008 clocks, 11157 records/s, 2.92 Mclocks/s, 5 markers, 692538 read mismatches
+  ... 27570176 records (63.5%), 7203687701 clocks, 11160 records/s, 2.92 Mclocks/s, 5 markers, 692554 read mismatches
+  ... 27598848 records (63.6%), 7210765151 clocks, 11161 records/s, 2.92 Mclocks/s, 5 markers, 692570 read mismatches
+  ... 27627520 records (63.7%), 7217843011 clocks, 11161 records/s, 2.92 Mclocks/s, 5 markers, 692586 read mismatches
+  ... 27656192 records (63.7%), 7224923126 clocks, 11162 records/s, 2.92 Mclocks/s, 5 markers, 692602 read mismatches
+  ... 27684864 records (63.8%), 7232002056 clocks, 11163 records/s, 2.92 Mclocks/s, 5 markers, 692618 read mismatches
+  ... 27713536 records (63.9%), 7239082911 clocks, 11164 records/s, 2.92 Mclocks/s, 5 markers, 692634 read mismatches
+  ... 27742208 records (63.9%), 7246165481 clocks, 11165 records/s, 2.92 Mclocks/s, 5 markers, 692650 read mismatches
+  ... 27774976 records (64.0%), 7253314264 clocks, 11167 records/s, 2.92 Mclocks/s, 5 markers, 692666 read mismatches
+  ... 27803648 records (64.1%), 7260395009 clocks, 11168 records/s, 2.92 Mclocks/s, 5 markers, 692682 read mismatches
+  ... 27832320 records (64.1%), 7267476149 clocks, 11168 records/s, 2.92 Mclocks/s, 5 markers, 692698 read mismatches
+  ... 27860992 records (64.2%), 7274556009 clocks, 11169 records/s, 2.92 Mclocks/s, 5 markers, 692714 read mismatches
+  ... 27889664 records (64.3%), 7281637419 clocks, 11170 records/s, 2.92 Mclocks/s, 5 markers, 692730 read mismatches
+  ... 27918336 records (64.3%), 7288717149 clocks, 11171 records/s, 2.92 Mclocks/s, 5 markers, 692746 read mismatches
+  ... 27947008 records (64.4%), 7295796954 clocks, 11172 records/s, 2.92 Mclocks/s, 5 markers, 692762 read mismatches
+  ... 27975680 records (64.5%), 7302875779 clocks, 11173 records/s, 2.92 Mclocks/s, 5 markers, 692778 read mismatches
+  ... 28004352 records (64.5%), 7309955309 clocks, 11170 records/s, 2.92 Mclocks/s, 5 markers, 692794 read mismatches
+  ... 28037120 records (64.6%), 7317101382 clocks, 11172 records/s, 2.92 Mclocks/s, 5 markers, 692810 read mismatches
+  ... 28065792 records (64.7%), 7324177347 clocks, 11173 records/s, 2.92 Mclocks/s, 5 markers, 692826 read mismatches
+  ... 28094464 records (64.7%), 7331254377 clocks, 11174 records/s, 2.92 Mclocks/s, 5 markers, 692842 read mismatches
+  ... 28123136 records (64.8%), 7338328437 clocks, 11175 records/s, 2.92 Mclocks/s, 5 markers, 692858 read mismatches
+  ... 28151808 records (64.9%), 7345402507 clocks, 11176 records/s, 2.92 Mclocks/s, 5 markers, 692874 read mismatches
+  ... 28180480 records (64.9%), 7352476047 clocks, 11177 records/s, 2.92 Mclocks/s, 5 markers, 692890 read mismatches
+  ... 28209152 records (65.0%), 7359547402 clocks, 11178 records/s, 2.92 Mclocks/s, 5 markers, 692906 read mismatches
+  ... 28237824 records (65.1%), 7366616702 clocks, 11179 records/s, 2.92 Mclocks/s, 5 markers, 692922 read mismatches
+  ... 28266496 records (65.1%), 7373684737 clocks, 11180 records/s, 2.92 Mclocks/s, 5 markers, 692938 read mismatches
+  ... 28295168 records (65.2%), 7380750797 clocks, 11181 records/s, 2.92 Mclocks/s, 5 markers, 693019 read mismatches
+  ... 28323840 records (65.3%), 7387817442 clocks, 11181 records/s, 2.92 Mclocks/s, 5 markers, 693035 read mismatches
+  ... 28352512 records (65.3%), 7394881862 clocks, 11182 records/s, 2.92 Mclocks/s, 5 markers, 693051 read mismatches
+  ... 28377088 records (65.4%), 7401879609 clocks, 11182 records/s, 2.92 Mclocks/s, 5 markers, 693067 read mismatches
+  ... 28405760 records (65.4%), 7408940229 clocks, 11182 records/s, 2.92 Mclocks/s, 5 markers, 693083 read mismatches
+  ... 28434432 records (65.5%), 7415999029 clocks, 11183 records/s, 2.92 Mclocks/s, 5 markers, 693099 read mismatches
+  ... 28463104 records (65.6%), 7423057779 clocks, 11184 records/s, 2.92 Mclocks/s, 5 markers, 693115 read mismatches
+  ... 28491776 records (65.6%), 7430112894 clocks, 11185 records/s, 2.92 Mclocks/s, 5 markers, 693131 read mismatches
+  ... 28520448 records (65.7%), 7437167099 clocks, 11186 records/s, 2.92 Mclocks/s, 5 markers, 693147 read mismatches
+  ... 28549120 records (65.8%), 7444220599 clocks, 11187 records/s, 2.92 Mclocks/s, 5 markers, 693163 read mismatches
+  ... 28573696 records (65.8%), 7451210636 clocks, 11187 records/s, 2.92 Mclocks/s, 5 markers, 693179 read mismatches
+  ... 28602368 records (65.9%), 7458261681 clocks, 11188 records/s, 2.92 Mclocks/s, 5 markers, 693195 read mismatches
+  ... 28631040 records (66.0%), 7465313766 clocks, 11189 records/s, 2.92 Mclocks/s, 5 markers, 693211 read mismatches
+  ... 28659712 records (66.0%), 7472364146 clocks, 11189 records/s, 2.92 Mclocks/s, 5 markers, 693227 read mismatches
+  ... 28688384 records (66.1%), 7479394501 clocks, 11190 records/s, 2.92 Mclocks/s, 5 markers, 694505 read mismatches
+  ... 28717056 records (66.2%), 7486443306 clocks, 11191 records/s, 2.92 Mclocks/s, 5 markers, 694521 read mismatches
+  ... 28741632 records (66.2%), 7493422443 clocks, 11191 records/s, 2.92 Mclocks/s, 5 markers, 694537 read mismatches
+  ... 28770304 records (66.3%), 7500468288 clocks, 11191 records/s, 2.92 Mclocks/s, 5 markers, 694553 read mismatches
+  ... 28798976 records (66.4%), 7507512303 clocks, 11192 records/s, 2.92 Mclocks/s, 5 markers, 694569 read mismatches
+  ... 28827648 records (66.4%), 7514557373 clocks, 11193 records/s, 2.92 Mclocks/s, 5 markers, 694585 read mismatches
+  ... 28852224 records (66.5%), 7521533610 clocks, 11192 records/s, 2.92 Mclocks/s, 5 markers, 694617 read mismatches
+  ... 28880896 records (66.5%), 7528576825 clocks, 11193 records/s, 2.92 Mclocks/s, 5 markers, 694641 read mismatches
+  ... 28909568 records (66.6%), 7535620465 clocks, 11194 records/s, 2.92 Mclocks/s, 5 markers, 694657 read mismatches
+  ... 28934144 records (66.7%), 7542595977 clocks, 11193 records/s, 2.92 Mclocks/s, 5 markers, 694673 read mismatches
+  ... 28962816 records (66.7%), 7549637877 clocks, 11194 records/s, 2.92 Mclocks/s, 5 markers, 694689 read mismatches
+  ... 28991488 records (66.8%), 7556680412 clocks, 11195 records/s, 2.92 Mclocks/s, 5 markers, 694705 read mismatches
+  ... 29020160 records (66.9%), 7563723587 clocks, 11196 records/s, 2.92 Mclocks/s, 5 markers, 694721 read mismatches
+  ... 29048832 records (66.9%), 7570764402 clocks, 11197 records/s, 2.92 Mclocks/s, 5 markers, 694737 read mismatches
+  ... 29073408 records (67.0%), 7577735869 clocks, 11196 records/s, 2.92 Mclocks/s, 5 markers, 694753 read mismatches
+  ... 29102080 records (67.1%), 7584779879 clocks, 11196 records/s, 2.92 Mclocks/s, 5 markers, 694769 read mismatches
+  ... 29130752 records (67.1%), 7591823049 clocks, 11197 records/s, 2.92 Mclocks/s, 5 markers, 694785 read mismatches
+  ... 29159424 records (67.2%), 7598868764 clocks, 11197 records/s, 2.92 Mclocks/s, 5 markers, 694801 read mismatches
+  ... 29188096 records (67.3%), 7605912329 clocks, 11198 records/s, 2.92 Mclocks/s, 5 markers, 694817 read mismatches
+  ... 29212672 records (67.3%), 7612886821 clocks, 11197 records/s, 2.92 Mclocks/s, 5 markers, 694833 read mismatches
+  ... 29241344 records (67.4%), 7619932421 clocks, 11198 records/s, 2.92 Mclocks/s, 5 markers, 694849 read mismatches
+  ... 29270016 records (67.4%), 7626978261 clocks, 11199 records/s, 2.92 Mclocks/s, 5 markers, 694865 read mismatches
+  ... 29298688 records (67.5%), 7634026551 clocks, 11200 records/s, 2.92 Mclocks/s, 5 markers, 694881 read mismatches
+  ... 29327360 records (67.6%), 7641076266 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 694897 read mismatches
+  ... 29356032 records (67.6%), 7648125921 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 694913 read mismatches
+  ... 29384704 records (67.7%), 7655176088 clocks, 11203 records/s, 2.92 Mclocks/s, 5 markers, 694929 read mismatches
+  ... 29413376 records (67.8%), 7662228286 clocks, 11204 records/s, 2.92 Mclocks/s, 5 markers, 694945 read mismatches
+  ... 29442048 records (67.8%), 7669280236 clocks, 11204 records/s, 2.92 Mclocks/s, 5 markers, 694961 read mismatches
+  ... 29470720 records (67.9%), 7676336766 clocks, 11204 records/s, 2.92 Mclocks/s, 5 markers, 694977 read mismatches
+  ... 29499392 records (68.0%), 7683394061 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 694993 read mismatches
+  ... 29523968 records (68.0%), 7690385168 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 695009 read mismatches
+  ... 29552640 records (68.1%), 7697447508 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 695025 read mismatches
+  ... 29581312 records (68.2%), 7704510728 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 695041 read mismatches
+  ... 29609984 records (68.2%), 7711577063 clocks, 11203 records/s, 2.92 Mclocks/s, 5 markers, 695057 read mismatches
+  ... 29642752 records (68.3%), 7718713051 clocks, 11206 records/s, 2.92 Mclocks/s, 5 markers, 695073 read mismatches
+  ... 29671424 records (68.4%), 7725781911 clocks, 11206 records/s, 2.92 Mclocks/s, 5 markers, 695089 read mismatches
+  ... 29700096 records (68.4%), 7732851491 clocks, 11207 records/s, 2.92 Mclocks/s, 5 markers, 695105 read mismatches
+  ... 29728768 records (68.5%), 7739922446 clocks, 11208 records/s, 2.92 Mclocks/s, 5 markers, 695121 read mismatches
+  ... 29757440 records (68.6%), 7746994336 clocks, 11209 records/s, 2.92 Mclocks/s, 5 markers, 695141 read mismatches
+  ... 29786112 records (68.6%), 7754066216 clocks, 11210 records/s, 2.92 Mclocks/s, 5 markers, 695157 read mismatches
+  ... 29814784 records (68.7%), 7761139481 clocks, 11211 records/s, 2.92 Mclocks/s, 5 markers, 695173 read mismatches
+  ... 29843456 records (68.8%), 7768212026 clocks, 11212 records/s, 2.92 Mclocks/s, 5 markers, 695189 read mismatches
+  ... 29872128 records (68.8%), 7775283606 clocks, 11213 records/s, 2.92 Mclocks/s, 5 markers, 695205 read mismatches
+  ... 29900800 records (68.9%), 7782355316 clocks, 11214 records/s, 2.92 Mclocks/s, 5 markers, 695221 read mismatches
+  ... 29929472 records (69.0%), 7789409086 clocks, 11215 records/s, 2.92 Mclocks/s, 5 markers, 696686 read mismatches
+  ... 29958144 records (69.0%), 7796480006 clocks, 11216 records/s, 2.92 Mclocks/s, 5 markers, 696702 read mismatches
+  ... 29986816 records (69.1%), 7803548386 clocks, 11217 records/s, 2.92 Mclocks/s, 5 markers, 696718 read mismatches
+  ... 30015488 records (69.2%), 7810617501 clocks, 11218 records/s, 2.92 Mclocks/s, 5 markers, 696734 read mismatches
+  ... 30044160 records (69.2%), 7817683031 clocks, 11219 records/s, 2.92 Mclocks/s, 5 markers, 696750 read mismatches
+  ... 30072832 records (69.3%), 7824744111 clocks, 11219 records/s, 2.92 Mclocks/s, 5 markers, 696766 read mismatches
+  ... 30101504 records (69.4%), 7831806621 clocks, 11220 records/s, 2.92 Mclocks/s, 5 markers, 696782 read mismatches
+  ... 30126080 records (69.4%), 7838805538 clocks, 11220 records/s, 2.92 Mclocks/s, 5 markers, 696798 read mismatches
+  ... 30154752 records (69.5%), 7845858143 clocks, 11221 records/s, 2.92 Mclocks/s, 5 markers, 696814 read mismatches
+  ... 30183424 records (69.5%), 7852909918 clocks, 11221 records/s, 2.92 Mclocks/s, 5 markers, 696830 read mismatches
+  ... 30212096 records (69.6%), 7859956353 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 696846 read mismatches
+  ... 30236672 records (69.7%), 7866948030 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 696862 read mismatches
+  ... 30265344 records (69.7%), 7873985040 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 696878 read mismatches
+  ... 30294016 records (69.8%), 7881017615 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 696894 read mismatches
+  ... 30318592 records (69.9%), 7887996087 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 696910 read mismatches
+  ... 30347264 records (69.9%), 7895015417 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 696926 read mismatches
+  ... 30371840 records (70.0%), 7901985409 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 696942 read mismatches
+  ... 30400512 records (70.0%), 7908988199 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 696958 read mismatches
+  ... 30425088 records (70.1%), 7915944611 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 696974 read mismatches
+  ... 30453760 records (70.2%), 7922933986 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 696990 read mismatches
+  ... 30478336 records (70.2%), 7929875788 clocks, 11224 records/s, 2.92 Mclocks/s, 5 markers, 697006 read mismatches
+  ... 30502912 records (70.3%), 7936814310 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 697022 read mismatches
+  ... 30527488 records (70.3%), 7943744922 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 697038 read mismatches
+  ... 30556160 records (70.4%), 7950694297 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 697054 read mismatches
+  ... 30580736 records (70.5%), 7957608204 clocks, 11223 records/s, 2.92 Mclocks/s, 5 markers, 697070 read mismatches
+  ... 30605312 records (70.5%), 7964514131 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 697086 read mismatches
+  ... 30629888 records (70.6%), 7971412318 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 697102 read mismatches
+  ... 30654464 records (70.6%), 7978302560 clocks, 11222 records/s, 2.92 Mclocks/s, 5 markers, 697118 read mismatches
+  ... 30679040 records (70.7%), 7985185577 clocks, 11221 records/s, 2.92 Mclocks/s, 5 markers, 697134 read mismatches
+  ... 30703616 records (70.7%), 7992062679 clocks, 11221 records/s, 2.92 Mclocks/s, 5 markers, 697150 read mismatches
+  ... 30724096 records (70.8%), 7998905233 clocks, 11219 records/s, 2.92 Mclocks/s, 5 markers, 697166 read mismatches
+  ... 30748672 records (70.8%), 8005769805 clocks, 11218 records/s, 2.92 Mclocks/s, 5 markers, 697182 read mismatches
+  ... 30773248 records (70.9%), 8012630512 clocks, 11218 records/s, 2.92 Mclocks/s, 5 markers, 697198 read mismatches
+  ... 30797824 records (71.0%), 8019484589 clocks, 11218 records/s, 2.92 Mclocks/s, 5 markers, 697214 read mismatches
+  ... 30822400 records (71.0%), 8026334011 clocks, 11217 records/s, 2.92 Mclocks/s, 5 markers, 697230 read mismatches
+  ... 30842880 records (71.1%), 8033138530 clocks, 11215 records/s, 2.92 Mclocks/s, 5 markers, 697246 read mismatches
+  ... 30867456 records (71.1%), 8039983742 clocks, 11215 records/s, 2.92 Mclocks/s, 5 markers, 697262 read mismatches
+  ... 30892032 records (71.2%), 8046823754 clocks, 11215 records/s, 2.92 Mclocks/s, 5 markers, 697278 read mismatches
+  ... 30912512 records (71.2%), 8053610833 clocks, 11213 records/s, 2.92 Mclocks/s, 5 markers, 697294 read mismatches
+  ... 30937088 records (71.3%), 8060448845 clocks, 11213 records/s, 2.92 Mclocks/s, 5 markers, 697310 read mismatches
+  ... 30961664 records (71.3%), 8067284992 clocks, 11212 records/s, 2.92 Mclocks/s, 5 markers, 697326 read mismatches
+  ... 30982144 records (71.4%), 8074061231 clocks, 11210 records/s, 2.92 Mclocks/s, 5 markers, 697342 read mismatches
+  ... 31006720 records (71.4%), 8080896983 clocks, 11210 records/s, 2.92 Mclocks/s, 5 markers, 697358 read mismatches
+  ... 31031296 records (71.5%), 8087728695 clocks, 11210 records/s, 2.92 Mclocks/s, 5 markers, 697374 read mismatches
+  ... 31055872 records (71.6%), 8094559562 clocks, 11210 records/s, 2.92 Mclocks/s, 5 markers, 697390 read mismatches
+  ... 31076352 records (71.6%), 8101332001 clocks, 11208 records/s, 2.92 Mclocks/s, 5 markers, 697479 read mismatches
+  ... 31100928 records (71.7%), 8108165588 clocks, 11207 records/s, 2.92 Mclocks/s, 5 markers, 697495 read mismatches
+  ... 31125504 records (71.7%), 8115001385 clocks, 11207 records/s, 2.92 Mclocks/s, 5 markers, 697511 read mismatches
+  ... 31150080 records (71.8%), 8121838677 clocks, 11207 records/s, 2.92 Mclocks/s, 5 markers, 697527 read mismatches
+  ... 31170560 records (71.8%), 8128614726 clocks, 11205 records/s, 2.92 Mclocks/s, 5 markers, 697543 read mismatches
+  ... 31195136 records (71.9%), 8135455263 clocks, 11205 records/s, 2.92 Mclocks/s, 5 markers, 697559 read mismatches
+  ... 31219712 records (71.9%), 8142298825 clocks, 11204 records/s, 2.92 Mclocks/s, 5 markers, 697576 read mismatches
+  ... 31244288 records (72.0%), 8149147982 clocks, 11204 records/s, 2.92 Mclocks/s, 5 markers, 697592 read mismatches
+  ... 31268864 records (72.0%), 8156000229 clocks, 11203 records/s, 2.92 Mclocks/s, 5 markers, 697608 read mismatches
+  ... 31293440 records (72.1%), 8162855591 clocks, 11203 records/s, 2.92 Mclocks/s, 5 markers, 697624 read mismatches
+  ... 31318016 records (72.2%), 8169716443 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 697640 read mismatches
+  ... 31342592 records (72.2%), 8176582840 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 697656 read mismatches
+  ... 31367168 records (72.3%), 8183455352 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 697672 read mismatches
+  ... 31391744 records (72.3%), 8190333134 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697688 read mismatches
+  ... 31416320 records (72.4%), 8197219976 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697704 read mismatches
+  ... 31440896 records (72.4%), 8204114243 clocks, 11200 records/s, 2.92 Mclocks/s, 5 markers, 697720 read mismatches
+  ... 31469568 records (72.5%), 8211083763 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697736 read mismatches
+  ... 31494144 records (72.6%), 8217992855 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697752 read mismatches
+  ... 31518720 records (72.6%), 8224909302 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697768 read mismatches
+  ... 31547392 records (72.7%), 8231902617 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 697784 read mismatches
+  ... 31571968 records (72.7%), 8238832024 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697800 read mismatches
+  ... 31600640 records (72.8%), 8245841479 clocks, 11202 records/s, 2.92 Mclocks/s, 5 markers, 697816 read mismatches
+  ... 31625216 records (72.9%), 8252783876 clocks, 11201 records/s, 2.92 Mclocks/s, 5 markers, 697832 read mismatches
+  ... 31780864 records (73.2%), 8259579950 clocks, 11249 records/s, 2.92 Mclocks/s, 5 markers, 698159 read mismatches
+  marker 5 at record 31780920 (stamp 15227578219, clock 8259580340): dumped /home/dani/glreplay/b44full/core_rgb_0005.bin, /home/dani/glreplay/b44full/core_aux_0005.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 32223232 records (74.2%), 8265330474 clocks, 11397 records/s, 2.92 Mclocks/s, 6 markers, 699286 read mismatches
+  ... 32673792 records (75.3%), 8271119498 clocks, 11548 records/s, 2.92 Mclocks/s, 6 markers, 699725 read mismatches
+  ... 33107968 records (76.3%), 8277015505 clocks, 11693 records/s, 2.92 Mclocks/s, 6 markers, 700201 read mismatches
+  ... 33554432 records (77.3%), 8282842505 clocks, 11843 records/s, 2.92 Mclocks/s, 6 markers, 700631 read mismatches
+  ... 34013184 records (78.4%), 8288716927 clocks, 11996 records/s, 2.92 Mclocks/s, 6 markers, 701041 read mismatches
+  ... 34455552 records (79.4%), 8294594097 clocks, 12143 records/s, 2.92 Mclocks/s, 6 markers, 701476 read mismatches
+  ... 34889728 records (80.4%), 8300332647 clocks, 12288 records/s, 2.92 Mclocks/s, 6 markers, 701882 read mismatches
+  ... 35348480 records (81.4%), 8306185515 clocks, 12441 records/s, 2.92 Mclocks/s, 6 markers, 702280 read mismatches
+  ... 35803136 records (82.5%), 8311979685 clocks, 12592 records/s, 2.92 Mclocks/s, 6 markers, 702674 read mismatches
+  ... 36245504 records (83.5%), 8317814559 clocks, 12738 records/s, 2.92 Mclocks/s, 6 markers, 703096 read mismatches
+  ... 36683776 records (84.5%), 8323633795 clocks, 12883 records/s, 2.92 Mclocks/s, 6 markers, 703539 read mismatches
+  ... 37126144 records (85.5%), 8329423532 clocks, 13029 records/s, 2.92 Mclocks/s, 6 markers, 704196 read mismatches
+  marker 6 at record 37279752 (stamp 17370010720, clock 8331415140): dumped /home/dani/glreplay/b44full/core_rgb_0006.bin, /home/dani/glreplay/b44full/core_aux_0006.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  ... 37564416 records (86.6%), 8335189867 clocks, 13174 records/s, 2.92 Mclocks/s, 7 markers, 704637 read mismatches
+  ... 38014976 records (87.6%), 8341029727 clocks, 13322 records/s, 2.92 Mclocks/s, 7 markers, 705087 read mismatches
+  ... 38473728 records (88.6%), 8346818225 clocks, 13474 records/s, 2.92 Mclocks/s, 7 markers, 705497 read mismatches
+  ... 39550976 records (91.1%), 8352711823 clocks, 13841 records/s, 2.92 Mclocks/s, 7 markers, 705675 read mismatches
+  ... 40718336 records (93.8%), 8358674728 clocks, 14240 records/s, 2.92 Mclocks/s, 7 markers, 705806 read mismatches
+  ... 41906176 records (96.6%), 8364678386 clocks, 14645 records/s, 2.92 Mclocks/s, 7 markers, 705934 read mismatches
+  ... 43098112 records (99.3%), 8370610888 clocks, 15051 records/s, 2.92 Mclocks/s, 7 markers, 706051 read mismatches
+  marker 7 at record 43386178 (stamp 19439273201, clock 8372135479): dumped /home/dani/glreplay/b44full/core_rgb_0007.bin, /home/dani/glreplay/b44full/core_aux_0007.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  marker 8 at record 43394251 (stamp 22022744444, clock 8372230722): dumped /home/dani/glreplay/b44full/core_rgb_0008.bin, /home/dani/glreplay/b44full/core_aux_0008.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+  marker 9 at record 43397980 (stamp 24578914442, clock 8372350117): dumped /home/dani/glreplay/b44full/core_rgb_0009.bin, /home/dani/glreplay/b44full/core_aux_0009.bin
+    rgb: identical to IRIS (mask 00ffffff)
+    aux: identical to IRIS (mask 00ffffff)
+
+== replay summary ==
+records: 43401483 replayed, 40814203 CPU write 32, 1743388 CPU write 64, 829476 CPU read 32, 14406 DMA write 64, 10 MARKER
+flags values seen: 00
+emulations: none (the RTL as it is)
+speed: 2864.18 s wall, 8372374565 clocks: 15153 records/s, 2.92 Mclocks/s
+frame buffer: 1631708093 reads, 1666988472 writes by REX3, 12025464626 display reads, 0 protocol errors, 0 out of range
+reads compared: 829476, mismatching IRIS: 709866
+  kind         reg    name              reads   mismatch
+  CPU read 32  0x0000 DRAWMODE1          2440          1
+  CPU read 32  0x0004 DRAWMODE0          2430          0
+  CPU read 32  0x0008 LSMODE             2434          0
+  CPU read 32  0x000c LSPATTERN          2434          0
+  CPU read 32  0x0010 LSPATSAVE          2434          0
+  CPU read 32  0x0014 ZPATTERN           2434          0
+  CPU read 32  0x0018 COLORBACK          2434          0
+  CPU read 32  0x001c COLORVRAM          2434          0
+  CPU read 32  0x0020 ALPHAREF           2434          0
+  CPU read 32  0x0028 SMASK0X            2434          0
+  CPU read 32  0x002c SMASK0Y            2434          0
+  CPU read 32  0x007c ?                     6          0
+  CPU read 32  0x0100 XSTART             2446         14
+  CPU read 32  0x0104 YSTART             2438          0
+  CPU read 32  0x0108 XEND               2442          0
+  CPU read 32  0x010c YEND               2434          0
+  CPU read 32  0x0110 XSAVE              2434          0
+  CPU read 32  0x0114 XYMOVE             2434          0
+  CPU read 32  0x0118 BRESD              2434          0
+  CPU read 32  0x011c BRESS1             2434          0
+  CPU read 32  0x0120 BRESOCTINC1        2434          0
+  CPU read 32  0x0124 BRESRNDINC2        2434          0
+  CPU read 32  0x0128 BRESE1             2434          0
+  CPU read 32  0x012c BRESS2             2434          0
+  CPU read 32  0x0130 AWEIGHT0           2434          0
+  CPU read 32  0x0134 AWEIGHT1           2434          0
+  CPU read 32  0x0200 COLORRED           2434          0
+  CPU read 32  0x0204 COLORALPHA         2434          0
+  CPU read 32  0x0208 COLORGRN           2434          0
+  CPU read 32  0x020c COLORBLUE          2434          1
+  CPU read 32  0x0210 SLOPERED           2434          0
+  CPU read 32  0x0214 SLOPEALPHA         2434          0
+  CPU read 32  0x0218 SLOPEGRN           2434          0
+  CPU read 32  0x021c SLOPEBLUE          2434          0
+  CPU read 32  0x0220 WRMASK             2434          0
+  CPU read 32  0x0230 HOSTRW0            2560          1
+  CPU read 32  0x0234 HOSTRW1            2434          0
+  CPU read 32  0x0238 DCBMODE            5011         10
+  CPU read 32  0x0240 DCBDATA0           2693       2684
+  CPU read 32  0x1300 SMASK1X            2443          0
+  CPU read 32  0x1304 SMASK1Y            2443          0
+  CPU read 32  0x1308 SMASK2X            2438          0
+  CPU read 32  0x130c SMASK2Y            2438          0
+  CPU read 32  0x1310 SMASK3X            2438          0
+  CPU read 32  0x1314 SMASK3Y            2438          0
+  CPU read 32  0x1318 SMASK4X            2438          0
+  CPU read 32  0x131c SMASK4Y            2438          0
+  CPU read 32  0x1320 TOPSCAN               5          0
+  CPU read 32  0x1324 XYWIN              2436          0
+  CPU read 32  0x1328 CLIPMODE           2446          0
+  CPU read 32  0x1330 CONFIG             2434          0
+  CPU read 32  0x1338 STATUS            10946      10946   (busy bits and VERSION differ by design)
+  CPU read 32  0x133c USER_STATUS      696209     696209   (busy bits and VERSION differ by design)
+markers: 10 dumped, 20 plane sets compared, 0 markers with differences
+[06:32:59] GLREPLAY b44full rc=0
