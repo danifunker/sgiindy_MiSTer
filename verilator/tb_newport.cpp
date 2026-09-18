@@ -10,30 +10,31 @@
 //  their second word (3.1, 4.4), GL's float coordinates keep four exponent
 //  bits (4.1), and a write to SETUP does nothing (4.1, 4.2). Reads are not
 //  ordered behind the drawing engine and VDMA drops buffers at 4 mod 8
-//  (4.4). The tests below state the correct behaviour; the ones marked
-//  "expected to fail before build 44" fail on the build 43b RTL this bench
-//  was written against, and define the fixes of docs/56 section 5's phase 1.
+//  (4.4). The tests below state the correct behaviour. They were written
+//  against the build 43b RTL, on which 2b, 3a, 3b, 4b, 5d, 5f, 6b, 7a-7d, 8a,
+//  8b and 9 failed; those failures defined the fixes of docs/56 section 5's
+//  phase 1, and build 44 passes all of them. Every check is must-pass.
 //
 //    1  32-bit register writes read back through both word lanes
-//    2  XYSTARTI + XYENDI in one 64-bit store with GO           (2b xfail)
-//    3  COLORRED+COLORALPHA, COLORGRN+COLORBLUE as 64-bit stores (xfail)
-//    4  HOSTRW0 + HOSTRW1 in one 64-bit store with GO            (4b xfail)
-//    5  reads behind a running primitive; STATUS must not wait  (5d, 5f xfail)
-//    6  VDMA beats with the start byte in nd_addr[2:0]          (6b xfail)
-//    7  GL-format float coordinates, XENDF1                      (xfail)
-//    8  SETUP (0x0030) without DOSETUP                           (xfail)
+//    2  XYSTARTI + XYENDI in one 64-bit store with GO
+//    3  COLORRED+COLORALPHA, COLORGRN+COLORBLUE as 64-bit stores
+//    4  HOSTRW0 + HOSTRW1 in one 64-bit store with GO
+//    5  reads behind a running primitive; STATUS must not wait
+//    6  VDMA beats with the start byte in nd_addr[2:0]
+//    7  GL-format float coordinates, XENDF1
+//    8  SETUP (0x0030) without DOSETUP
 //    9  display column alignment: VC2, XMAP9 and CMAP programmed over the
 //       DCB as the PROM does, markers in the frame buffer, the pins watched:
-//       pixel N of the 1280-pixel window is column 8 + N         (xfail)
+//       pixel N of the 1280-pixel window is column 8 + N
 //
 //  Every test starts from a reset and a cleared frame buffer, and a draw
 //  check is a whole-frame-buffer difference against a snapshot taken just
 //  before the primitive: the rectangle must have changed to the expected
 //  values, and nothing else anywhere may have changed.
 //
-//  Exit status: 0 when every check expected to pass does; with --strict (or
-//  NEWPORT_STRICT=1) the expected failures count too - the gate for build
-//  44 and after.
+//  Exit status: 0 when every check expected to pass does. A check written
+//  ahead of its fix can pass report() an expected-failure reason; with
+//  --strict (or NEWPORT_STRICT=1) those failures count too. None is marked.
 //
 //    make -C verilator newporttest
 //    ./obj_dir_newport/Vnewport_test [--fb-lat N] [--strict] [test numbers]
@@ -55,23 +56,27 @@ static bool     g_hung = false;
 //============================================================================
 //  Reporting
 //============================================================================
-static const char *XFAIL_LABEL = "expected to fail before build 44";
+static const char *XFAIL_LABEL = "expected to fail on this RTL";
 
-static const char *XF_SPLIT =
-    "docs/56 3.1 + 4.4 - newport.sv keeps the first register of a doubleword "
-    "store and drops the second; its GO fires with the first";
-static const char *XF_READS =
-    "docs/56 4.4 - np_rex3 answers every read at once, not after the earlier "
-    "writes and GOs have taken effect, and merges back-to-back GOs";
-static const char *XF_VDMA =
-    "docs/56 4.4 - np_rex3 keeps bit 2 of the start byte, so the beat decodes "
-    "as HOSTRW1 and is acknowledged and dropped";
-static const char *XF_GLCOORD =
-    "docs/56 4.1 + 4.2 - GL-format coordinates are masked 0x07FFFF80 where "
-    "the chip keeps float bits 22:7 (0x007FFF80), and 0x14C is decoded as an "
-    "integer XENDI instead of XENDF1";
-static const char *XF_SETUP =
-    "docs/56 4.1 - a write to SETUP is stored, not run";
+// What the build 43b RTL got wrong, per test group - the defects build 44
+// fixed (docs/56 section 5, phase 1), kept here because a failure of the
+// matching check most likely means one of them is back:
+//   2b 3a 3b 4b 7c  newport.sv kept the first register of a doubleword store
+//                   and dropped the second; its GO fired with the first
+//                   (docs/56 3.1 + 4.4)
+//   5d 5f           np_rex3 answered every read at once, not after the earlier
+//                   writes and GOs had taken effect, and merged back-to-back
+//                   GOs (4.4)
+//   6b              np_rex3 kept bit 2 of the start byte, so the beat decoded
+//                   as HOSTRW1 and was acknowledged and dropped (4.4)
+//   7a-7d           GL-format coordinates were masked 0x07FFFF80 where the
+//                   chip keeps float bits 22:7 (0x007FFF80), and 0x14C was
+//                   decoded as an integer XENDI instead of XENDF1 (4.1 + 4.2)
+//   8a 8b           a write to SETUP was stored, not run (4.1)
+//   9               the display window: display enable from VIS_LN, cropped
+//                   to columns 8..1287, and ce_pix and the syncs delayed by
+//                   the colour path's three CLOCKS - three ce_pix stages slip
+//                   at VC2's table-fetch stalls (3.6 + 4.5)
 
 struct Tally { int pass = 0, fail = 0, xfail = 0, xpass = 0; };
 static Tally                    T;
@@ -353,7 +358,7 @@ static void t2_xy64()
     settle();
     r = check_draw(s, 100, 50, 139, 57, [](int, int) { return 0x3C; });
     report("2b", "one 64-bit store to 0x950 = {XYSTARTI, XYENDI} with GO draws XYSTARTI..XYENDI",
-           r.ok, XF_SPLIT, r.detail);
+           r.ok, nullptr, r.detail);
 }
 
 //============================================================================
@@ -375,7 +380,7 @@ static void t3_color64()
                          reg_name(reg), a, hi, reg_name(reg + 4), b, lo));
         report(id, strf("one 64-bit store to 0x%03x = {%s, %s}: both read back with 32-bit loads",
                         reg, reg_name(reg), reg_name(reg + 4)),
-               !g_hung && a == hi && b == lo, XF_SPLIT, d);
+               !g_hung && a == hi && b == lo, nullptr, d);
     };
     pair("3a", R_COLORRED, 0x000A5A5A, 0x000C3C3C);
     pair("3b", R_COLORGRN, 0x00012345, 0x00067890);
@@ -410,7 +415,7 @@ static void t4_host64()
     settle();
     r = check_draw(s, 620, 232, 627, 232, [](int x, int) { return 0x11 + (x - 620); });
     report("4b", "one 64-bit store to HOSTRW0|GO (0xA30): the pixels of both words appear",
-           r.ok, XF_SPLIT, r.detail);
+           r.ok, nullptr, r.detail);
 }
 
 //============================================================================
@@ -467,7 +472,7 @@ static void t5_reads()
            {strf("answered in %llu clocks with %08x, the fill %s",
                  (unsigned long long)cf.lat, cf.v, run_word(cf.running))});
     report("5d", "XSTART and YSTART read straight after the GO return what the fill leaves behind",
-           !g_hung && xs.v == xs_settled && ys.v == ys_settled, XF_READS,
+           !g_hung && xs.v == xs_settled && ys.v == ys_settled, nullptr,
            {strf("XSTART read %08x after %llu clocks (the fill %s); after the fill it is %08x",
                  xs.v, (unsigned long long)xs.lat, run_word(xs.running), xs_settled),
             strf("YSTART read %08x after %llu clocks (the fill %s); after the fill it is %08x",
@@ -511,7 +516,7 @@ static void t5_reads()
            ok_e, nullptr, de);
     bool ok_f = loop(false, df);
     report("5f", "PIO read loop, one REX3WAIT then back-to-back HOSTRW0|GO reads (Xsgi GetImage), "
-                 "returns the 8 words", ok_f, XF_READS, df);
+                 "returns the 8 words", ok_f, nullptr, df);
 }
 
 //============================================================================
@@ -549,7 +554,7 @@ static void t6_vdma()
     report("6a", "VDMA write beats to HOSTRW0|GO with start byte 0..3 are drawn",
            ok_lo && !g_hung, nullptr, d_lo);
     report("6b", "VDMA write beats to HOSTRW0|GO with start byte 4..7 (a buffer at 4 mod 8) "
-                 "are drawn, not dropped", ok_hi && !g_hung, XF_VDMA, d_hi);
+                 "are drawn, not dropped", ok_hi && !g_hung, nullptr, d_hi);
 }
 
 //============================================================================
@@ -573,7 +578,7 @@ static void t7_glcoords()
     r.detail.insert(r.detail.begin(), strf("XSTARTF %08x (4396.0f), YSTARTF %08x, XENDF %08x, YENDF|GO %08x",
                                            glc(300), glc(60), glc(323), glc(65)));
     report("7a", "a block from XSTARTF/YSTARTF/XENDF/YENDF|GO (32-bit stores) lands at x, y",
-           r.ok, XF_GLCOORD, r.detail);
+           r.ok, nullptr, r.detail);
 
     W(R_COLORI, 0x22);
     W(R_XYSTARTI, XY(330, 60));
@@ -583,7 +588,7 @@ static void t7_glcoords()
     settle();
     r = check_draw(s, 330, 60, 353, 65, [](int, int) { return 0x22; });
     report("7b", "XYSTARTI, XYENDI, then XENDF1|GO (0x94C) as a float: the block ends at XENDF1",
-           r.ok, XF_GLCOORD, r.detail);
+           r.ok, nullptr, r.detail);
 
     // IRIS GL's polygon span (__subtri): ONE 64-bit store to 0x948, XSTARTI
     // plus XENDF1, with GO.
@@ -596,8 +601,7 @@ static void t7_glcoords()
     settle();
     r = check_draw(s, 360, 70, 391, 70, [](int, int) { return 0x23; });
     report("7c", "GL's polygon span: one 64-bit store to 0x948 = {XSTARTI 360, XENDF1 391.0} "
-                 "with GO draws 360..391", r.ok, XF_GLCOORD, r.detail);
-    printf("         (7c also needs the doubleword split: %s)\n", XF_SPLIT);
+                 "with GO draws 360..391", r.ok, nullptr, r.detail);
 
     // The float registers read back in the 12.4(7) form (IRIS's to12_4_7),
     // and XSTART/XSTARTI see the integer x.
@@ -605,7 +609,7 @@ static void t7_glcoords()
     uint32_t f = R(R_XSTARTF), xs = R(R_XSTART), xi = R(R_XSTARTI);
     const uint32_t want = 123u << 11;
     report("7d", "XSTARTF written as 4219.0f reads back 0x0003D800; XSTART too, XSTARTI 123",
-           !g_hung && f == want && xs == want && xi == 123, XF_GLCOORD,
+           !g_hung && f == want && xs == want && xi == 123, nullptr,
            {strf("XSTARTF %08x, XSTART %08x, XSTARTI %08x (expected %08x, %08x, %08x)",
                  f, xs, xi, want, want, 123u)});
 }
@@ -658,7 +662,7 @@ static void t8_setup()
                      oct_after, (oct_after >> 24) & 7));
     d.insert(d.end(), r.detail.begin(), r.detail.end());
     report("8a", "BLOCK without DOSETUP: SETUP, then GO walks the octant SETUP derived",
-           pre.ok && oct_ok && r.ok, XF_SETUP, d);
+           pre.ok && oct_ok && r.ok, nullptr, d);
 
     // ---- 8b: a line -----------------------------------------------------------
     // The same line with DOSETUP is the control; the SETUP line must draw
@@ -718,7 +722,7 @@ static void t8_setup()
         d2.push_back(strf("what it drew lies in x %d..%d, y %d..%d", bx0, bx1, by0, by1));
     }
     report("8b", "I_LINE without DOSETUP: SETUP, then GO draws the same pixels as the line with DOSETUP",
-           ok, XF_SETUP, d2);
+           ok, nullptr, d2);
 }
 
 //============================================================================
@@ -951,10 +955,7 @@ static void t9_display()
         }
     }
     report("9", "display column alignment: every pixel of a line's 1280-pixel display window "
-                "is frame buffer column 8 + N, the first one included", ok,
-           "docs/56 3.6 + 4.5 - build 44's display window: display enable from VIS_LN, "
-           "cropped to columns 8..1287, and ce_pix and the syncs delayed by the colour path's "
-           "three CLOCKS (three ce_pix stages slip at VC2's table-fetch stalls)", d);
+                "is frame buffer column 8 + N, the first one included", ok, nullptr, d);
 }
 
 //============================================================================
@@ -970,7 +971,7 @@ int main(int argc, char **argv)
         if (a == "--fb-lat" && i + 1 < argc)       fb_lat = atoi(argv[++i]);
         else if (a == "--strict")                  strict = true;
         else if (a == "-h" || a == "--help") {
-            printf("usage: %s [--fb-lat N] [--strict] [test numbers 1-8]\n", argv[0]);
+            printf("usage: %s [--fb-lat N] [--strict] [test numbers 1-9]\n", argv[0]);
             return 0;
         } else if (a[0] != '+' && isdigit((unsigned char)a[0])) only.insert(atoi(a.c_str()));
     }
@@ -1012,7 +1013,7 @@ int main(int argc, char **argv)
     bool fail = T.fail > 0 || (strict && T.xfail > 0) || H->fbw_proto > 0;
     printf(fail ? "NEWPORTTEST: FAIL%s\n" : "NEWPORTTEST: PASS%s\n",
            strict ? " (strict: expected failures count)"
-                  : " (every check expected to pass on this RTL; --strict counts the rest)");
+                  : T.xfail + T.xpass ? " (--strict counts the expected failures too)" : "");
     delete H;
     return fail ? 1 : 0;
 }

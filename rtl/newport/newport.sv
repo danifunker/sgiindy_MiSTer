@@ -296,6 +296,9 @@ module newport #(
 
     // ---- video timing --------------------------------------------------------
     logic        vc2_hsync, vc2_vsync, vc2_de, vc2_hblank, vc2_vblank, vc2_vint;
+    // VC2's pixel enable, undelayed: what the frame buffer fetch runs on. The
+    // `ce_pix` port is this, delayed to match the colour (see the syncs).
+    logic        vc2_ce;
     logic [10:0] vc2_x, vc2_y;
     logic  [3:0] vc2_dbg_did;
 
@@ -308,7 +311,7 @@ module newport #(
         .width  (dcb_width),
         .wdata  (dcb_wdata),
         .rdata  (vc2_rdata),
-        .ce_pix (ce_pix),
+        .ce_pix (vc2_ce),
         .hsync  (vc2_hsync),
         .vsync  (vc2_vsync),
         .de     (vc2_de),
@@ -382,10 +385,13 @@ module newport #(
     // registers that answer, so the word for the address VC2 emits in cycle
     // t is in `slot_rgb` in cycle t+2. See "THE PIXEL IS TWO CYCLES BEHIND"
     // at the syncs below.
+    //
+    // Two CLOCKS, not two pixel enables - see "THE DELAYS ARE CLOCKS" at the
+    // syncs below.
     logic [4:0] did_q1;
     always_ff @(posedge clk) begin
-        if (reset)       begin did_q1 <= 5'd0; did_q <= 5'd0; end
-        else if (ce_pix) begin did_q1 <= vc2_did; did_q <= did_q1; end
+        if (reset) begin did_q1 <= 5'd0; did_q <= 5'd0; end
+        else       begin did_q1 <= vc2_did; did_q <= did_q1; end
     end
 
     np_xmap9 #(.REVISION(8'd3)) u_xmap0 (
@@ -450,9 +456,9 @@ module newport #(
     logic        req_x0;
 
     wire [31:0] slot_off = (((({21'b0, vc2_y}) << FB_STRIDE_LOG2) + {21'b0, vc2_x}) << 2);
-    assign fbr_req  = ce_pix && vc2_de;
+    assign fbr_req  = vc2_ce && vc2_de;
     assign fbr_addr = FB_BASE + slot_off;
-    assign fba_req  = ce_pix && vc2_de;
+    assign fba_req  = vc2_ce && vc2_de;
     assign fba_addr = FB_BASE + 32'h0080_0000 + slot_off;
 
     always_ff @(posedge clk) begin
@@ -462,7 +468,7 @@ module newport #(
             pix_valid <= 1'b0;
             req_x0    <= 1'b0;
         end else begin
-            if (ce_pix) req_x0 <= vc2_x[0];
+            if (vc2_ce) req_x0 <= vc2_x[0];
             if (fbr_ack) begin
                 slot_rgb  <= req_x0 ? fbr_rdata[55:32] : fbr_rdata[23:0];
                 pix_valid <= 1'b1;
@@ -480,8 +486,8 @@ module newport #(
     // build 44 - the pointer was drawn over the pixel one to its left.
     logic [1:0] cursor_q1;
     always_ff @(posedge clk) begin
-        if (reset)        begin cursor_q1 <= 2'd0; cursor_q <= 2'd0; end
-        else if (ce_pix)  begin cursor_q1 <= vc2_cursor; cursor_q <= cursor_q1; end
+        if (reset) begin cursor_q1 <= 2'd0; cursor_q <= 2'd0; end
+        else       begin cursor_q1 <= vc2_cursor; cursor_q <= cursor_q1; end
     end
 
     // The mode table entry, per IRIS's ModeEntry: [0] buffer select,
@@ -624,23 +630,32 @@ module newport #(
     // 8-pixel margin; cropping the window to the desktop's own columns put
     // the previous line's last pixel at the left edge of every line, and
     // tests/vidshift.py caught it on the boot gradient (docs/56).
-    logic hs_d, vs_d, de_d;
-    logic hs_e, vs_e, de_e;
-    logic hs_q, vs_q, de_q;
+    //
+    // THE DELAYS ARE CLOCKS, AND THE PIXEL ENABLE GOES WITH THEM. The colour
+    // path above runs every clock, but VC2's pixel enable does not: it pauses
+    // at the timing generator's table-fetch stalls, which fall at run
+    // boundaries INSIDE the visible window (columns 251/252, 759/760,
+    // 1013/1014 and 1267/1268 on IRIX's 1280x1024 table). Delays counted in
+    // pixel enables slipped against the data at every stall, and a pair of
+    // pixels showed its right-hand neighbour - verilator/tb_newport.cpp's
+    // test 9, which samples the pins the way the MiSTer scaler does, on the
+    // pixel enable (sgiindy.sv: CE_PIXEL). So VC2's own enable, the syncs and
+    // the display enable travel together down a plain three-clock line, and
+    // the scaler samples each colour on the enable that belongs to it.
+    logic [3:0] vd1, vd2, vd3;      // {ce, hsync, vsync, de}
     always_ff @(posedge clk) begin
         if (reset) begin
-            hs_d <= 1'b0; vs_d <= 1'b0; de_d <= 1'b0;
-            hs_e <= 1'b0; vs_e <= 1'b0; de_e <= 1'b0;
-            hs_q <= 1'b0; vs_q <= 1'b0; de_q <= 1'b0;
-        end else if (ce_pix) begin
-            hs_d <= vc2_hsync; vs_d <= vc2_vsync; de_d <= vc2_de;
-            hs_e <= hs_d;      vs_e <= vs_d;      de_e <= de_d;
-            hs_q <= hs_e;      vs_q <= vs_e;      de_q <= de_e;
+            vd1 <= 4'b0; vd2 <= 4'b0; vd3 <= 4'b0;
+        end else begin
+            vd1 <= {vc2_ce, vc2_hsync, vc2_vsync, vc2_de};
+            vd2 <= vd1;
+            vd3 <= vd2;
         end
     end
-    assign hsync = hs_q;
-    assign vsync = vs_q;
-    assign de    = de_q;
+    assign ce_pix = vd3[3];
+    assign hsync  = vd3[2];
+    assign vsync  = vd3[1];
+    assign de     = vd3[0];
 
     assign gfx_irq    = vc2_vint;
     assign vblank_irq = r3_vrint;
