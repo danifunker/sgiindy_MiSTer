@@ -31,8 +31,8 @@
 //  other reading gives 1258, which is not the horizontal total of anything.
 //
 //  Of the 21 timing channels this drives five: horizontal and vertical sync
-//  and the vertical interrupt out of state C, the display enable out of state
-//  A, and horizontal blanking out of state B. The rest are recorded and
+//  and the vertical interrupt out of state C, the visible window (VIS_LN) out
+//  of state A, and horizontal blanking out of state B. The rest are recorded and
 //  unused - the VRAM transfer requests and serial enables belong to a VRAM
 //  shift register this core does not have, because its frame buffer is
 //  addressed rather than clocked out.
@@ -46,7 +46,7 @@
 //
 //  A ROW IS FETCHED PER LINE, DURING BLANKING, and that is what keeps it out
 //  of the way. Four words cover any row in either size, the line advance
-//  happens on the falling edge of display enable, and there are hundreds of
+//  happens on the falling edge of the visible window, and there are hundreds of
 //  blank pixel times after it - so the fetch never competes with the timing
 //  generator for anything that matters, and it takes the read port on the same
 //  terms the host does, by re-arming `fetch_wait`.
@@ -372,17 +372,48 @@ module np_vc2 #(
     // Every timing channel is active low.
     assign hsync  = ~state_c[2];       // HSYNC_ARC_N
     assign vsync  = ~state_c[1];       // VSYNC_ARC_N
-    assign de     = ~state_a[2];       // DSPLY_EN_RO_N
     assign hblank = ~state_b[0];       // HBLANK_AB_N
     assign vblank =  state_a[0];       // VIS_LN_VC_N deasserted
+
+    // THE VISIBLE WINDOW IS VIS_LN, NOT DSPLY_EN. VC2 §5.7: VIS_LN "indicates
+    // the active portion of the frame. It is essentially the inverse of
+    // composite blanking". DSPLY_EN_RO_N is RO1's pixel-pipeline enable and
+    // runs on past the picture to flush that pipeline - 1318 pixels a line on
+    // IRIX's 1280x1024 table against VIS_LN's 1296. This used to drive the
+    // display enable, and the MiSTer scaler squeezed 1318 columns into 1280,
+    // dropping one every ~34 pixels: glyph strokes that fell on a dropped
+    // column vanished ("echo" -> "ecro"), with the frame buffer perfect
+    // underneath (docs/56 3.6). The two start on the same pixel, so column 0
+    // is where it always was.
+    //
+    // `vis` drives everything INSIDE this module - the column counter, the
+    // row advance, the DID walk - which must see every column of the window.
+    wire vis = ~state_a[0];            // VIS_LN_VC_N
+
+    // THE OUTPUT IS CROPPED TO THE CENTRAL 1280 COLUMNS. VIS_LN on this table
+    // is 1296 wide because IRIX biases the whole screen 8 pixels right (the
+    // descriptor's bt445_bug_xbias; newportValidateClip adds it to every
+    // window origin), so the desktop occupies frame buffer columns 8-1287 and
+    // the 8 columns either side are margin that a real monitor shows black.
+    // Handing the scaler exactly 1280 is what makes it copy rather than
+    // resample. The width is measured from the previous line (every visible
+    // line of a table is the same) and nothing is cropped until a line wider
+    // than 1280 has been seen, so another table still shows whole. (The
+    // crop itself is below, after the column counter it compares.)
 
     logic vert_int_n_d;
     assign vert_int = vert_int_n_d & ~state_c[0];   // falling edge = assertion
 
     logic [10:0] x_ctr, y_ctr;
-    logic        de_d;
+    logic        vis_d;
     assign pix_x = x_ctr;
     assign pix_y = y_ctr;
+
+    logic [10:0] vis_w;
+    wire         crop_en = (vis_w > 11'd1280);
+    wire  [10:0] crop_lo = (vis_w - 11'd1280) >> 1;
+    assign de = vis && (!crop_en || ((x_ctr >= crop_lo)
+                                     && (x_ctr < crop_lo + 11'd1280)));
 
     // The chip will not respond at all until soft reset is released, and the
     // spec is explicit that both it and the DCB hang if you try. Gating the
@@ -458,7 +489,8 @@ module np_vc2 #(
             pix_phase    <= 1'b0;
             x_ctr        <= 11'h0;
             y_ctr        <= 11'h0;
-            de_d         <= 1'b0;
+            vis_d        <= 1'b0;
+            vis_w        <= 11'h0;
             vert_int_n_d <= 1'b1;
             curs_step    <= 3'd0;
             curs_cap     <= 1'b0;
@@ -505,7 +537,7 @@ module np_vc2 #(
             end else if (ce_pix) begin
                 pix_div_ctr <= 16'h0;
                 pix_phase   <= ~pix_phase;
-                if (!de) x_ctr <= 11'h0;
+                if (!vis) x_ctr <= 11'h0;
                 else     x_ctr <= x_ctr + 11'd1;
             end else begin
                 pix_div_ctr <= pix_div_ctr + 16'd1;
@@ -515,11 +547,14 @@ module np_vc2 #(
             // last visible line the frame wrap resets the row counter before
             // the next tick - a fall counted after that numbered every frame
             // 1..N, showed row 0 nowhere and asked the fetch for row N.
-            de_d <= de;
+            vis_d <= vis;
             // The end of a visible span is the line advance. Blanking
             // lines do not move the frame buffer row, so this counts
             // displayed lines rather than total lines.
-            if (de_d && !de) begin
+            if (vis_d && !vis) begin
+                // The width of the line that just ended - what the output
+                // crop above centres the next one on.
+                vis_w <= x_ctr;
                 y_ctr <= y_ctr + 11'd1;
                 // THE LINE HAS JUST ENDED, so there are hundreds of blank
                 // pixel times before the next one needs its cursor row.
@@ -599,7 +634,7 @@ module np_vc2 #(
                 // pixel. 0x7FF is the table's end-of-line mark and sits past
                 // any visible x, so it simply never matches.
                 DID_RUN:
-                    if (ce_pix && de && (x_ctr + 11'd1 == did_nxt_x)) begin
+                    if (ce_pix && vis && (x_ctr + 11'd1 == did_nxt_x)) begin
                         did_cur <= did_nxt;
                         dids    <= DID_NEXT;
                     end

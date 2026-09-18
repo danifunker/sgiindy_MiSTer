@@ -174,7 +174,7 @@ module np_rex3 #(
     localparam logic [12:0] R_XENDF       = 13'h0140;
     localparam logic [12:0] R_YENDF       = 13'h0144;
     localparam logic [12:0] R_XSTARTI     = 13'h0148;
-    localparam logic [12:0] R_XENDI       = 13'h014C;
+    localparam logic [12:0] R_XENDF1      = 13'h014C;   // "Same as XENDF"
     localparam logic [12:0] R_XYSTARTI    = 13'h0150;
     localparam logic [12:0] R_XYENDI      = 13'h0154;
     localparam logic [12:0] R_XSTARTENDI  = 13'h0158;
@@ -223,6 +223,9 @@ module np_rex3 #(
     localparam logic [31:0] M_LSMODE      = 32'h0FFF_FFFF;   // 28 bits
     localparam logic [31:0] M_ALPHAREF    = 32'h0000_00FF;   // 8
     localparam logic [31:0] M_COORD       = 32'h07FF_FF80;   // 20 bits << 7
+    // The GL-format coordinates (XSTARTF..YENDF, XENDF1) are "12.4(7) GL
+    // version of XSTART, (zeros 4 msbs)" - see their write arms.
+    localparam logic [31:0] M_GLCOORD     = 32'h007F_FF80;
     localparam logic [31:0] M_BRESD       = 32'h07FF_FFFF;   // 27
     localparam logic [31:0] M_BRESS1      = 32'h0001_FFFF;   // 17
     localparam logic [31:0] M_BRESOCTINC1 = 32'h070F_FFFF;   // 27 less [23:20]
@@ -1485,6 +1488,31 @@ module np_rex3 #(
         end
     end
 
+    // A READ'S WORD IS LEFT-JUSTIFIED. "Each data value resides in a field of
+    // 8, 16, or 32 bits as programmed by HOSTDEPTH; the leftmost field is the
+    // first one to be used" (§3.10). Pixels are packed in at the bottom, so a
+    // word that ends early - the last one of a row, or the single pixel of an
+    // unpacked read - is shifted up by its empty fields when it is published.
+    // It used to be published as it stood, first pixel low and the previous
+    // word's bits above it; the X server keeps the TOP bytes of a row's last
+    // word and the kernel's frame buffer depth probe tests bits 31:24.
+    logic  [5:0] rd_fstep;              // field width
+    logic  [3:0] rd_fcount;             // fields in the host word
+    always_comb begin
+        case (dm1_hostdepth)
+            2'd0, 2'd1: begin rd_fstep = 6'd8;  rd_fcount = dm1_rwdouble ? 4'd8 : 4'd4; end
+            2'd2:       begin rd_fstep = 6'd16; rd_fcount = dm1_rwdouble ? 4'd4 : 4'd2; end
+            default:    begin rd_fstep = 6'd32; rd_fcount = dm1_rwdouble ? 4'd2 : 4'd1; end
+        endcase
+    end
+    wire  [3:0] rd_used  = dm1_rwpacked ? (host_count - host_left) : 4'd1;
+    wire  [3:0] rd_empty = rd_fcount - rd_used;
+    // Always whole bytes, so the shifter is three byte-wide stages.
+    wire  [2:0] rd_jbytes = (rd_fstep == 6'd8)  ? rd_empty[2:0]
+                          : (rd_fstep == 6'd16) ? {rd_empty[1:0], 1'b0}
+                          :                       {rd_empty[0], 2'b00};
+    wire [63:0] rd_word  = host_shift << {rd_jbytes, 3'b000};
+
     // ---- GIO register read -------------------------------------------------
     // [2:0] version, [3] gfx busy, [4] backend busy, [5] vertical retrace
     // interrupt, [6] video interrupt, [12:7] graphics FIFO level, [17:13]
@@ -1510,7 +1538,7 @@ module np_rex3 #(
     // write to XSTARTI landed, and the read of XSTART answered nothing.
     logic [31:0] rdata_c;
     always_comb begin
-        case (reg_off)
+        case (rd_reg)
             R_DRAWMODE1:   rdata_c = drawmode1;
             R_DRAWMODE0:   rdata_c = drawmode0;
             R_LSMODE:      rdata_c = lsmode;
@@ -1546,7 +1574,7 @@ module np_rex3 #(
             R_XENDF:       rdata_c = xend;
             R_YENDF:       rdata_c = yend;
             R_XSTARTI:     rdata_c = {16'h0, xstart[26:11]};
-            R_XENDI:       rdata_c = {16'h0, xend[26:11]};
+            R_XENDF1:      rdata_c = xend;
             R_XYSTARTI:    rdata_c = {xstart[26:11], ystart[26:11]};
             R_XYENDI:      rdata_c = {xend[26:11], yend[26:11]};
             R_XSTARTENDI:  rdata_c = {xstart[26:11], xend[26:11]};
@@ -1596,10 +1624,36 @@ module np_rex3 #(
     // A read of DCBDATA0 runs a DCB read transfer, and a write to it runs a
     // write; the register itself is a port rather than storage. Everything
     // else answers in the cycle after the request.
-    wire acc_dcbdata0 = sel && (reg_off == R_DCBDATA0);
-    wire need_dcb_rd  = acc_dcbdata0 && !we;
+    // ---- the read path -------------------------------------------------------
+    // A READ SEES EVERYTHING WRITTEN AND STARTED BEFORE IT. On the part a read
+    // is a GFIFO entry (GF_READ) and the bus waits until its answer exists;
+    // this engine used to answer at once, from whatever the registers held.
+    // The X server's PIO GetImage primes HOSTRW0|GO, waits for GFXBUSY once
+    // and then reads HOSTRW0|GO back to back, and IRIS GL's lrectread and
+    // libGLcore's ReadPixels do the same - so every word after the first was
+    // the previous one, and back-to-back GOs merged into `go_pending`'s one
+    // bit (docs/56 4.4). Now a read waits: the status registers never (the
+    // REX3WAIT/BFIFOWAIT polls must not deadlock against the engine they are
+    // waiting for), the display-bus registers for the display bus only, and
+    // everything else for the engine. A read's GO fires as it is answered -
+    // the word the last GO packed goes back, and the next one starts.
+    logic        rd_held;
+    logic [12:0] rd_off;
+    logic        rd_go;
+    wire  [12:0] rd_reg  = rd_held ? rd_off : reg_off;
+    wire         rd_isgo = rd_held ? rd_go  : is_go;
+    wire         rd_immediate = (rd_reg == R_STATUS) || (rd_reg == R_USERSTATUS)
+                             || (rd_reg == R_CONFIG);
+    wire         rd_dcbclass  = (rd_reg == R_DCBMODE) || (rd_reg == R_DCBDATA0)
+                             || (rd_reg == R_DCBDATA1);
+    wire         dcb_quiet    = (dcbst == DCB_IDLE) && !dcb_start_wr && !dcb_start_rd;
+    wire         rd_ready     = rd_immediate || (rd_dcbclass ? dcb_quiet : !engine_busy);
+    wire         rd_fire      = (rd_held || (sel && !we)) && rd_ready;
 
     logic go_pending;
+    // A SETUP write waiting for the engine, and the setup-only pass it runs.
+    logic setup_pending;
+    logic setup_only;
 
     // THE REAL PART HAS A GRAPHICS FIFO AND THIS ONE DOES NOT, so a register
     // write that arrives while a drawing command is running has to wait
@@ -1626,7 +1680,7 @@ module np_rex3 #(
     logic  [3:0] wr_lanes;
     logic        wr_go;
 
-    wire engine_busy = (dr != DR_IDLE) || go_pending
+    wire engine_busy = (dr != DR_IDLE) || go_pending || setup_pending
                     || (dcbst != DCB_IDLE) || dcb_start_wr || dcb_start_rd;
     wire        wr_apply = (wr_held || (sel && we)) && !engine_busy;
     wire [12:0] wr_reg   = wr_held ? wr_off  : reg_off;
@@ -1639,7 +1693,12 @@ module np_rex3 #(
     // what is left. Only HOSTRW0 is a DMA target; anything else is accepted
     // and dropped so a misprogrammed descriptor cannot wedge the engine.
     wire        nd_go   = nd_off[11];
-    wire [12:0] nd_reg  = {nd_off[12], 1'b0, nd_off[10:0]} & 13'h1FFC;
+    // THE LOW THREE BITS ARE THE START BYTE, NOT THE REGISTER. Ng1PixelDma
+    // builds the GIO address as (phys & ~7) | (memaddr & 7) (/unix
+    // 0x88190440): a buffer at 4..7 mod 8 used to decode as HOSTRW1 and
+    // every beat of it was dropped - PutImage drew nothing and GetImage read
+    // zeros (docs/56 4.4). The MC's engine has already realigned the data.
+    wire [12:0] nd_reg  = {nd_off[12], 1'b0, nd_off[10:0]} & 13'h1FF8;
     wire        nd_host = (nd_reg == R_HOSTRW0);
 
     typedef enum logic [0:0] { ND_IDLE, ND_RD_WAIT } nd_state_t;
@@ -1647,7 +1706,7 @@ module np_rex3 #(
 
     // A beat applies under the same conditions a held CPU write does, and
     // never on the same cycle as one - the CPU's held write wins the tie.
-    wire nd_apply = !engine_busy && !wr_held && !(sel && we);
+    wire nd_apply = !engine_busy && !wr_held && !(sel && we) && !rd_held;
 
     logic [15:0] nd_wr_beats;
     logic  [7:0] nd_rd_beats;
@@ -1768,7 +1827,10 @@ module np_rex3 #(
             vrint <= 1'b0; videoint <= 1'b0;
             ack <= 1'b0; rdata <= 32'h0;
             go_pending <= 1'b0;
+            setup_pending <= 1'b0;
+            setup_only <= 1'b0;
             wr_held <= 1'b0; wr_off <= 13'h0; wr_data <= 32'h0;
+            rd_held <= 1'b0; rd_off <= 13'h0; rd_go <= 1'b0;
             wr_lanes <= 4'h0; wr_go <= 1'b0;
             ndst <= ND_IDLE; nd_ack <= 1'b0; nd_rdata <= 64'h0;
             nd_wr_beats <= 16'h0; nd_rd_beats <= 8'h0; nd_drops <= 4'h0;
@@ -1804,29 +1866,64 @@ module np_rex3 #(
                         R_LSMODE:      lsmode    <= wr_val & M_LSMODE;
                         R_LSPATTERN:   lspattern <= wr_val;
                         R_LSPATSAVE:   lspatsave <= wr_val;
-                        R_ZPATTERN:    zpattern  <= wr_val;
+                        // A WRITE RESTARTS THE PATTERN AT ITS MSB - "Pattern
+                        // register, (msb = first pixel)". Glyphs, GL bitmaps,
+                        // polygon stipple and software-z spans all load a
+                        // fresh word per GO and mean it from its top; the
+                        // index used to carry on from wherever the last
+                        // primitive left it.
+                        R_ZPATTERN:    begin zpattern <= wr_val;
+                                             zbit     <= 5'd31; end
                         R_COLORBACK:   colorback <= wr_val;
                         R_COLORVRAM:   colorvram <= wr_val;
                         R_ALPHAREF:    alpharef  <= wr_val & M_ALPHAREF;
                         R_STALL0:      stall0    <= wr_val;
                         R_SMASK0X:     smask0x   <= wr_val;
                         R_SMASK0Y:     smask0y   <= wr_val;
-                        R_SETUP:       setup_r   <= wr_val;
+                        // SETUP IS A COMMAND, NOT STORAGE: "Performs
+                        // line/span setup without iteration (ignore
+                        // DOSETUP)". The engine runs DOSETUP's derivation -
+                        // octant, both Bresenham increments, the error term,
+                        // and a fractional line's endpoint correction - and
+                        // draws nothing. GL's glBitmap, IRIS GL's lrectwrite
+                        // and both libraries' depth-buffered lines write it and
+                        // then GO without DOSETUP (docs/56 4.1, 4.2).
+                        R_SETUP:       begin setup_r <= wr_val;
+                                             setup_pending <= 1'b1; end
                         R_STEPZ:       stepz     <= wr_val;
                         R_LSRESTORE:   lsrestore <= wr_val;
                         R_LSSAVE:      lssave    <= wr_val;
                         // Writing any form of XSTART also writes XSAVE, which
                         // is what the block walker returns x to at the start
                         // of each row.
-                        R_XSTART,
-                        R_XSTARTF:     begin xstart <= wr_val & M_COORD;
+                        R_XSTART:      begin xstart <= wr_val & M_COORD;
                                              xsave  <= wr_val & M_COORD; end
-                        R_YSTART,
-                        R_YSTARTF:     ystart <= wr_val & M_COORD;
-                        R_XEND,
-                        R_XENDF:       xend   <= wr_val & M_COORD;
-                        R_YEND,
-                        R_YENDF:       yend   <= wr_val & M_COORD;
+                        R_YSTART:      ystart <= wr_val & M_COORD;
+                        R_XEND:        xend   <= wr_val & M_COORD;
+                        R_YEND:        yend   <= wr_val & M_COORD;
+                        // THE GL-FORMAT COORDINATES KEEP BITS 22:7 AND NOTHING
+                        // ELSE - "12.4(7) GL version of XSTART, (zeros 4
+                        // msbs)" (Table 7). GL computes a coordinate as the
+                        // float 4096 + x (IRIS GL biases by 5472 and the
+                        // kernel's XYWIN takes the difference back out) and
+                        // stores the float's raw bits: the mantissa is then x
+                        // in 12.11 fixed point, and the exponent - 139 - puts
+                        // 0xB in bits 26:23. These used to share the 16.4(7)
+                        // registers' mask, kept those four bits, and turned
+                        // every GL coordinate into x - 20480: GL's clear, its
+                        // lines and its points were all culled off the left
+                        // of the frame buffer (docs/56 4.1). IRIS and MAME
+                        // both mask with 0x007FFF80.
+                        R_XSTARTF:     begin xstart <= wr_val & M_GLCOORD;
+                                             xsave  <= wr_val & M_GLCOORD; end
+                        R_YSTARTF:     ystart <= wr_val & M_GLCOORD;
+                        // XENDF1 IS XENDF AGAIN, at the address after XSTARTI,
+                        // so that one 64-bit store sets both ends of a span:
+                        // every IRIS GL polygon span is `sdc1` XSTARTI+XENDF1
+                        // with GO. It held an integer here until build 44.
+                        R_XENDF,
+                        R_XENDF1:      xend   <= wr_val & M_GLCOORD;
+                        R_YENDF:       yend   <= wr_val & M_GLCOORD;
                         R_XSAVE:       xsave  <= {5'b0, wr_val[15:0], 11'b0};
                         R_XYMOVE:      xymove <= wr_val;
                         R_BRESD:       bresd  <= wr_val & M_BRESD;
@@ -1839,7 +1936,6 @@ module np_rex3 #(
                         R_AWEIGHT1:    aweight1 <= wr_val;
                         R_XSTARTI:     begin xstart <= {5'b0, wr_val[15:0], 11'b0};
                                              xsave  <= {5'b0, wr_val[15:0], 11'b0}; end
-                        R_XENDI:       xend <= {5'b0, wr_val[15:0], 11'b0};
                         R_XYSTARTI:    begin xstart <= {5'b0, wr_val[31:16], 11'b0};
                                              xsave  <= {5'b0, wr_val[31:16], 11'b0};
                                              ystart <= {5'b0, wr_val[15:0],  11'b0}; end
@@ -1918,22 +2014,25 @@ module np_rex3 #(
                     if (wr_isgo) go_pending <= 1'b1;
                     ack <= 1'b1;
             end
-            // A READ IS NEVER HELD. REX3WAIT and BFIFOWAIT poll the status
-            // register while the engine is running, so stalling a read would
-            // deadlock the machine against itself. A read that carries the GO
-            // bit still queues its command - that is safe where a write is
-            // not, because a read changes no register the command will use.
-            if (sel && !we) begin
-                    // Reading STATUS acknowledges the vertical interrupt, as
-                    // it does on the part.
-                    if (reg_off == R_STATUS) vrint <= 1'b0;
-                    if (need_dcb_rd) begin
-                        dcb_start_rd <= 1'b1;
-                    end else begin
-                        rdata <= rdata_c;
-                        ack   <= 1'b1;
-                    end
-                    if (is_go && reg_off != R_DCBDATA0) go_pending <= 1'b1;
+            // A read waits until what it reads is settled - see "the read
+            // path" above. It is latched when it cannot be answered at once.
+            if (sel && !we && !rd_ready) begin
+                rd_held <= 1'b1;
+                rd_off  <= reg_off;
+                rd_go   <= is_go;
+            end
+            if (rd_fire) begin
+                rd_held <= 1'b0;
+                // Reading STATUS acknowledges the vertical interrupt, as it
+                // does on the part.
+                if (rd_reg == R_STATUS) vrint <= 1'b0;
+                if (rd_reg == R_DCBDATA0) begin
+                    dcb_start_rd <= 1'b1;
+                end else begin
+                    rdata <= rdata_c;
+                    ack   <= 1'b1;
+                end
+                if (rd_isgo && rd_reg != R_DCBDATA0) go_pending <= 1'b1;
             end
 
             // ---- VDMA host port ---------------------------------------------
@@ -2044,8 +2143,16 @@ module np_rex3 #(
 
             // ---- draw engine -------------------------------------------------
             case (dr)
-                DR_IDLE: if (go_pending) begin
+                // A SETUP write is served before a GO: when both are
+                // waiting, the setup was written first (a write waits while
+                // either is pending, so nothing can overtake it).
+                DR_IDLE: if (setup_pending) begin
+                    setup_pending <= 1'b0;
+                    setup_only    <= 1'b1;
+                    dr            <= DR_SETUP;
+                end else if (go_pending) begin
                     go_pending <= 1'b0;
+                    setup_only <= 1'b0;
                     dr <= DR_SETUP;
 `ifdef REX3_DEBUG
                     // One line per accepted GO. A wrong picture is nearly
@@ -2084,14 +2191,16 @@ module np_rex3 #(
                     // continuation leaves a persisted octant that calls the
                     // wrong axis major, and the walk then steps the wrong way
                     // for the whole segment.
-                    if (dm0_dosetup || do_resetup) begin
+                    if (dm0_dosetup || do_resetup || setup_only) begin
                         bresoctinc1[26:24] <= {setup_xmajor, setup_xdec, setup_ydec};
                         bresoctinc1[19:0]  <= setup_incr1[19:0];
                         bresrndinc2[20:0]  <= setup_incr2[20:0];
                         bresd              <= {5'b0, setup_d[26:0]};
                     end
-                    // The pattern cursors restart only on a new primitive.
-                    if (dm0_dosetup) begin
+                    // The pattern cursors restart only on a new primitive -
+                    // not on a setup-only pass, which IRIS's setup() leaves
+                    // them alone for too.
+                    if (dm0_dosetup && !setup_only) begin
                         zbit   <= 5'd31;
                         patbit <= 5'd31;
                     end
@@ -2121,7 +2230,8 @@ module np_rex3 #(
                                   : (dm0_skiplast  || aline_skip_last);
                     // NOOP moves the position without touching a pixel, which
                     // is what a setup-only GO is for.
-                    dr <= (dm0_opcode == OP_NOOP) ? DR_IDLE
+                    dr <= setup_only ? (dm0_is_fract ? DR_FRACT : DR_IDLE)
+                        : (dm0_opcode == OP_NOOP) ? DR_IDLE
                         : span_lr_drop ? DR_IDLE
                         : (dm0_is_fract && (dm0_dosetup || do_resetup)) ? DR_FRACT
                         : first_pixel_state;
@@ -2163,7 +2273,7 @@ module np_rex3 #(
 
                 DR_FRACT3: begin
                     line_left <= pc_count;
-                    dr        <= first_pixel_state;
+                    dr        <= setup_only ? DR_IDLE : first_pixel_state;
                 end
 
                 // One pixel per clock. The position advances every cycle
@@ -2254,7 +2364,7 @@ module np_rex3 #(
                     // host-sourced draw spends one word per drawn pixel and
                     // not one per position.
                     if (dm0_opcode == OP_READ) begin
-                        host_shift <= (host_shift << host_step)
+                        host_shift <= (host_shift << rd_fstep)
                                     | {32'h0, host_pack_val};
                         host_left  <= host_left - 4'd1;
                     end else if (host_consume) begin
@@ -2346,8 +2456,8 @@ module np_rex3 #(
                             first_pix <= 1'b1;
                         end
                         if (host_mode && dm0_opcode == OP_READ) begin
-                            hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
-                            hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
+                            hostrw0 <= dm1_rwdouble ? rd_word[63:32] : rd_word[31:0];
+                            hostrw1 <= dm1_rwdouble ? rd_word[31:0]  : hostrw1;
                         end
                         // Without STOPONY each row is its own primitive and
                         // the next GO starts the next one - exactly how
@@ -2370,8 +2480,8 @@ module np_rex3 #(
                         // primitive where it stands. The next GO carries the
                         // next word.
                         if (dm0_opcode == OP_READ) begin
-                            hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
-                            hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
+                            hostrw0 <= dm1_rwdouble ? rd_word[63:32] : rd_word[31:0];
+                            hostrw1 <= dm1_rwdouble ? rd_word[31:0]  : hostrw1;
                         end
                         cx     <= x_step;
                         xstart <= {5'b0, x_step[15:0], xfrac};

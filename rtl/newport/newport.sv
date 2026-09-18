@@ -151,24 +151,90 @@ module newport #(
     // CPU presented has to be split. `aoff[2]` is the only thing that can say
     // which word a read addressed - byte enables are meaningless on a read.
     // See rtl/cpu/r4300_bus.sv.
-    wire        hi_word = ~aoff[2];
-    wire [12:0] r3_off  = {addr[12:3], aoff[2], 2'b00};
-    wire [31:0] r3_wdata = aoff[2] ? wdata[31:0] : wdata[63:32];
+    //
+    // A DOUBLEWORD STORE IS TWO REGISTER WRITES AND ONE GO. GL writes REX3's
+    // registers in pairs with 64-bit `sdc1` stores - XYSTARTI+XYENDI,
+    // XSTARTF+YSTARTF, XSTARTI+XENDF1 with GO, the colour and slope pairs,
+    // HOSTRW0+HOSTRW1 with GO: 215 of them between libGLcore.so and libgl.so,
+    // none in the X server (docs/56 3.1, 4.4, 4.6). The Indy really sends them
+    // as single 64-bit transfers - the kernel sets the MC's GRX_SIZE_64 and
+    // CONFIG.BUSWIDTH - and REX3 takes a whole transfer as one GFIFO entry
+    // (GF_DATA 63:0, GF_D32 marking the 32-bit ones, one GF_GO), so the even
+    // register gets bits 63:32, the odd one 31:0, and the primitive starts
+    // after both. IRIS's write64 and MAME's rex3_w do exactly that.
+    //
+    // This used to keep the even word and drop the odd one - and because the
+    // GO bit is address bit 11, which the even word's offset carried, the GO
+    // fired with the second register stale: XYSTARTI+XYENDI|GO drew to the
+    // PREVIOUS end point. That is the whole of "GL draws things it
+    // shouldn't".
+    //
+    // So a store with bytes in both words becomes two beats into np_rex3's
+    // 32-bit port: the even register with the GO stripped, then the odd one
+    // carrying the address's own GO. The first beat's acknowledgement stays
+    // here; the CPU is acknowledged by the second. The second beat is issued
+    // in the very cycle the first is acknowledged, so there is no cycle in
+    // which np_rex3 sees neither - and it refuses a VDMA beat in any cycle
+    // that carries a CPU write, so nothing can land between the halves.
+    // Loads are untouched: nothing in IRIX, X or GL issues a doubleword load
+    // to REX3, and the bus does not carry a load's size.
+    wire        dword_st = we && (|be[7:4]) && (|be[3:0]);
+
+    typedef enum logic [0:0] { DW_IDLE, DW_ODD } dw_state_t;
+    dw_state_t   dw;
+    logic [12:0] dw_off;        // the odd register's offset, GO included
+    logic [31:0] dw_data;
+    logic  [3:0] dw_be;
+
+    logic [31:0] r3_rdata;
+    logic        r3_ack;
+    wire         r3_first = sel && in_rex3;               // a CPU access arrives
+    wire         r3_second = (dw == DW_ODD) && r3_ack;    // its even half is done
+
+    logic        r3_sel;
+    logic [12:0] r3_off;
+    logic [31:0] r3_wdata;
     // The four byte enables belonging to that word, [3] the most significant.
     // `be[7-i]` guards byte i of the doubleword, so the high word's lanes are
     // be[7:4] and the low word's are be[3:0]. REX3 needs them for exactly one
     // register - DCBDATA0, whose datum has to be re-aligned to the top of the
     // word before the Display Control Bus shifts it out. See np_rex3.sv.
-    wire  [3:0] r3_be   = aoff[2] ? be[3:0] : be[7:4];
+    logic  [3:0] r3_be;
+    always_comb begin
+        r3_sel = r3_first || r3_second;
+        if (r3_second) begin
+            r3_off   = dw_off;
+            r3_wdata = dw_data;
+            r3_be    = dw_be;
+        end else if (dword_st) begin
+            r3_off   = {addr[12], 1'b0, addr[10:3], 3'b000};
+            r3_wdata = wdata[63:32];
+            r3_be    = be[7:4];
+        end else begin
+            r3_off   = {addr[12:3], aoff[2], 2'b00};
+            r3_wdata = aoff[2] ? wdata[31:0] : wdata[63:32];
+            r3_be    = aoff[2] ? be[3:0] : be[7:4];
+        end
+    end
 
-    logic [31:0] r3_rdata;
-    logic        r3_ack;
-    wire         r3_sel = sel && in_rex3;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            dw <= DW_IDLE;
+        end else if (r3_first && dword_st) begin
+            dw      <= DW_ODD;
+            dw_off  <= {addr[12:3], 3'b100};
+            dw_data <= wdata[31:0];
+            dw_be   <= be[3:0];
+        end else if (r3_second) begin
+            dw <= DW_IDLE;
+        end
+    end
 
     // Mirror the 32-bit answer into both halves so the read shift in
-    // r4300_bus lands on it whichever word was addressed.
+    // r4300_bus lands on it whichever word was addressed. The even half of a
+    // doubleword store is acknowledged to this module, not to the CPU.
     assign rdata = r3_ack ? {r3_rdata, r3_rdata} : 64'h0;
-    assign ack   = r3_ack | gfx_hole_ack;
+    assign ack   = (r3_ack && (dw != DW_ODD)) | gfx_hole_ack;
 
     // Anything in the window that is not REX3 answers zero, one cycle later.
     logic gfx_hole_ack;

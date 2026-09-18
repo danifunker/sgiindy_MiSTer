@@ -54,7 +54,7 @@ MIN_LIT=1000000
 
 # The geometry the PROM's own timing table describes, walked by hand from
 # np_timing.h. See docs/16-newport-plan.md.
-WANT_SIZE=1318x1065
+WANT_SIZE=1280x1065
 
 if [[ "${1:-}" != "--no-build" ]]; then
     make -C "$ROOT/verilator" cputest >/dev/null || exit 2
@@ -90,9 +90,13 @@ else
     # CMAP 1's revision register reports monitor type 10, so Ng1DacInit loads
     # np_timing.h's 1280x1024-at-60Hz table for a revision-3 board: n1280_r3.
     # Walking that table by hand gives 1065 lines, of which 1024 carry the
-    # display enable, and a horizontal total of 1680 pixels of which 1318 are
-    # visible - 1280 plus the black margin the PROM keeps to the left of every
-    # scanline. Both numbers come out of the pins exactly, so this asserts
+    # display enable, and a horizontal total of 1680 pixels. Of those, VIS_LN
+    # - the visible window - is 1296 and np_vc2 hands out the central 1280,
+    # the desktop's own columns (IRIX biases the screen 8 pixels right). This
+    # said 1318 until build 44: that was DSPLY_EN, RO1's pipeline enable,
+    # driving the display enable, and the MiSTer scaler squeezed 1318 columns
+    # into 1280 and dropped one every ~34 pixels (docs/56 3.6). An exact
+    # number here encoded the bug. Both numbers come out of the pins exactly, so this asserts
     # them exactly rather than with a threshold: the timing generator is an
     # interpreter for that table and "close" is a bug.
     #

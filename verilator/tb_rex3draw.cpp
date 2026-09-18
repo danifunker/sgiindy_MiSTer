@@ -768,12 +768,13 @@ enum {
     R_DRAWMODE1 = 0x0000, R_DRAWMODE0 = 0x0004, R_LSMODE = 0x0008,
     R_LSPATTERN = 0x000C, R_ZPATTERN = 0x0014, R_COLORBACK = 0x0018,
     R_COLORVRAM = 0x001C, R_ALPHAREF = 0x0020, R_SMASK0X = 0x0028,
-    R_SMASK0Y = 0x002C,
+    R_SMASK0Y = 0x002C, R_SETUP = 0x0030,
     R_XSTART = 0x0100, R_YSTART = 0x0104, R_XEND = 0x0108, R_YEND = 0x010C,
     R_XYMOVE = 0x0114, R_BRESD = 0x0118, R_BRESOCTINC1 = 0x0120,
     R_BRESRNDINC2 = 0x0124,
     R_AWEIGHT0 = 0x0130, R_AWEIGHT1 = 0x0134,
-    R_XSTARTI = 0x0148, R_XENDI = 0x014C, R_XYSTARTI = 0x0150,
+    R_XSTARTF = 0x0138, R_YSTARTF = 0x013C, R_XENDF = 0x0140, R_YENDF = 0x0144,
+    R_XSTARTI = 0x0148, R_XENDF1 = 0x014C, R_XYSTARTI = 0x0150,
     R_XYENDI = 0x0154,
     R_COLORRED = 0x0200, R_COLORALPHA = 0x0204, R_COLORGRN = 0x0208,
     R_COLORBLUE = 0x020C, R_SLOPERED = 0x0210, R_SLOPEALPHA = 0x0214,
@@ -805,7 +806,12 @@ static void oracle_write(uint32_t off, uint32_t val)
     case R_DRAWMODE0: ox.drawmode0 = val; break;
     case R_LSMODE:    ox.lsmode = val & 0x0FFFFFFF; break;
     case R_LSPATTERN: ox.lspattern = val; break;
-    case R_ZPATTERN:  ox.zpattern = val; break;
+    // A WRITE RESTARTS THE Z PATTERN AT ITS MSB. DELIBERATE DIVERGENCE FROM
+    // IRIS, which restarts it only on DOSETUP: the spec's pattern register is
+    // "(msb = first pixel)", and every writer - X's glyph rows, GL's bitmaps,
+    // polygon stipple, software-z line segments - loads a fresh word per GO
+    // and means it from the top (docs/56 4.2). np_rex3 does the same.
+    case R_ZPATTERN:  ox.zpattern = val; ox.zpat_bit = 31; break;
     case R_COLORBACK: ox.colorback = val; break;
     case R_COLORVRAM: ox.colorvram = val; break;
     case R_ALPHAREF:  ox.alpharef = val & 0xFF; break;
@@ -822,7 +828,18 @@ static void oracle_write(uint32_t off, uint32_t val)
     case R_XEND:      ox.xend = (int32_t)(val & 0x07FFFF80); break;
     case R_YEND:      ox.yend = (int32_t)(val & 0x07FFFF80); break;
     case R_XSTARTI:   ox.xstart = ox.xsave = ((int32_t)(int16_t)val) << 11; break;
-    case R_XENDI:     ox.xend = ((int32_t)(int16_t)val) << 11; break;
+    // THE GL-FORMAT COORDINATES: "12.4(7) GL version of XSTART, (zeros 4
+    // msbs)" - IRIS's from12_4_7 keeps bits 22:7 of what is really a float.
+    // 0x14C is XENDF1, "Same as XENDF" - this bench used to decode it as an
+    // integer, the same slip np_rex3 had (docs/56 4.2).
+    case R_XSTARTF:   ox.xstart = ox.xsave = (int32_t)(val & 0x007FFF80); break;
+    case R_YSTARTF:   ox.ystart = (int32_t)(val & 0x007FFF80); break;
+    case R_XENDF:
+    case R_XENDF1:    ox.xend = (int32_t)(val & 0x007FFF80); break;
+    case R_YENDF:     ox.yend = (int32_t)(val & 0x007FFF80); break;
+    // SETUP: DOSETUP's derivation without the walk - IRIS's setup(), which is
+    // what this bench's setup() transcribes.
+    case R_SETUP:     setup(); break;
     case R_XYSTARTI:  ox.xstart = ox.xsave = ((int32_t)(int16_t)(val >> 16)) << 11;
                       ox.ystart = ((int32_t)(int16_t)val) << 11; break;
     case R_XYENDI:    ox.xend = ((int32_t)(int16_t)(val >> 16)) << 11;
@@ -1136,23 +1153,57 @@ static void run_case(uint32_t dm0, uint32_t dm1, uint32_t cm)
         both(R_BRESD,       (uint32_t)(2 * minor - major) & 0x7FFFFFF);
     }
 
-    both(R_DRAWMODE0, dm0);
+    // SETUP INSTEAD OF DOSETUP, a quarter of the time: GL's glBitmap, IRIS
+    // GL's lrectwrite and both libraries' depth lines write the endpoints,
+    // write SETUP, and then GO without DOSETUP. The Bresenham registers get
+    // deliberately WRONG values first, so only a SETUP that really derives
+    // them can pass.
+    uint32_t am = (dm0 >> 2) & 7;
+    bool via_setup = (dm0 & (1u << 5)) && rnd_range(4) == 0;
+    uint32_t dm0_go = via_setup ? (dm0 & ~(1u << 5)) : dm0;
+    if (via_setup) {
+        both(R_BRESOCTINC1, (rnd() & 0x070FFFFF));
+        both(R_BRESRNDINC2, (rnd() & 0xFF1FFFFF));
+        both(R_BRESD,       (rnd() & 0x07FFFFFF));
+    }
+    // GL writes its coordinates as the raw bits of the float 4096 + x, into
+    // the GL-format registers (docs/56 4.1): half the time the endpoints go
+    // that way. The mantissa of 4096 + x + f/16 is exactly x.f in 12.11, and
+    // XYWIN's 0x1000 puts the bias back as it does for the integer forms.
+    bool via_float = rnd() & 1;
+    auto glf = [](int px, uint32_t f16) -> uint32_t {
+        float v = 4096.0f + (float)px + (float)f16 / 16.0f;
+        uint32_t b; memcpy(&b, &v, 4); return b;
+    };
+    both(R_DRAWMODE0, dm0_go);
     both(R_XYSTARTI, ((uint32_t)x0 << 16) | (uint32_t)(y0 & 0xFFFF));
     // Fractional endpoints exist only for F_LINE and A_LINE; giving them to
     // everything else would move the integer coordinate the others read.
-    uint32_t am = (dm0 >> 2) & 7;
+    uint32_t endgo = via_setup ? 0 : GO;
     if (am == AM_FLINE || am == AM_ALINE) {
-        uint32_t fx = (uint32_t)x0 << 11, fy = (uint32_t)y0 << 11;
-        fx |= (rnd() & 0xF) << 7; fy |= (rnd() & 0xF) << 7;
-        both(R_XSTART, fx & 0x07FFFF80);
-        both(R_YSTART, fy & 0x07FFFF80);
-        uint32_t ex = (uint32_t)x1 << 11, ey = (uint32_t)y1 << 11;
-        ex |= (rnd() & 0xF) << 7; ey |= (rnd() & 0xF) << 7;
-        both(R_XEND, ex & 0x07FFFF80);
-        both(R_YEND | GO, ey & 0x07FFFF80);
+        uint32_t f[4];
+        for (int i = 0; i < 4; i++) f[i] = rnd() & 0xF;
+        if (via_float) {
+            both(R_XSTARTF, glf(x0, f[0]));
+            both(R_YSTARTF, glf(y0, f[1]));
+            both(R_XENDF,   glf(x1, f[2]));
+            both(R_YENDF | endgo, glf(y1, f[3]));
+        } else {
+            both(R_XSTART, (((uint32_t)x0 << 11) | (f[0] << 7)) & 0x07FFFF80);
+            both(R_YSTART, (((uint32_t)y0 << 11) | (f[1] << 7)) & 0x07FFFF80);
+            both(R_XEND,   (((uint32_t)x1 << 11) | (f[2] << 7)) & 0x07FFFF80);
+            both(R_YEND | endgo, (((uint32_t)y1 << 11) | (f[3] << 7)) & 0x07FFFF80);
+        }
+    } else if (am == AM_SPAN && via_float) {
+        // IRIS GL's polygon span: XSTARTI and XENDF1, the end as a float.
+        both(R_XENDF1 | endgo, glf(x1, 0));
     } else {
-        both(R_XYENDI | GO,
+        both(R_XYENDI | endgo,
              ((uint32_t)x1 << 16) | (uint32_t)(y1 & 0xFFFF));
+    }
+    if (via_setup) {
+        both(R_SETUP, 0);
+        both(R_DRAWMODE0 | GO, dm0_go);
     }
 
     oracle_go();
