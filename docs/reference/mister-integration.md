@@ -1,443 +1,539 @@
-# MiSTer integration — the top level, and what it cannot do yet
+# MiSTer integration
 
-`sgiindy.sv` was the stock MiSTer template with a noise generator in it until
-now, and every claim this project makes about the machine comes from Verilator.
-This is the wiring that makes a hardware build possible, and — more usefully —
-the list of things that will be wrong on the first one.
+`sgiindy.sv` is the MiSTer top level — the framework's `emu` module. It puts
+the machine (`rtl/sgi/sgi_indy.sv`) on a DE10-Nano: one PLL, the HPS's DDR3
+for every byte the machine stores, `hps_io` for the OSD, the PROM download,
+the SCSI images, the keyboard, the mouse and the clock, the SCC on the board's
+UART, and VC2's raster to the scaler. This is how each of those is wired, and
+why.
 
-**None of this has been through Quartus.** There is no Quartus on the machine
-it was written on. What is checked is what Verilator can check: `ddr3_mux.sv`
-has a unit test with a deliberately unhelpful bridge model, and the top level's
-instantiations were linted against the real port lists, which catches a wrong
-name or a wrong width and nothing else. Treat the first build as bring-up.
+The current release is `releases/SGIIndy_20260918.rbf` (build 44) with
+`releases/boot.rom`. It was built with Quartus Prime Lite 17.0.2 at fitter
+seed 2, the seed `sgiindy.qsf` keeps: 35,886 of 41,910 ALMs (86 %), 485 of 553
+M10K blocks, 59 of 112 DSP blocks, and timing met in every check — worst setup
+slack +0.979 ns on the 50 MHz core clock and +0.714 ns on the HDMI pixel
+clock. `scripts/build.sh` writes that report into `reports/` after every
+compile; [deploy-and-debug.md](deploy-and-debug.md#building) has the flow.
 
 ## The map
 
 ```
-   CLK_50M ──► pll ──► clk_sys (50 MHz) ──┬─► sgi_indy  ──► VGA_*
-                                          ├─► ddr3_mux  ──► DDRAM_*
-                                          ├─► hps_io    ──► SD, OSD, PS/2
-                                          └─► NCO ──► sclk (3.6864 MHz)
+ CLK_50M ─► pll ─► clk_sys, 50 MHz — every clock in the core but one
+                     │
+ hps_io ◄───────────►├─ OSD status, ioctl downloads (PROM, MAC), SCSI slots,
+                     │  PS/2 keyboard and mouse, the MiSTer's RTC
+                     │
+ sgi_indy ◄─────────►├─ the machine: CPU, MC, HPC3, IOC2, SCSI, Newport
+   │ ram, prom, fbw ───────────────────────────────────┐
+   │ fbr, fba ─► fb_linecache ×2 ─► fb_fetch_arb ──────┤
+   │                                                   ▼
+   │                                    ddr3_mux ─► DDRAM_* (the HPS's DDR3)
+   │ vid_* ─► CLK_VIDEO, CE_PIXEL, VGA_* (the MiSTer scaler)
+   │ txdb, rxdb ─► UART_TXD, UART_RXD (the HPS UART)
+   │
+ NCO on clk_sys ─► sclk, 3.6864 MHz ─► the SCC's baud clock
 ```
 
-### Memory: all of it is DDR3
+## Memory: everything is in DDR3
 
-64 MB of Indy memory and 16 MB of Newport frame buffer, against about 688 KB of
-M10K on a Cyclone V, most of which the CPU's two primary caches already have.
-There was never a choice. MiSTer gives a core a 256 MB window of the HPS's DDR3
-through `DDRAM_*`, selected by `ADDR[28:25] = 4'b0011`, and
+The machine has up to 64 MB of main memory and Newport 16 MB of frame buffer,
+against about 690 KB of block RAM on the Cyclone V (5,662,720 bits), two
+thirds of which build 44 already uses for caches, line buffers and register
+files. There is no choice about where memory lives.
+MiSTer gives a core a 256 MB window of the HPS's DDR3 through `DDRAM_*`,
+selected by `DDRAM_ADDR[28:25] = 4'b0011` — ARM physical `0x30000000` up — and
 `rtl/mister/ddr3_mux.sv` carves it:
 
-| region | byte offset | size |
-|---|---|---|
-| main memory | `0x0000_0000` | 64 MB |
-| Newport frame buffer | `0x0400_0000` | 16 MB |
-| PROM image | `0x0500_0000` | 512 KB |
+| region | window offset | ARM physical | size |
+|---|---|---|---|
+| main memory (guest physical `0x08000000` up) | `0x0000_0000` | `0x30000000` | 64 MB |
+| frame buffer, drawing planes | `0x0400_0000` | `0x34000000` | 8 MB |
+| frame buffer, auxiliary planes | `0x0480_0000` | `0x34800000` | 8 MB |
+| PROM image (guest physical `0x1FC00000`) | `0x0500_0000` | `0x35000000` | 512 KB |
+| debug beacon (see below) | `0x0580_0000` | `0x35800000` | 43 × 8 bytes |
 
-The main memory region is sized for the largest the OSD offers rather than for
-the selection. A map that moved with the menu would put the frame buffer at a
-different address for every entry, which the guest never sees and every
-debugging session would.
+The main memory region is sized for the largest size the OSD offers rather
+than for the selection. A map that moved with the menu would put the frame
+buffer at a different address for every entry, which the guest never sees and
+every debugging session would.
 
 **`DDRAM_ADDR` counts 64-bit words, not bytes.** Getting that wrong is an
 eight-times address error, which does not present as an address error: it
-presents as memory that reads back something written somewhere else.
-
-Three things the unit tests found, all of which would have been miserable to
-find on hardware:
-
-* **The region bases truncated.** They were declared as `logic [24:0]` and
-  written as byte offsets, so `25'h400_0000` did not fit, became zero, and the
-  frame buffer aliased the whole of main memory. They are 32-bit byte offsets
-  now with the shift in one place.
-* **Fixed priority starved the rasteriser.** With four masters asking, REX3 —
-  last in the list — got 62 transactions against the display's 3707 and waited
-  5370 cycles for one of them. The display keeps absolute priority because it
-  is the only master with a deadline; everything else rotates.
-* **The line cache filled the buffer it was reading.** The buffer-select was
-  inverted and invalidated the *other* buffer as well, so a fill could land on
-  top of the line being displayed. It showed up two ways at once — runs of
-  pixels from the wrong line, and a tenth of every frame missing — which is
-  what a cache that is simultaneously reading and overwriting one buffer looks
-  like.
-
-A third mistake was in the *test* rather than the design, twice, and it is
-worth naming because it looks like a passing test: both bridge models first
-decided whether a request had been accepted **after** the clock edge, by which
-time the module had already seen the signal and moved on. Everything a model
-presents has to be settled before the edge. The first time it made a working
-mux look completely broken; the second it made a working cache report zero
-pixels checked and zero misses, which reads like success.
-
-### The one arbiter, and the bug only real memory could show
-
-Main memory has **one** port on the mux and **two** masters behind it: the CPU,
-and the DMA engines — the HPC3's SCSI channel and the MC's GIO64 fill engine,
-muxed into one first. `rtl/sgi/ram_arb.sv` is that arbiter and it is the only
-one in the core. It is its own file because for as long as it was twenty lines
-inside `sgi_indy.sv` it could not be tested, and it was wrong.
-
-**The two masters have different shapes, and that is the whole difficulty.**
-The CPU *pulses*: `rtl/cpu/r4300_bus.sv` raises `bus_req` for exactly one cycle
-and then waits in `S_BUSY`, holding its address and write data but not its
-request. The DMA engines *hold*, because a master that dropped its request into
-a variable-latency memory would wait forever for an answer nobody had heard.
-
-The old version gated the DMA on a transaction being in flight and did not gate
-the CPU:
-
-```systemverilog
-wire cpu_ram_req = bus_req && sel_ram && mem_hit;
-wire dma_grant   = dma_req && !ram_inflight && !cpu_ram_req && dma_hit;
-assign ram_req   = cpu_ram_req | dma_grant;
-... else if (ram_req) begin
-        ram_inflight  <= 1'b1;
-        ram_owner_dma <= dma_grant;      // <-- clobbered mid-flight
-```
-
-So a CPU access landing anywhere inside a DMA transaction's round trip
-asserted `ram_req` again and rewrote `ram_owner_dma` to 0 while the DMA's
-answer was still coming. Three separate faults came out of that one line, and
-all three were seen on the DE10-Nano before the cause was:
-
-* **The CPU took the DMA's acknowledgement as its own, with the DMA's data on
-  it.** That is the PROM's intermittent panic: `lbu $v0, ($t6)` two
-  instructions after `lw $t6, 0x148($a0)` — the WD33C93 AUX STATUS poll — dying
-  with bad addresses of `0xf103`, `0x747474` and `0x9fc1dc77` on three
-  different boots. None of those values appears anywhere in the 512 KB PROM
-  image, because none of them was ever loaded from where the CPU asked.
-* **The DMA never got an acknowledgement at all**, so the SCSI command behind
-  it hung. That is why POST's device/cable diagnostic reported the disk on ID 1
-  as failed while the CD-ROM on ID 6 beside it passed, and why the machine
-  wedged afterwards.
-* **`ddr3_mux` drops a request for a master that already has one pending**, so
-  the CPU's access was silently lost as well. Whichever way it fell, the
-  machine panicked or stopped.
-
-**It was invisible in simulation and the reason is the point of this section.**
-The window is exactly as wide as memory is slow. `verilator/sim_ram.v` answers
-in one cycle, so the DMA is in flight for a single cycle — and in the cycle it
-is granted the CPU is by definition not asking, because `dma_grant` requires
-`!cpu_ram_req`. Against DDR3 the window is tens of cycles wide and is hit
-constantly. Nothing was wrong with the whole-machine tests; they were asking a
-memory that could not answer the question.
-
-`verilator/tb_ramarb.cpp` is the test that can. It drives both masters in their
-real shapes against a port modelled one-deep the way the mux actually is, and
-the latency sweep is the whole story:
-
-| latency | cpu | dma | overlap | misroute | |
-|---:|---:|---:|---:|---:|---|
-| 0 | 14125 | 13483 | 0 | 0 | ok — what every whole-machine sim here uses |
-| 1 | 12773 | 11416 | 1610 | 1610 | FAIL |
-| 2 | 11819 | 9428 | 2791 | 2791 | FAIL |
-| 5 | 9867 | 5463 | 4730 | 4730 | FAIL |
-| 20 | 5454 | **0** | 5454 | 5453 | DEADLOCK |
-| 60 | 1935 | **0** | 1935 | 1934 | DEADLOCK |
-
-At DDR3's latency the DMA engine completes **zero** transactions and the CPU
-takes five thousand wrong answers. With the fix every row is clean.
-
-The fix gates both masters on the same thing — one transaction on this port at
-a time, which is all the mux can hold — and remembers the CPU's pulse in
-`cpu_wait` rather than stalling it, because stalling a pulse drops it. The
-payload needs no latch: `r4300_bus.sv` holds `bus_addr`, `bus_we`, `bus_wdata`
-and `bus_be` from the cycle it raises `bus_req` until the cycle it is
-acknowledged, which is exactly the interval that has to be bridged.
-
-**This is the fourth time on this project that a unit test whose memory model
-was kinder than the bridge hid the whole bug**, after `ddr3_mux` taking a held
-request twice, `fb_linecache` being tested at half the pixel rate, and REX3's
-`DR_FILL` firing writes nothing accepts. When a master and a memory meet for
-the first time, the question to ask is not whether the logic is right but
-whether the model is as unhelpful as the bridge.
-
-## What will be wrong on the first build
-
-### 0. The frame buffer stores eight bytes a pixel to display one of them
-
-**DONE 2026-09-02 (docs/design/scsi-fit-and-framebuffer-layout.md), with one correction to the arithmetic below.**
-The compositor added in docs/design/newport-vdma.md reads the auxiliary planes for every pixel
-too (popup bits and the overlay byte), so "the display reads RGB only" no
-longer held. What landed: two regions of four bytes a pixel (drawing planes
-at `FB_BASE`, auxiliary planes 8 MB above, two pixels to a 64-bit word), a
-line cache per region behind `fb_fetch_arb`, and a per-line "anything visible
-in the auxiliary planes" flag table (`fb_linecache.sv`, `TRACK_ZERO`) so the
-auxiliary stream is only fetched on lines that need it. `PIX_DIV` is 1. The
-history below is kept as written.
-
-**This was the single most valuable change left in this file's scope, and
-hardware is what promoted it.** The store was one 64-bit word per pixel - 24
-bits of drawing planes, 24 of auxiliary, on a 2048-pixel stride - so a visible
-line is 1344 words. At one core clock per pixel that is **0.80 words a clock
-against a DDR3 port whose absolute peak is 1.00**, before the CPU or the
-rasteriser ask for anything. A DE10-Nano delivered 0.52 and missed the first
-710 pixels of every line, for ever; `PIX_DIV` is 2 again because of it, at
-about 14 Hz.
-
-**The display never reads seven of those eight bytes.** `newport.sv` takes
-`pix_word[7:0]` in index mode and `[23:0]` in packed RGB, and it never touches
-the auxiliary planes at all - this core builds no overlay, no popup planes and
-no cursor.
-
-**IRIS stores them as two separate arrays, which is the shape to copy.**
-`rex3.rs` has `fb_rgb: Box<[u32]>` and `fb_aux: Box<[u32]>`, both
-2048x1024 and both indexed `y * 2048 + x`, and `compositor.rs` reads `fb_aux`
-only for the popup bits (`raw_aux >> 2`) and the overlay byte. Two regions of
-four bytes a pixel is therefore not a compression trick, it is what the
-reference implementation does.
-
-The consequences are all good:
-
-| | bytes fetched per pixel | words/clock at `PIX_DIV = 1` |
-|---|---|---|
-| now | 8 | 0.80 |
-| split planes, display reads RGB only | 4 | **0.39** |
-
-That is `PIX_DIV = 1` and the 27 Hz back, with room to spare for the other two
-masters. One 64-bit read then carries **two adjacent pixels**, so REX3's
-per-pixel write picks a half with the byte enables `ddr3_mux.sv` already
-honours, and `fb_linecache.sv` fetches 660 words a line instead of 1344.
-
-What it costs: `np_rex3.sv`'s `fb_byte_addr` becomes a per-plane address,
-`ddr3_mux.sv` grows a region, and every test that knows the frame buffer's
-shape - `tests/rex3_replay.py`, `--fbdump` - has to follow. It is a real
-change and it is the right one.
-
-### 1. The refresh is about 14 Hz, and the fix is above, not a faster clock
-
-**Corrected by hardware: the pixel rate is halved again, and the refresh with
-it.** The raster is exact. `PIX_DIV` went to 1 for a free doubling of the frame
-rate and the doubling was not free - see section 0 - so it is 2, and the frame
-comes out at about 14 Hz. **A faster core clock does not fix this and neither
-does a second clock domain**: both make the display ask for MORE memory per
-second, and memory is what it has run out of. Fetching half as much per pixel
-is the fix.
-
-VC2 walks its timing table in units of two pixel clocks and derives those by
-dividing `clk_sys`. The table the PROM loads was written for a **107.5 MHz**
-pixel clock; at 50 MHz with `PIX_DIV = 1` the frame comes out at about 28 Hz
-rather than 60. That is judder through the scaler on a machine whose screen is
-mostly static text — a limitation, not a defect.
-
-**A faster core does not fix it.** `syn/README.md` has the CPU on its own
-closing at 64.04 MHz and the whole core will be lower; 107.5 MHz is not
-reachable and does not need to be, because on real hardware the pixel clock is
-not the CPU clock either — the BT445 has its own PLL and `Ng1DacInit` programs
-it. Sixty hertz wants a **second clock domain**: a PLL output near the rate the
-loaded table implies, `np_vc2`'s generator on it, and crossings for the Display
-Control Bus writes going in and the pixel stream coming out. That is the single
-most valuable thing left in this file's scope, and it is now the *only* thing.
-
-Two changes got it from a sixth of 60 Hz to a half of it:
-
-* **`PIX_DIV` is 1, not 2.** It was 2 only so the frame buffer read port was
-  not asked for a word every clock, which stopped being a constraint the moment
-  a scanline of block RAM went in front of it.
-* **Pixel time stops while the generator is fetching.** Walking the table costs
-  clocks that belong to no state run — a word per run, two for a run carrying
-  state B and C, and the next-line pointer at the end of every line — and
-  letting the pixel clock run through them puts them in the picture. At
-  `PIX_DIV = 2` that was about two pixels a line and the display enable still
-  measured the table's 1318 exactly; at `PIX_DIV = 1` it became five and
-  measured **1323**, which is how the change was caught. Holding the divider
-  through a fetch costs a fraction of a percent of frame time and buys a raster
-  that is the table's at any divider. A real VC2 hides the same clocks in a
-  sixteen-deep state FIFO.
-
-`tests/run-newport.sh` asserts the exact number, so this cannot quietly come
-undone.
-
-### 2. The display port has a scanline cache now
-
-`newport.sv` issues one frame buffer read per pixel and latches whatever comes
-back, without waiting — there is no handshake on that path and there should not
-be, because on a real board the display reads a VRAM *serial* port, which
-cannot stall. Against the simulator's one-cycle memory that is exactly right.
-Against DDR3 the pixel would be stale by however many cycles the read took, and
-the number moves with memory load: a horizontal smear.
-
-`rtl/mister/fb_linecache.sv` fixes it, and it is in `rtl/mister/` rather than
-`rtl/newport/` on purpose — nothing about the graphics board changes, so every
-test that checks the picture still checks the same core. Two line buffers, one
-being read while the next is filled by burst from the mux; the display's
-pattern is fully determined, so the line wanted next is always the current one
-plus one, and `vs` restarts the prefetcher at line zero where a frame wraps.
-
-A miss serves black rather than stalling, because stalling is not on the menu.
-`verilator/tb_linecache.cpp` drives it with the real pattern — 1318 of 1680
-pixels, 1024 of 1065 lines, blanking included — against a memory that accepts a
-burst late and returns it in gaps: **4.0 million pixels, all correct, and zero
-misses after the first frame.**
-
-It also needed the mux's display port to become a **burst** port, and that is
-not an optimisation. A line is 1318 words with one line time to arrive;
-single-word transactions are latency-bound at roughly one word per round trip,
-which is an order of magnitude short. Without bursts the display cannot be fed
-at all, whatever its priority.
-
-### 3. Nothing persists
-
-The NVRAM is volatile, so the PROM rebuilds its environment on every boot and
-prints `NVRAM checksum is incorrect: reinitializing.` every time.
-`docs/reference/nvram.md` is the plan, including the constraint that
-decides its shape: the NVRAM's two banks have exactly one reader and one writer
-each and that is what makes them M10Ks rather than 65,536 flip-flops.
-
-### 4. The PROM's byte order is the one guess in the download path
-
-The image arrives through `ioctl` two bytes at a time and is assembled into
-DDR3 doublewords. This core's convention is that `data[63-8*i -: 8]` is the
-byte at `addr + i`, so the *first* byte of the file belongs in the *most*
-significant lane; `hps_io`'s WIDE mode presents the earlier byte in the low
-half of `ioctl_dout`, so each halfword is swapped on the way in.
-
-That is reasoned, not measured. **If the machine executes garbage from the
-first fetch, invert that swap before looking anywhere else.**
-
-### 5. No audio, no Ethernet, no cursor
-
-`AUDIO_*` is tied off: HAL2 answers its revision register and nothing else, so
-this core reports an audio processor rather than having one. The SEEQ 8003 is
-still an unclaimed address. VC2's cursor planes are not built, and neither is
-the mouse pointer that would use them — see `docs/reference/chipset.md`.
-
-## Memory size
-
-**This is a single RAM configuration.** The OSD offers 32, 48 and 64 MB,
-default 64, and 64 is both the default and the ceiling because that is what one
-MiSTer SDRAM module holds.
-
-Every one of those is a size the MC can actually express, which is not the same
-as any number of megabytes. A bank is four SIMMs, and the parts that do not
-need the BNK bit give banks of 64, 16 and 4 MB, so an installable size is a sum
-of those across at most four banks: 32 is 16+16, 48 is 16+16+16, 64 is one
-bank. `rtl/sgi/sgi_memmap.sv` has the derivation. Asking for 32 as one 32 MB
-bank is what made `--ram-mb 32` fail once — the PROM probed a bank that could
-not answer and its own diagnostic said so. All three boot in simulation and the
-PROM reports each one back:
-
-```
-  32 MB -> Memory size: 32 Mbytes
-  48 MB -> Memory size: 48 Mbytes
-  64 MB -> Memory size: 64 Mbytes
-```
-
-`sgi_memmap.sv` will build 96 (64+16+16) and 128 (64+64) as well, and they were
-booted and verified before being taken back out. **They are not offered**,
-because a size the board cannot be is not a choice — it is a way to get "No
-usable memory found" out of a machine that looked fine in the menu. They come
-back if main memory ever moves onto two SDRAM chips.
-
-Changing the size resets the machine, because the PROM sizes memory exactly
-once: `szmem` probes the banks at boot and writes the result into the MC's
-config registers, and nothing re-reads it.
-
-## Dual SDRAM: not supported, and what it would have been worth
-
-Recorded because the question was asked and answered rather than skipped.
-
-Today `SDRAM_*` is tri-stated: main memory, the frame buffer and the PROM are
-all in DDR3, so a dual-SDRAM daughterboard gives exactly what a bare DE10-Nano
-gives. Two things specific to this machine would have made it worth something.
-
-**The CPU is latency-bound in the most literal way.** `hinv` reports "16 Mhz",
-and that is not a clock - it is a measurement of how long a fixed loop of
-uncached instructions takes, about nine cycles per bus round trip. DDR3 through
-the f2h bridge is worse than SDRAM and, more to the point, variable.
-
-**The display and the CPU are the two masters least suited to sharing a bus.**
-One is a long sequential stream of 10.8 MB a frame; the other is random and
-latency-critical. They are behind the same arbiter.
-
-Of the three ways to use two chips - interleaving them as one 32-bit memory,
-splitting by address, or splitting by master - the last is the one that fits
-this core's shape: main memory on one chip and the frame buffer on the other,
-so those two masters stop contending at all. At 64 MB and below each fits one
-chip, which is exactly why the size list stops there.
-
-It needs an SDRAM controller before it needs a second chip, and main memory on
-a *single* SDRAM is the larger win and is independent of the dual question.
-`N64_MiSTer/rtl/sdram.sv` is the precedent, on the same board with the same CPU
-behind it. Neither is built.
-
-## Using it
-
-### Installing it
-
-```
-/media/fat/_Computer/SGIIndy_<date>.rbf     the core
-/media/fat/games/SGIIndy/boot.rom           the PROM, loaded automatically
-```
-
-**`boot.rom` is a framework feature, not a core one.** MiSTer's Main scans the
-core's home directory at startup and, finding a file with that exact name,
-uploads it over `ioctl` with **index 0** — no CONF_STR entry needed, the name
-and the `.rom` extension both hardcoded on the HPS side. The core's decode is
-`ioctl_index[5:0] == 0`, which is also what the `FS0` menu entry produces, so
-one path serves both and the automatic load needed no RTL at all. (The
-numbered form `boot0.rom` … `boot3.rom` exists too and passes `i << 6`; only
-`boot0`/`boot.rom` lands on index 0, which is the one this core answers.)
-
-`boot.rom` in the repository root is `ip24prom.070-9101-011.bin` — PROM Monitor
-5.3 Rev B10, the image every test here boots — copied under the name the
-framework looks for. `roms/IP24_Indy/` keeps both that and the 5.0 image under
-their real names.
-
-**The framework releases reset *before* it sends `boot.rom`.** It clears
-`status[0]` and only then starts the transfer, so there is a window in which
-the CPU fetches from a PROM region holding whatever DDR3 powered up with. The
-core rescues itself: `prom_download` re-asserts reset the moment the transfer
-begins and holds it for 65,535 clocks past the end. Nothing done in that window
-survives, and it cannot have corrupted the image, because the PROM region is
-read-only to everything except the download master.
+presents as memory that reads back something written somewhere else. The
+region bases are 32-bit byte offsets for the same reason, with the shift in
+one function (`wordaddr`); the first version declared them 25 bits wide,
+`25'h400_0000` truncated to zero, and the frame buffer aliased the whole of
+main memory.
+
+**The byte order.** The core's convention is that `data[63-8*i -: 8]` is the
+byte at `addr + i` — big-endian within the doubleword, because the machine is.
+The ARM reads the same doubleword little-endian, so a hex dump of guest memory
+from the HPS comes back reversed in groups of eight. `guestmem.py` flips it
+back; `ddr3_peek.py` shows it as the ARM sees it.
+
+**No SDRAM.** The `SDRAM_*` pins are tri-stated, so no SDRAM module is needed
+and a dual-SDRAM board gives exactly what a bare DE10-Nano gives. The one use a
+second memory would have here — the frame buffer on one chip and main memory
+on another, so that the display and the CPU stop contending for one port —
+needs an SDRAM controller this core does not have.
+
+### `ddr3_mux`: six masters, one port
+
+| master | port | shape | priority |
+|---|---|---|---|
+| the display | `fbr_*` | burst reads of up to 255 words, served to the bridge as sub-bursts | second |
+| the PROM download | `dl_*` | single-word writes, only while the core is held in reset | rotates |
+| main memory | `ram_*` | the CPU and the DMA engines through `ram_arb`: reads of 1–4 words, single-word writes, four-word line writes | first |
+| the PROM | `prom_*` | single-word reads | rotates |
+| the rasteriser | `fbw_*` | single-word reads and writes with byte enables | rotates |
+| the debug beacon | `bcn_*` | write-only pulses, never acknowledged | only when nobody else is asking |
+
+**Pipelined, so priority decides order and not who waits for whom.** Every
+master has at most one transaction outstanding — the display at most
+`FBR_AHEAD` sub-bursts — but the bridge takes a new command while earlier reads
+are still being answered, the way the scaler's own Avalon master uses it. The
+bridge answers reads in the order it took them, and an eight-deep queue of
+{master, words} for every read taken keeps that order, so each `DOUT_READY`
+word goes to the master it belongs to. Main memory goes first because the CPU
+stalls its whole pipeline on each of its transactions and never has more than
+one; the display is second because it is the only master with a deadline; the
+download, the PROM and the rasteriser rotate; the beacon is taken only when
+nothing else is pending, so observing the machine cannot cost it a clock.
+Because no master can have two transactions out, a fixed order cannot starve
+anybody here — which it did when the mux held one transaction at a time: 62
+rasteriser transactions against the display's 3,707 in `tb_ddr3` under fixed
+priority, before the rotation.
+
+**The display's bursts go to the bridge four words at a time, two
+outstanding** (`FBR_SUB = 4`, `FBR_AHEAD = 2`). A CPU fill taken while the
+display has sub-bursts outstanding waits for all of their words first; at 16
+words a sub-burst that was up to 32 of them, and a build that used 16 spent 24
+clocks per line fill on the bus against 8 in the simulator. At 4 it waits for
+at most 8 words, and the display's stream stays continuous because the next
+sub-burst's latency runs while the previous one's words arrive.
+[r4600-accuracy-clock-disk.md](../design/r4600-accuracy-clock-disk.md) §11 has
+the measurement.
+
+**The CPU's traffic is shaped for the bridge.** A cache line fill is one
+read of up to four words, acknowledged word by word with `ram_last` on the
+final one — a DDR3 round trip is paid once per line, not once per word. A
+dirty data line is written as one transaction of four single-word writes
+presented back to back, so no other master's command falls between them. And a
+main-memory request goes in front of the bridge in the clock it arrives rather
+than a clock later out of the latch.
+[cache-fill-latency.md](../design/cache-fill-latency.md) accounts for a fill's
+clocks.
+
+**A held request is not a new request, and telling them apart is the whole
+difficulty of this file.** Two shapes of master share it. The CPU *pulses*:
+one cycle, gone, catch it or lose it. REX3 *holds*: `fb_req` is combinational
+from its state machine, so in the cycle it is acknowledged it is still
+presenting the request that acknowledgement belongs to, and it goes from a
+destination read straight into the write without the line ever dropping. Read
+as a new request, that held line takes the transaction twice; REX3 counts
+acknowledgements to tell its reads from its writes, so it ends up permanently
+one behind and latches the shared read register while it holds another
+master's data. On hardware that was a frame buffer written entirely with the
+CPU's instruction fetches. So a request is new when its line has just risen,
+or when what it presents has changed since the transaction taken from it —
+and the second test applies only in the master's own acknowledgement cycle,
+because a screen-to-screen copy presents two reads of the same address with
+the line held between them.
+
+`make -C verilator ddr3test` runs `verilator/tb_ddr3.cpp` against a bridge
+model that is deliberately unhelpful — random `BUSY`, random read latency,
+garbage on `DOUT` except on the ready cycle — and checks that every read
+returns the last value written, every request is acknowledged exactly once,
+the regions do not overlap, the display is not starved, and REX3's held shape
+is taken once. `ddr3test_sub` is the same bench with 3-word sub-bursts, the
+odd size.
+
+### `ram_arb`: the CPU and the DMA engines on main memory's port
+
+Main memory has one port on the mux and two masters behind it: the CPU, and
+the DMA engines — the HPC3's SCSI channel and the MC's GIO64 engine, muxed
+into one first. `rtl/sgi/ram_arb.sv` is that arbiter, and it is the only one
+in the core. The CPU pulses: `rtl/cpu/r4300_bus.sv` raises `bus_req` for one
+cycle and then waits, holding its address, data, byte enables and burst length
+but not its request. The DMA engines hold theirs until they are acknowledged.
+
+The arbiter gates both on the same thing — one transaction on the port at a
+time — and remembers a CPU pulse that arrives during a DMA transaction in
+`cpu_wait`, issuing it when the port is free, because stalling a pulse drops
+it. `dma_granted` tells `sgi_indy.sv` which DMA engine a transaction belongs
+to, so that one engine's acknowledgements cannot land on the other.
+
+It is its own file because the version that lived inside `sgi_indy.sv` could
+not be tested, and it was wrong: it gated the DMA on a transaction in flight
+but not the CPU, so a CPU access during a DMA round trip rewrote the owner of
+the transaction in flight. On the board that was three faults at once — the
+CPU taking the DMA's data as its own (the PROM panicking on pointers that
+appear nowhere in its image), the DMA never acknowledged (POST failing the
+disk while the CD-ROM beside it passed), and the CPU's own access silently
+dropped. **None of it was visible in simulation, and the reason is worth
+keeping:** the window is exactly as wide as memory is slow, and
+`verilator/sim_ram.v` answers in one cycle. `make -C verilator ramarbtest`
+drives both masters in their real shapes against a port modelled the way the
+mux behaves, with the latency set by `RAMARB_LAT`; against the old logic it
+misrouted acknowledgements at every latency above zero, and at DDR3-like
+latencies the DMA engine completed nothing at all.
+
+## The display path
+
+**Newport's display side does not wait.** `newport.sv` has two serial ports —
+`fbr_*` for the drawing planes, `fba_*` for the auxiliary planes — and reads
+each once per pixel inside the display window, taking the answer the clock
+after the request without a handshake. On a real board this is a VRAM serial
+port, which cannot stall; against DDR3's long and variable latency the pixel
+would belong to a read issued some unknown number of cycles earlier. So each
+port is answered out of block RAM by an `rtl/mister/fb_linecache.sv`, which
+lives in `rtl/mister/` rather than `rtl/newport/` on purpose: nothing about the
+graphics board changes, so every test of the picture still tests the same
+Newport.
+
+**`fb_linecache`: a ring of four line buffers.** The display's access pattern
+is fully determined — VC2 walks each visible line left to right and the lines
+in order — so the fill fetches line after line into a ring of four M10K
+buffers of 672 words each, in bursts of 128 words, throttled to stay fewer
+than four lines ahead of the line being displayed (which is what stops it
+overwriting a buffer still in use). The rising edge of VC2's vertical sync
+restarts the ring at line 0, with the whole vertical blanking interval to get
+ahead in. A miss serves black, because nothing can stall; with **Video debug:
+Raw index** it serves index `0x80` instead, so a starved display shows as
+grey rather than as a frame buffer that really is black. Four buffers are
+margin against the other masters, not a cure for a rate deficit: when the
+display was asking for more than the bridge could deliver, going from two
+buffers to eight moved the miss rate from 98.8 % to 97 %.
+
+**The auxiliary instance skips empty lines** (`TRACK_ZERO`). It keeps one flag
+per frame buffer line meaning "may hold something the display can see" — the
+overlay byte and the popup bits, `ZERO_MASK`. Flags reset clear. The
+rasteriser sets a line's flag whenever it writes such a value into it
+(`aux_mark`); the fill clears it when a whole fetched line comes back with
+nothing under the mask and no mark landed while the fetch was in flight. A line
+whose flag is clear is published as zeros without a fetch, so on a desktop the
+auxiliary stream costs almost nothing: measured on the board, 1,024 of 1,024
+lines skipped a frame at the login chooser and 706 with the toolchest's System
+menu posted ([scsi-fit-and-framebuffer-layout.md](../design/scsi-fit-and-framebuffer-layout.md)
+§5).
+
+**`fb_fetch_arb` puts the two caches on the mux's one burst port**, one burst
+in flight, the drawing planes first when both ask. It latches its choice the
+cycle it presents a request and keeps it until the mux takes it, because the
+mux latches the address and burst count when it first sees the request and
+issues them later; an arbiter that re-chose in between handed the burst to the
+wrong cache and stalled both.
+
+**Four bytes a pixel is what makes the display fit on the port.** The
+frame buffer is two plane sets of a 32-bit slot per pixel on a 2048-pixel
+stride, two pixels to a 64-bit word with the even pixel in the low half, and
+the byte enables pick the half on a write:
+
+| region | slot |
+|---|---|
+| drawing planes, `0x34000000` | `{4'b0, cid[3:0], rgb[23:0]}` — the spare nibble is a copy of the window ID, so a window-ID-clipped draw costs one read and one write per pixel |
+| auxiliary planes, `0x34800000` | `{8'b0, aux[23:0]}` — overlay `[23:8]`, popup `[7:6]`/`[3:2]`, window ID `[5:4]`/`[1:0]`, two buffers of each |
+
+As the ARM sees it, the colour index of pixel (x, y) is the byte at
+`0x34000000 + (y × 2048 + x) × 4`. The drawing stream is then 672 words a
+line — about 0.4 words a clock at one pixel per clock — against a port whose
+absolute peak is one 64-bit word per clock at 50 MHz. The layout before it
+stored eight bytes a pixel and needed 0.80; the board delivered 0.52 and missed
+the first 710 pixels of every line, and no number of buffers could have fixed
+that. IRIS keeps its frame buffer as the same two arrays.
+
+`make -C verilator linecachetest` drives the auxiliary-flag build of the cache
+with the display's real pattern against a memory that accepts bursts late and
+returns them with gaps; `make -C verilator fetcharbtest` runs both caches and
+the arbiter against a bridge that latches first and issues later, like the
+mux. The whole-machine simulator never runs any of this — `verilator/sim_top.sv`
+serves both display ports from one-cycle `sim_ram` models — so these two
+benches and the board are the only places the fetch path is exercised.
+
+## Video out
+
+`CLK_VIDEO` is `clk_sys`, `CE_PIXEL` is Newport's pixel enable, and
+`VGA_DE/HS/VS/R/G/B` come straight from `newport.sv`. There is no scandoubler:
+the raster is already progressive and larger than the scaler needs, and the
+MiSTer scaler converts it to the HDMI mode.
+
+**VC2 runs the PROM's own timing table.** CMAP 1's revision register reports
+monitor type 10, so the PROM loads `np_timing.h`'s 1280×1024 table for a
+revision-3 board, and `np_vc2.sv` interprets it: 1,682 pixels by 1,065 lines,
+1,024 of them visible, durations counted in two-pixel units. The table was
+written for a 107.5 MHz pixel clock and 60 Hz; here a pixel is one `clk_sys`
+clock (`PIX_DIV = 1`), so the frame comes out at 50 MHz / (1,682 × 1,065) =
+27.9 Hz, which is also what the beacon measured on the board. The timing
+generator holds its pixel enable while it fetches table words, the clocks a
+real VC2 hides in a sixteen-deep state FIFO, so the raster is exactly the
+table's; it costs a fraction of a percent of frame time.
+
+**The display enable is VC2's visible window cropped to 1,280 columns.** The
+window (`VIS_LN`) on IRIX's table is 1,296 pixels wide, because IRIX biases the
+whole screen 8 pixels right (`bt445_bug_xbias`); the desktop occupies frame
+buffer columns 8..1287. `np_vc2.sv` hands the scaler exactly those 1,280
+columns, so the scaler copies rather than resamples. It measures the width
+from the previous visible line, crops only when a line wider than 1,280 has
+been seen (so another table still shows whole), and shows nothing until the
+first line after reset has been measured. Until build 44 the display enable
+was `DSPLY_EN`, RO1's pipeline enable, 1,318 pixels wide — and the scaler
+squeezed 1,318 columns into 1,280 by dropping one every ~34, which looked like
+damaged glyphs ([rex3-source-audit.md](../design/rex3-source-audit.md) §3.6).
+`tests/colcheck.py` checks the board's picture column for column;
+`tests/run-newport.sh` checks the raster is exactly 1280 × 1065 in simulation.
+
+**The pixel is three clocks behind its address, and the delays are clocks.**
+VC2 emits a column's frame buffer address in clock *t*; the line cache
+answers in *t*+1; `slot_rgb` registers the answer, so the pixel is there in
+*t*+2; CMAP's lookup is a registered read (it has to be, to infer as M10K), so
+the colour is there in *t*+3. The syncs, the display enable and VC2's own pixel
+enable travel together down a three-clock delay line, and the display ID and
+the cursor down a two-clock one. They are delayed in clocks, not in pixel
+enables, because VC2's enable pauses at its table-fetch stalls and those fall
+inside the visible window (columns 251/252, 759/760, 1013/1014 and 1267/1268
+on IRIX's table): delays counted in enables slipped against the data at every
+stall. The frame buffer fetch runs on VC2's undelayed enable.
+`verilator/tb_newport.cpp` test 9 samples the pins on the pixel enable the way
+the scaler does.
+
+**Aspect ratio.** *Original* is 5:4, because the Indy's own monitor was
+1280×1024 and the PROM's boot screen is drawn for it; *Full Screen* and the
+two custom ratios are the framework's.
+
+**The refresh is 27.9 Hz because a pixel is one core clock.** Sixty hertz would
+need the table's own 107.5 MHz pixel clock — VC2's generator in a clock domain
+of its own, with crossings for the Display Control Bus writes going in and the
+pixel stream coming out — and the drawing-plane stream alone would then ask
+for 0.83 of the DDR3 port's peak (672 words × 1,024 lines × 60 a second,
+against 50 million words). It is not built. On a mostly static desktop the
+scaler hides the difference.
+
+## `hps_io`: the OSD, the downloads, the disks, input and the clock
 
 ### The OSD
 
-* **Load PROM** — an SGI firmware image, for loading one by hand or replacing
-  the automatic one. It is not in the bitstream and it is not going to be; the
-  core holds itself in reset until the download finishes.
-* **SCSI ID1 / ID2 / ID6 CD** — three virtual drives, because `sgi_scsi.sv`'s
-  `TARGET_EN` builds exactly those three. ID 6 elaborates as a CD-ROM, which is
-  an elaboration-time choice and not a mount-time one: `CDROM` changes INQUIRY,
-  the logical block size, READ CAPACITY and the MODE SENSE pages, so a drive is
-  a different device from a disk rather than a disk with a different file in it.
-* **Graphics board: Fitted / None.** Not a quality setting. **Fitting the board
-  moves the console off the serial port** — ARCS installs a DisplayController
-  with `ConsoleOut|Output` and the PROM stops printing to the SCC entirely — so
-  "None" is how you get a terminal, and it is a real machine configuration.
-* **Primary caches: On / Off**, for bisecting a hardware fault onto one of them
-  without rebuilding.
-* **Memory: 64 / 32 / 48 MB** — see above. Changing it resets the machine.
+| entry | `CONF_STR` | what it does |
+|---|---|---|
+| Load PROM | `FS0,BIN` | loads an SGI PROM image by hand at ioctl index 0, the same index the automatic `boot.rom` uses; the core is held in reset until the download finishes |
+| SCSI ID1, SCSI ID2 | `SC1`, `SC2` | disk images on SCSI IDs 1 and 2 |
+| SCSI ID6 CD | `SC3` | a CD-ROM image on ID 6 |
+| Graphics board: Fitted / None | `O[10]` | whether Newport answers on the bus. **Fitting it moves the console off the serial port**: ARCS installs a DisplayController with `ConsoleOut\|Output` and the PROM stops printing to the SCC, so *None* is a real machine configuration, not a degraded mode |
+| Primary caches: On / Off | `O[11]` | both primary caches, for bisecting a fault onto them without a rebuild |
+| Memory: 48MB / 32MB / 64MB | `O[13:12]` | main memory size; 48 MB is the default. Changing it resets the machine |
+| Video debug: Off / Raw index | `O[14]` | shows the frame buffer's colour index as grey with CMAP taken out of the path (the cursor as white), and a line-cache miss as index `0x80` |
+| UART debug: Off / 0x55 from clk_sys / 0x55 from sclk | `O[16:15]` | replaces the SCC on `UART_TXD` with an endless 9600-baud `0x55` from either clock domain, to separate the SCC from the path to the HPS |
+| SCSI cache: On / Off | `O[17]` | the SCSI block cache (`rtl/scsi/scsi_cache.sv`, [scsi-block-cache.md](../design/scsi-block-cache.md)); Off makes every block request a single-sector HPS transaction |
+| Aspect ratio | `O[122:121]` | Original (5:4), Full Screen, and the two custom ratios |
+| Reset / Reset and close OSD | `T[0]` / `R[0]` | resets the machine |
 
-The SCC's channel B is tty1, the SGI console, and it goes to the board's UART
-pins. The keyboard and mouse come from `hps_io` as `ps2_key` and `ps2_mouse`
-and go to the 8042 in IOC2, which POST tests and passes and which the PROM
-reads for console input once graphics are fitted.
+`scripts/setopt.sh` writes the same bits into `/media/fat/config/SGIINDY.CFG`
+without touching the OSD, because the screenshot API does not capture the OSD
+and a blind keystroke walk through it cannot be checked.
 
-## The clocks
+### Downloads: the PROM and the Ethernet address
 
-One PLL output, 50 MHz, and that number is a measurement rather than a guess:
-`syn/README.md` has the CPU alone closing at 64.04 MHz on a `5CSEBA6U23I7`, the
-whole core is the CPU plus the chipset plus Newport, and 50 is the round number
-below it. Raising it means running the fit and reading
-`output_files/sgiindy_syn.sta.rpt`, not editing `rtl/pll.v` hopefully.
+**Index 0 is the PROM, both ways in.** The OSD entry is `FS0`, and MiSTer's
+Main uploads a file named `boot.rom` from the core's games directory at every
+core start, at index 0, with no CONF_STR entry needed. One decode serves both.
+The decode compares the **whole low byte** of `ioctl_index`, not just the slot
+number in `[5:0]`: the framework also uploads `boot0.rom` .. `boot3.rom` at
+index `i << 6`, and a decode on the slot alone would take `boot1.rom` as the
+PROM.
 
-`rtl/pll/` was already a MegaWizard-generated PLL from the template, at
-20 MHz, and the change to it is one line: `output_clock_frequency0`.
-`altera_pll` takes its output frequencies as strings and Quartus computes the
-counters at elaboration, so that is the whole of it — but the generated files
-carry IP metadata that the catalogue and a future regeneration both want, so
-edit the frequency rather than replacing them. The wizard's own
-`gui_output_clock_frequency0` retrieval-info comment in `rtl/pll.v` is kept in
-step for the same reason.
+**Index `0x40` is the machine's Ethernet address**, from
+`games/SGIIndy/boot1.rom` — six bytes, most significant first.
+`scripts/deploy.sh` writes that file on the device with
+`tools/misterdeploy/mkmac.py`: `08:00:69:12:34` (SGI's OUI) and the MiSTer's
+own last octet, so two boards on one network differ. Without the file the
+address is `08:00:69:12:34:56`. It cannot be compiled in, and it cannot be
+absent: with no `eaddr` the IRIX 5.3 installer dereferences the null it gets
+back. The framework sends `boot1.rom` before `boot.rom`, whose download holds
+the machine in reset, so the address is latched long before the guest can read
+it; `sgi_ds1386.sv` and `eeprom_93c56.sv` seed it into the NVRAM and the
+configuration EEPROM when reset releases.
 
-`sys/pll_q17.qip` expects `rtl/pll.qip` to exist and pulls it in itself, so
-`files.qip` must **not** name it again.
+**Reset.** The machine is held in reset while the PLL is unlocked, by
+`RESET`, the OSD's reset, the user button, a change of memory size, and during
+a PROM download — and for 65,535 clocks after the last of them. The framework
+releases reset *before* it sends `boot.rom`, so for a moment the CPU fetches
+from a PROM region holding whatever DDR3 powered up with; the download
+re-asserts reset the instant it begins, and nothing done in that window
+survives. The PROM region is written only by the download master, so the image
+cannot have been damaged.
 
-`sclk`, the SCC's 3.6864 MHz serial clock, is a numerically controlled
-oscillator on `clk_sys` — 50 over 3.6864 is 13.56, so there is no integer
-divide, and a UART does not care about the fraction of a percent an NCO leaves.
+**Byte order.** `hps_io` runs in WIDE mode and hands over two bytes at a time
+with the earlier byte in the low half of `ioctl_dout`. Each halfword is swapped
+on the way in and four of them are assembled into one doubleword write, so the
+first byte of the file lands in the most significant lane — the core's
+convention above. The user LED is lit while the PROM downloads.
+
+### SCSI images
+
+`VDNUM` is 4: slot 0 is unused by the block interface (the PROM comes through
+`ioctl`), and slots 1, 2 and 3 are SCSI IDs 1, 2 and 6 — exactly the targets
+`sgi_scsi.sv`'s `TARGET_EN` builds, with ID 6 elaborated as a CD-ROM
+(`CDROM_IDS`). A CD-ROM is a different device from a disk, not a disk with a
+different file in it: `CDROM` changes INQUIRY, the logical block size, READ
+CAPACITY and the MODE SENSE pages, so which ID is a CD-ROM is decided at
+elaboration, not at mount time. Each slot carries its own target's LBA and
+read-back word, so a disk request and a CD request that overlap cannot serve
+each other's addresses; the block count per transaction comes from the block
+cache, up to eight sectors. The disk LED follows the block interface, the only
+thing in the machine that touches the SD card while it runs.
+
+The slots are `SC`, not `S`, and the C is the point: the framework saves a
+chosen image's path to `/media/fat/config/SGIIndy.s<n>` and mounts it again at
+every core start, so a reload, a reset or a power cycle comes up with the same
+disks. `scripts/mount.sh` writes those files directly. The file selector
+offers `.img`, `.iso` and `.chd`; the images this project uses are raw disk
+images and ISO files — `tests/run-irix.sh` converts a MAME CHD with
+`chdman extractraw` before using it — and a CHD mounted directly is untested.
+
+### Keyboard, mouse and clock
+
+`ps2_key` and `ps2_mouse` go to the 8042 in IOC2 (`rtl/sgi/i8042.sv`), which
+POST tests and the PROM reads for console input once graphics are fitted; see
+[chipset.md](chipset.md#the-keyboard-and-mouse-controller).
+
+The DS1386 real-time clock (`rtl/sgi/sgi_ds1386.sv`) takes its time from
+`hps_io`'s RTC, which Main sends once when the core starts. The time registers
+load from it, and a reset leaves them running, the way a battery-backed part
+ignores the machine's reset. Main sends local time; IRIX keeps its clock in
+GMT and applies `/etc/TIMEZONE`, so IRIX shows the MiSTer's time with
+`TZ=GMT0`. Without the RTC the part comes up at a fixed 1996 date
+([r4600-accuracy-clock-disk.md](../design/r4600-accuracy-clock-disk.md) §5).
+
+## Memory size
+
+**The OSD offers 48, 32 and 64 MB, and 48 is the default.** Every one of them
+is a size the MC can actually express, which is not the same as any number of
+megabytes. A bank is four SIMMs, and the parts that do not need the BNK bit
+give banks of 64, 16 and 4 MB, so an installable size is a sum of those across
+at most four banks: 32 is 16+16, 48 is 16+16+16, 64 is one bank.
+`rtl/sgi/sgi_memmap.sv` has the derivation. Asking for 32 as one 32 MB bank is
+what made `--ram-mb 32` fail once — the PROM probed a bank that could not
+answer and its own diagnostic said so. All three boot in simulation and the
+PROM reports each one back as `Memory size: NN Mbytes`.
+
+`sgi_memmap.sv` will build 96 (64+16+16) and 128 (64+64) as well, and they
+were booted before being taken back out. **They are not offered**, because a
+size the board cannot hold is not a choice — it is a way to get "No usable
+memory found" out of a machine that looked fine in the menu — and main
+memory's region is 64 MB.
+
+Changing the size resets the machine, because the PROM sizes memory exactly
+once: `szmem` probes the banks at boot and writes the result into the MC's
+configuration registers, and nothing re-reads it.
+
+## Clocks
+
+**One PLL output, 50 MHz**, and everything runs on it: the CPU, the chipset,
+Newport, `DDRAM_CLK` and `CLK_VIDEO`. Build 44 meets it with +0.979 ns of setup
+slack. Raising it means a fit and the timing report, not an edit made
+hopefully — and see *Video out* on why it would not buy 60 Hz. The PLL is the
+template's MegaWizard `altera_pll`; its frequency is `output_clock_frequency0`
+in `rtl/pll/pll_0002.v` (Quartus computes the counters at elaboration), with
+the wizard's `gui_output_clock_frequency0` retrieval comment in `rtl/pll.v`
+kept in step so a regeneration agrees. `sys/pll_q17.qip` pulls in
+`rtl/pll.qip` itself, so `files.qip` must **not** name it again: that is a
+duplicate-entity error, not a no-op.
+
+**`sclk`, the SCC's 3.6864 MHz serial clock, is a numerically controlled
+oscillator on `clk_sys`.** 50 MHz over 3.6864 MHz is 13.56, so no integer
+divide gives it; a 32-bit accumulator adds `SCLK_INC` = 2 × 3.6864 / 50 × 2³²
+= 633,187,924 every clock and toggles `sclk` on the carry, which lands within a
+fraction of a percent — and a UART does not care about a fraction of a
+percent. `z8530_scc.sv` genuinely clocks on it, so it is a second clock domain,
+crossed with Gray-coded FIFO pointers and two-flop synchronisers. `sgiindy.sdc`
+leaves it unconstrained on purpose — the timing report's one "Unconstrained
+Clock" — rather than hiding it behind a false path; at 3.6864 MHz through
+shift-register-depth logic there is about 270 ns of slack to lose.
+
+## The serial port
+
+SCC channel B — `tty1`, the SGI console — goes to `UART_TXD`/`UART_RXD`, which
+`sys/sys_top.v` connects to the HPS's own UART, so on the ARM it is
+`/dev/ttyS1`. Channel A has nothing plugged into it and its receive line idles
+at mark. With **Graphics board: None** the PROM's console is on this port.
+
+**On the boards this project has used, nothing from it has ever arrived at
+`/dev/ttyS1`.** The **UART debug** option exists to split that question — a
+`0x55` pattern timed from `clk_sys` or from `sclk`, in place of the SCC — and
+the board-side test loops read their results out of memory instead
+([deploy-and-debug.md](deploy-and-debug.md#the-serial-console--scriptsconsolesh)). The console
+works in simulation, where every serial regression in `tests/` reads it.
+
+## The debug beacon
+
+`sgiindy.sv` streams 43 64-bit status words into the otherwise unused DDR3
+window at ARM physical `0x35800000`, one word every 64 clocks — the whole set
+every 2,752 clocks, 55 µs. It is the mux's lowest-priority master and is taken
+only when nothing else is pending, so it cannot change what it observes, and
+it runs on `pll_locked` alone, so a guest reset does not stop it. Word 0 is
+`{0xBEC0, version, 0x00, heartbeat}`; the version is 14 (`0x0E`).
+
+| words | contents | from |
+|---|---|---|
+| 0 | magic, version, a heartbeat that moves while the writer runs | `sgiindy.sv` |
+| 1–7 | the SCSI bus and the HPS side, the WD33C93, targets 1 and 6, target 1's first-stall snapshot | `sgi_scsi.sv` |
+| 8 | the HPC3 SCSI DMA channel's state | `hpc3_scsi_dma.sv` |
+| 9 | interrupt delivery: the SCSI and SCSI DMA sources, the five interrupt lines into the CPU, INT2's status and mask registers | `sgi_indy.sv` |
+| 10 | the PC entering decode and the CP0 debug bits, the pipeline's stall vector among them — what `prof.py` samples | `sgi_indy.sv` |
+| 11–14 | the MC's VDMA engine and its descriptors, REX3's beat counters, the display ID and mode entry being shown | `sgi_indy.sv`, `newport.sv` |
+| 15 | the line caches: drawing-plane misses, auxiliary misses, auxiliary lines skipped | `sgiindy.sv` |
+| 16–20 | SCSI disk-time counters: HPS transactions, busy and wait time, block cache hits and misses, DATA-phase bytes and time | `sgi_scsi.sv` |
+| 21–28 | CPU performance counters: instructions, stalls by stage, TLB walks, cache fills and their bus clocks | `sgi_indy.sv` |
+| 29–34 | the DDR3 port: clocks each master held it, clocks the CPU and the rasteriser waited, transactions, read latency | `sgiindy.sv`, `ddr3_mux.sv` |
+| 35 | instruction fills after an instruction TLB walk, and fills answered from a line already held | `sgi_indy.sv` |
+| 36–39 | a main-memory read's latency split between the bridge and the queue; CPU waits behind DMA | `ddr3_mux.sv`, `sgi_indy.sv` |
+| 40 | register 31 at retirement and the PC last retired | `sgi_indy.sv` |
+| 41–42 | SCSI DATA-phase clocks split by whose turn it was | `sgi_scsi.sv` |
+
+`tools/misterdeploy/bcnread.py` decodes it on the device (`--stats` for the
+disk-time counters, `--perf` for the performance counters), `prof.py` samples
+it as a statistical profiler, and `perfdiff.py` turns two `--perf` readings
+into a workload's breakdown; see [the tools' README](../../tools/misterdeploy/README.md).
+The comment above the writer in `sgiindy.sv` is the authoritative bit map.
+
+## What is not there
+
+- **Audio.** `AUDIO_*` is tied off. `hal2.sv` answers its register file, but
+  `HAL2_REV` bit 15 is set — "no audio present" — so the PROM skips its audio
+  initialisation, `hinv` lists no audio, and IRIX never loads the `kdsp_a2`
+  driver, which spins with interrupts off against a HAL2 that has no DMA and
+  no sample path ([scsi-fit-and-framebuffer-layout.md](../design/scsi-fit-and-framebuffer-layout.md) §3b).
+- **Ethernet.** HPC3's Ethernet channel registers exist as storage — POST walks
+  a pattern through them — but there is no Ethernet controller behind them.
+  The Ethernet *address* exists so the PROM has one.
+- **A remembered environment.** The DS1386's NVRAM is volatile: it comes up
+  blank at every core load and the PROM prints `NVRAM checksum is incorrect:
+  reinitializing.` on every boot. [nvram.md](nvram.md) is the plan for keeping
+  it.
+- **A GIO64 expansion card.** The slot is empty; the IRIS test device is a
+  simulation fixture.
+- **60 Hz.** See *Video out*.
+
+## Installing a release
+
+```
+/media/fat/_Computer/SGIIndy_20260918.rbf   the core, in any "_" folder
+/media/fat/games/SGIIndy/boot.rom           the PROM: releases/boot.rom
+```
+
+**`boot.rom` is a framework feature, not a core one.** Main uploads it at core
+start with no OSD interaction (see *Downloads*); the name and the `.rom`
+extension are fixed on the HPS side. Its directory is `games/<CoreName>`, where
+`<CoreName>` is CONF_STR's first field, `SGIIndy` — not the file name — and
+**MiSTer does not create that directory for you**: a missing one is silently
+an absent PROM, and a machine executing whatever DDR3 powered up with.
+
+`releases/boot.rom` is `roms/IP24_Indy/ip24prom.070-9101-011.bin` — PROM
+Monitor SGI Version 5.3 Rev B10, R4X00/R5000, IP24, the image every test here
+boots — under the name the framework looks for. `games/SGIIndy/boot1.rom`, the
+Ethernet address, is optional. Disk and CD images go wherever the OSD's file
+selector can reach them, and the mount is remembered.
+[deploy-and-debug.md](deploy-and-debug.md) is the scripted path, for a build
+under development.
 
 ## A trap paid for while writing this
 
@@ -445,4 +541,5 @@ divide, and a UART does not care about the fraction of a percent an NCO leaves.
 first version of the top level had `// Verilator harness; ...` as the second
 line of a comment, and every lint of the file failed with
 `Unknown verilator comment: 'harness; on hardware nothing reads them.'`. It
-costs a confusing five minutes the first time and nothing after that.
+costs a confusing five minutes the first time and nothing after that, and
+several files here now say "the tool" instead.
