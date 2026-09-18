@@ -149,11 +149,21 @@ saver() {
 # which is a distinction two runs of this script have already got wrong.
 saver xclock '/usr/bin/X11/xclock -update 1 -geometry 300x300+420+140'
 
+# WHAT X THINKS IT IS RUNNING ON. The first run that got this far showed the
+# GL demos drawing correct geometry in wrong colours, and the colours changing
+# under each other - the pixel indices stable, the colour map not. That is a
+# visual/colormap question and these two answer it: how many bits Xsgi gave
+# itself and which visuals it offers, and what the gfx driver thinks the board
+# is. Both print and exit, so the grabs around them are incidental.
+saver xdpy   '/usr/bin/X11/xdpyinfo' 2
+saver gfxinf '/usr/gfx/gfxinfo' 2
+saver xlsvis '/usr/bin/X11/xdpyinfo -queryExtensions' 2
+
 # The 2D savers: X lines and points, which is I_LINE and F_LINE. Plain first,
 # then the form the desktop's saver framework actually uses - -besaver makes
 # xlock expect to be a child of ssaver, and it is worth knowing which of the
 # two is the one that does not run.
-saver qixw   '/usr/bin/X11/xlock -mode qix -nolock -inwindow'
+saver qixw   '/usr/bin/X11/xlock -mode qix -nolock'
 saver qix    '/usr/bin/X11/xlock -mode qix -besaver'
 saver swarm  '/usr/bin/X11/xlock -mode swarm -besaver'
 saver rotor  '/usr/bin/X11/xlock -mode rotor -besaver'
