@@ -1,0 +1,73 @@
+[20:03:25] restoring /media/fat/games/SGIIndy/SGIIndy53.img from /media/fat/games/SGIIndy/SGIIndy53-pristine.img (in place; see perfprobe.sh)
+[20:08:01] launching 0abf9d13c58d88e4447c9136a79170d3 (/tmp/SGIIndy.rbf)
+[20:08:20] +11s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 161 marker  0.2% 
+[20:08:31] +22s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 168 marker  0.2% 
+[20:08:42] +33s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:08:54] +45s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:09:05] +56s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:09:16] +67s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:09:27] +78s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices   1 marker  0.0% 
+[20:09:38] +89s X-UP       panicstr=0x00000000 panel9  0.0% idx16 22.2% indices 166 marker  0.0% 
+[20:09:38] X-UP at +89s
+[20:09:54] logging in as root
+[20:11:39] quitting Software Manager, pointer into the Console
+FRESH tests/out/hw/saver-b43/00-desktop.png <- SGIIndy/20260917_201250-screen.png
+[20:12:52] saver xclock (33s): /usr/bin/X11/xclock -update 1 -geometry 300x300+420+140
+FRESH tests/out/hw/saver-b43/xclock-1.png <- SGIIndy/20260917_201323-screen.png
+FRESH tests/out/hw/saver-b43/xclock-2.png <- SGIIndy/20260917_201336-screen.png
+FRESH tests/out/hw/saver-b43/xclock-3.png <- SGIIndy/20260917_201349-screen.png
+[20:14:11] saver qixw (33s): /usr/bin/X11/xlock -mode qix -nolock -inwindow
+FRESH tests/out/hw/saver-b43/qixw-1.png <- SGIIndy/20260917_201440-screen.png
+FRESH tests/out/hw/saver-b43/qixw-2.png <- SGIIndy/20260917_201453-screen.png
+FRESH tests/out/hw/saver-b43/qixw-3.png <- SGIIndy/20260917_201506-screen.png
+[20:15:27] saver qix (33s): /usr/bin/X11/xlock -mode qix -besaver
+FRESH tests/out/hw/saver-b43/qix-1.png <- SGIIndy/20260917_201555-screen.png
+FRESH tests/out/hw/saver-b43/qix-2.png <- SGIIndy/20260917_201608-screen.png
+FRESH tests/out/hw/saver-b43/qix-3.png <- SGIIndy/20260917_201621-screen.png
+[20:16:43] saver swarm (33s): /usr/bin/X11/xlock -mode swarm -besaver
+FRESH tests/out/hw/saver-b43/swarm-1.png <- SGIIndy/20260917_201711-screen.png
+FRESH tests/out/hw/saver-b43/swarm-2.png <- SGIIndy/20260917_201724-screen.png
+FRESH tests/out/hw/saver-b43/swarm-3.png <- SGIIndy/20260917_201737-screen.png
+[20:17:59] saver rotor (33s): /usr/bin/X11/xlock -mode rotor -besaver
+FRESH tests/out/hw/saver-b43/rotor-1.png <- SGIIndy/20260917_201827-screen.png
+FRESH tests/out/hw/saver-b43/rotor-2.png <- SGIIndy/20260917_201840-screen.png
+FRESH tests/out/hw/saver-b43/rotor-3.png <- SGIIndy/20260917_201853-screen.png
+[20:19:15] saver bongo (33s): /usr/demos/bin/bongo
+FRESH tests/out/hw/saver-b43/bongo-1.png <- SGIIndy/20260917_201940-screen.png
+FRESH tests/out/hw/saver-b43/bongo-2.png <- SGIIndy/20260917_201953-screen.png
+FRESH tests/out/hw/saver-b43/bongo-3.png <- SGIIndy/20260917_202006-screen.png
+[20:20:28] saver ep (33s): /usr/demos/bin/ep
+FRESH tests/out/hw/saver-b43/ep-1.png <- SGIIndy/20260917_202053-screen.png
+FRESH tests/out/hw/saver-b43/ep-2.png <- SGIIndy/20260917_202106-screen.png
+FRESH tests/out/hw/saver-b43/ep-3.png <- SGIIndy/20260917_202119-screen.png
+[20:21:41] saver butter (33s): /usr/demos/bin/buttonfly
+FRESH tests/out/hw/saver-b43/butter-1.png <- SGIIndy/20260917_202207-screen.png
+FRESH tests/out/hw/saver-b43/butter-2.png <- SGIIndy/20260917_202220-screen.png
+FRESH tests/out/hw/saver-b43/butter-3.png <- SGIIndy/20260917_202233-screen.png
+[20:22:55] saver havep (33s): /usr/sbin/haven -n /usr/demos/bin/ep -S
+FRESH tests/out/hw/saver-b43/havep-1.png <- SGIIndy/20260917_202323-screen.png
+FRESH tests/out/hw/saver-b43/havep-2.png <- SGIIndy/20260917_202336-screen.png
+FRESH tests/out/hw/saver-b43/havep-3.png <- SGIIndy/20260917_202349-screen.png
+[20:24:11] halting
+[20:25:28] what each client printed:
+---- s-bongo.log ----
+---- s-ep.log ----
+---- s-qix.log ----
+---- s-qixw.log ----
+xlock:  bad command line option "-inwindow"
+
+usage:  xlock [-help] [-resources] [-display displayname] [-name resourcename]
+    [-/+mono] [-/+nolock] [-/+remote] [-/+allowroot] [-/+besaver]
+    [-/+enablesaver] [-/+allowaccess] [-/+echokeys] [-/+usefirst] [-/+v]
+    [-delay usecs] [-batchcount num] [-colorcount num] [-nice level]
+    [-blankthresh level] [-timeout seconds] [-saturation value]
+    [-font fontname] [-bg color] [-fg color] [-name string] [-password string]
+    [-info string] [-validate string] [-invalid string] [-mode hop | qix
+    | image | life | swarm | rotor | pyro | flame | blank | pop | random]
+
+Type xlock -help for a full description.
+
+---- s-rotor.log ----
+---- s-swarm.log ----
+---- s-xclock.log ----
+[20:25:32] done -> tests/out/hw/saver-b43

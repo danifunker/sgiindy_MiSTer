@@ -27,12 +27,32 @@
 //  buffer is external memory, and correctness comes first. A span cache or a
 //  wide fill path is the obvious later win and is not needed to boot.
 //
-//  WHAT IS NOT BUILT: line address modes (I_LINE, F_LINE, A_LINE), the line
-//  stipple pattern, alpha blending, dithering, colour compare, and the
-//  colour DDAs' interpolation. Nothing on the PROM's console path uses any
-//  of them - see the table in docs/16-newport-plan.md - and each is a
-//  self-contained addition. A command that asks for one draws with the
-//  interpolators held, which is wrong but visible, rather than hanging.
+//  THE WHOLE COMMAND SET IS BUILT. It was not always: for the first
+//  twenty-odd builds this engine drew flat colour-index spans and blocks and
+//  nothing else, which is everything the PROM console and the X server's
+//  window furniture ask for and none of what a GL program asks for. The gap
+//  was measured rather than guessed - iris/src/rex3_shaders.rs carries a
+//  corpus of 462 distinct (DRAWMODE0, DRAWMODE1, CLIPMODE) triples collected
+//  from a real IRIX desktop, and counting its feature bits says what a
+//  screen saver actually needs: dither in 197 of them, the three line
+//  address modes in 137, the colour DDAs in 85, line stipple in 49, alpha
+//  blending in 46. docs/55 has the table.
+//
+//  So: colour DDAs with per-pixel slopes and the CI and RGB clamps, the
+//  24-bit-to-plane-depth compression with the Bayer dither, alpha blending
+//  with both factor selectors, the alpha compare, the host alpha, LRONLY,
+//  the SPAN address mode as distinct from BLOCK, all three line address
+//  modes with their Bresenham state in the registers where a continuation GO
+//  can find it, the line stipple with its repeat counter, and the A_LINE
+//  endpoint filter. IRIS's rex3_generic.rs is the oracle for every one of
+//  them and verilator/tb_rex3draw.cpp is its transcription: that bench runs
+//  the corpus's own draw modes through both and compares the frame buffers.
+//
+//  STILL NOT BUILT: YFLIP and SWAPENDIAN (no shape in the corpus sets
+//  either) and the anti-aliased line's per-pixel coverage weighting - A_LINE
+//  draws as a fractional line, and the AWEIGHT tables are read for the
+//  endpoint filter and nothing else. Both are accepted, read back and
+//  ignored.
 //============================================================================
 
 module np_rex3 #(
@@ -214,17 +234,62 @@ module np_rex3 #(
     localparam logic [31:0] M_TOPSCAN     = 32'h0000_03FF;   // 10
     localparam logic [31:0] M_CLIPMODE    = 32'h0000_1FFF;   // 13
 
-    // The slope registers are sign-magnitude, not two's complement, and the
-    // diagnostic checks the conversion: a negative value comes back as the
-    // sign bit set and the magnitude below it. Doing it at write time means
-    // the stored value is what the chip actually holds.
+    // THE SLOPE REGISTERS ARE SIGN-MAGNITUDE ON THE BUS AND TWO'S COMPLEMENT
+    // IN THE CHIP, AND THOSE ARE THE SAME BITS. A negative write is bit 31
+    // set with the magnitude below it; what is stored is the field-width
+    // two's complement of that magnitude, whose own top bit is then set,
+    // which is both what the register test reads back and what the colour
+    // DDA has to add. IRIS's from_slope_red/from_slope are these two lines.
+    // The one case where the old sign-magnitude spelling disagreed is a sign
+    // bit over a zero magnitude - a negative zero - and both call that zero.
     function automatic logic [31:0] to_sign_mag(input logic [31:0] v,
                                                 input int nbits);
         logic [31:0] mag;
         begin
-            mag = v[31] ? (~v + 32'd1) : v;
-            to_sign_mag = (v[31] ? (32'd1 << (nbits - 1)) : 32'd0)
-                        | (mag & ((32'd1 << (nbits - 1)) - 32'd1));
+            mag = v & ((32'd1 << (nbits - 1)) - 32'd1);
+            if (mag == 32'd0) to_sign_mag = 32'd0;
+            else to_sign_mag = v[31]
+                 ? (((32'd1 << (nbits - 1)) - mag) | (32'd1 << (nbits - 1)))
+                 : mag;
+        end
+    endfunction
+
+    // One of those stored slopes, sign-extended to 32 bits for the adder.
+    function automatic logic signed [31:0] slope_ext(input logic [31:0] v,
+                                                     input int nbits);
+        slope_ext = $signed(v | (v[nbits-1] ? ~((32'd1 << nbits) - 32'd1)
+                                            : 32'd0));
+    endfunction
+
+    // COLOUR COMPONENTS LIVE IN THE DDAs AS o12.11: the integer part is at
+    // [22:11], nine bits of it are significant, and the two out-of-range
+    // cases are distinguished. Bit 31 set means the DDA has stepped below
+    // zero (the accumulator is 32 bits and the slopes are signed), and an
+    // integer of 0x180 or more is the same wrap seen from the other side;
+    // both read as zero. Anything else above 0xFF saturates. IRIS's
+    // clamp_color_component, and the reason a shaded span fades to black at
+    // one end rather than wrapping to white.
+    function automatic logic [7:0] clamp_comp(input logic [31:0] c);
+        logic [8:0] v;
+        begin
+            v = c[19:11];
+            if (c[31] || v >= 9'h180) clamp_comp = 8'h00;
+            else if (v > 9'h0FF)      clamp_comp = 8'hFF;
+            else                      clamp_comp = v[7:0];
+        end
+    endfunction
+
+    // The same two out-of-range cases seen by the DDA itself. An RGB
+    // component that has stepped out of range is clamped in the accumulator,
+    // not just on the way out, so a span that runs off the end of the ramp
+    // stays clamped for the rest of its length.
+    function automatic logic [31:0] clamp_shade(input logic [31:0] c);
+        logic [8:0] v;
+        begin
+            v = c[19:11];
+            if (c[31] || v >= 9'h180) clamp_shade = 32'h0000_0000;
+            else if (v > 9'h0FF)      clamp_shade = 32'h0007_FFFF;
+            else                      clamp_shade = c;
         end
     endfunction
 
@@ -238,7 +303,7 @@ module np_rex3 #(
     logic [31:0] aweight0, aweight1;
     logic [31:0] colorred, coloralpha, colorgrn, colorblue;
     logic [31:0] slopered, slopealpha, slopegrn, slopeblue, slopered1;
-    logic [31:0] wrmask, colori, colorx;
+    logic [31:0] wrmask, colorx;
     logic [31:0] hostrw0, hostrw1;
     logic [31:0] dcbmode, dcbdata0, dcbdata1;
     logic [31:0] smask1x, smask1y, smask2x, smask2y;
@@ -255,15 +320,41 @@ module np_rex3 #(
     wire  [2:0] dm0_adrmode = drawmode0[4:2];
     wire        dm0_dosetup = drawmode0[5];
     wire        dm0_colorhost = drawmode0[6];
+    wire        dm0_alphahost = drawmode0[7];
     wire        dm0_stoponx = drawmode0[8];
     wire        dm0_stopony = drawmode0[9];
     wire        dm0_skipfirst = drawmode0[10];
     wire        dm0_skiplast  = drawmode0[11];
     wire        dm0_enzpattern = drawmode0[12];
+    wire        dm0_enlspat   = drawmode0[13];
+    wire        dm0_lsadvlast = drawmode0[14];
     wire        dm0_length32 = drawmode0[15];
     wire        dm0_zpopaque = drawmode0[16];
+    wire        dm0_lsopaque = drawmode0[17];
+    // SHADE is what makes a span a shaded span: without it the colour DDAs
+    // hold and every pixel of the primitive takes the same colour, which is
+    // the flat fill this engine used to be able to do and nothing else.
+    wire        dm0_shade    = drawmode0[18];
+    // LRONLY: draw only the left-to-right half of the primitive. A polygon
+    // rasteriser hands REX3 both edges of every span and lets the chip throw
+    // one away; without the bit the right-to-left ones paint over the fill.
+    wire        dm0_lronly   = drawmode0[19];
     wire        dm0_xyoffset = drawmode0[20];
+    wire        dm0_ciclamp  = drawmode0[21];
+    wire        dm0_endptfilter = drawmode0[22];
     wire        dm0_ystride  = drawmode0[23];
+
+    // The five address modes. SPAN and BLOCK differ in one thing that
+    // matters: a span that reaches its right-hand end is over, while a block
+    // wraps x back to XSAVE and starts the next row.
+    localparam logic [2:0] AM_SPAN  = 3'd0;
+    localparam logic [2:0] AM_BLOCK = 3'd1;
+    localparam logic [2:0] AM_ILINE = 3'd2;
+    localparam logic [2:0] AM_FLINE = 3'd3;
+    localparam logic [2:0] AM_ALINE = 3'd4;
+    wire dm0_is_line = (dm0_adrmode == AM_ILINE) || (dm0_adrmode == AM_FLINE)
+                    || (dm0_adrmode == AM_ALINE);
+    wire dm0_is_fract = (dm0_adrmode == AM_FLINE) || (dm0_adrmode == AM_ALINE);
 
     // DRAWMODE1's layout, from ~/repos/iris's rex3.rs. THE LOGIC OP IS AT THE
     // TOP OF THE WORD, not next to the depth fields, and reading it from
@@ -279,28 +370,37 @@ module np_rex3 #(
     // rwpacked [7], hostdepth [9:8], rwdouble [10], swapendian [11],
     // compare [14:12], rgbmode [15], dither [16], fastclear [17], blend [18],
     // sfactor [21:19], dfactor [24:22], backblend [25], prefetch [26],
-    // blendalpha [27], logicop [31:28]. Everything not decoded below is
-    // accepted and read back and does nothing: YFLIP, the blend pipeline,
-    // dither and fast clear are all unused by the PROM's console.
+    // blendalpha [27], logicop [31:28]. The two still not decoded below are
+    // YFLIP and SWAPENDIAN: accepted, read back, and ignored, because no
+    // shape in the corpus sets either.
     wire  [2:0] dm1_planes    = drawmode1[2:0];
     wire  [1:0] dm1_drawdepth = drawmode1[4:3];
     wire        dm1_dblsrc    = drawmode1[5];
     wire        dm1_rwpacked  = drawmode1[7];
     wire  [1:0] dm1_hostdepth = drawmode1[9:8];
     wire        dm1_rwdouble  = drawmode1[10];
-    // COMPARE is the colour/alpha function: three relation bits, all set
-    // meaning "always pass". Nothing here implements the comparison, and the
-    // PROM disables it in every command, so it is decoded to be visible in a
-    // trace rather than acted on.
+    // COMPARE is the alpha function: three OR-able relation bits, LT|EQ|GT,
+    // tested against ALPHAREF. All three set (7) is "always pass", which is
+    // what the PROM writes in every command; `afunc_pass` below is the test.
     wire  [2:0] dm1_compare   = drawmode1[14:12];
     wire        dm1_rgbmode   = drawmode1[15];
+    wire        dm1_dither    = drawmode1[16];
     wire        dm1_fastclear = drawmode1[17];
+    wire        dm1_blend     = drawmode1[18];
+    wire  [2:0] dm1_sfactor   = drawmode1[21:19];
+    wire  [2:0] dm1_dfactor   = drawmode1[24:22];
+    wire        dm1_backblend = drawmode1[25];
+    wire        dm1_blendalpha= drawmode1[27];
     wire  [3:0] dm1_logicop   = drawmode1[31:28];
 
     localparam logic [1:0] OP_NOOP    = 2'd0;
     localparam logic [1:0] OP_READ    = 2'd1;
     localparam logic [1:0] OP_DRAW    = 2'd2;
     localparam logic [1:0] OP_SCR2SCR = 2'd3;
+
+    // A 12-bit colour index arrives on the bus as o12.9 and is stored as
+    // o12.11; every other colour write is a plain mask.
+    wire ci12_shift = !dm1_rgbmode && (dm1_drawdepth == 2'd2);
 
     // Octant, from BRESOCTINC1[26:24]: bit 0 y decrement, bit 1 x decrement.
     wire oct_ydec = bresoctinc1[24];
@@ -434,7 +534,14 @@ module np_rex3 #(
         DR_IDLE, DR_SETUP, DR_SRC_RD, DR_DST_RD, DR_WR, DR_STEP, DR_FILL, DR_DRAIN,
         // The second write of an auxiliary pixel: its window-ID nibble into
         // the drawing slot's spare byte. Returns to `dr_after`.
-        DR_CID
+        DR_CID,
+        // The fractional-endpoint correction of an F_LINE or an A_LINE, in
+        // three clocks: the products, then the decision and the step, then
+        // the pixel count from where the step left the position. Its own
+        // states because putting any of it in DR_SETUP's cycle would price
+        // every flat block at the cost of a line nobody drew - and because
+        // all of it in ONE cycle was build 43's critical path.
+        DR_FRACT, DR_FRACT2, DR_FRACT3
     } dr_state_t;
 
     dr_state_t   dr, dr_after;
@@ -445,14 +552,42 @@ module np_rex3 #(
     logic signed [16:0] cx, cy;          // running integer position
     logic signed [16:0] cx_end, cy_end;
     logic signed [16:0] cx_save;
+    // The sub-pixel part of each of the four coordinates, latched for the
+    // primitive. The walk's own position keeps its start's fraction - a step
+    // of exactly one pixel cannot change it - so this is what the end
+    // comparisons need and what a coordinate write-back has to put back.
+    logic [10:0] xfrac, yfrac, xefrac, yefrac;
     logic  [4:0] zbit;                   // z-pattern bit index, 31 down
+    logic  [4:0] patbit;                 // line-stipple bit index, 31 down
     logic  [5:0] span_left;              // LENGTH32 clamp
     logic        span_clamped;
     logic        first_pix;
     logic [23:0] src_pix;                // pixel read for SCR2SCR
     logic [31:0] dst_half;               // the destination pixel's slot
-    logic  [2:0] host_left;              // pixels remaining in a host word
+    logic  [3:0] host_left;              // pixels remaining in a host word
     logic [63:0] host_shift;
+    // A LINE IS A COUNT, NOT A COMPARISON. Bresenham's minor axis lands
+    // wherever the error term puts it, so "have we arrived" cannot be asked
+    // of the coordinates: the walk runs for major + 1 pixels and stops.
+    logic [16:0] line_left;
+    wire         line_last = (line_left == 17'd1);
+    // SKIPFIRST and SKIPLAST as the primitive actually runs: DRAWMODE0's bits,
+    // plus A_LINE's endpoint filter, minus the single-step case where neither
+    // applies because the one pixel is both.
+    logic        skip_first_r, skip_last_r;
+
+    // ---- LSMODE, the line stipple's own register ---------------------------
+    // [7:0] the live repeat down-counter, [15:8] its reload, [23:16] the
+    // counter's save slot, [27:24] the pattern length less 17. THE COUNTER
+    // LIVES INSIDE THE REGISTER, and a GO must not reset it: the ARCS
+    // diagnostic writes LSMODE, issues a GO and reads it back expecting what
+    // it wrote, and GL carries it across the segments of a connected stippled
+    // line through LSSAVE and LSRESTORE.
+    wire [7:0] ls_repeat_raw = lsmode[15:8];
+    wire [7:0] ls_repeat = (ls_repeat_raw == 8'd0) ? 8'd1 : ls_repeat_raw;
+    wire [7:0] ls_rcount = lsmode[7:0];
+    wire [5:0] ls_length = {2'b0, lsmode[27:24]} + 6'd17;   // 17..32
+    wire [4:0] ls_wrap   = (ls_length >= 6'd32) ? 5'd0 : 5'(6'd32 - ls_length);
     // Writes issued into the frame buffer that have not been acknowledged.
     // The fill path below does not wait for each one, so this is what says the
     // engine is finished.
@@ -479,23 +614,60 @@ module np_rex3 #(
     // be 37 million in total.
     // The decision is made once, in DR_SETUP, from the same three conditions.
 
-    // The walk has reached the far edge in x or in y. Both comparisons follow
-    // the octant, because a copy that overlaps its source has to run towards
-    // the overlap rather than away from it - which is the whole reason
+    // THE STEP COMES FIRST AND THE END TEST LOOKS AT WHERE IT LANDED. IRIS's
+    // block walk advances x, then asks whether the advanced x has passed the
+    // end - so the pixel that triggers the test is the last one drawn, which
+    // is what SKIPLAST has to mean and what makes the row wrap happen after
+    // that pixel rather than before it.
+    //
+    // A SPAN ALWAYS RUNS LEFT TO RIGHT. Only BLOCK and SCR2SCR follow the
+    // octant, and they have to: a copy that overlaps its source runs towards
+    // the overlap rather than away from it, which is the whole reason
     // Ng1TpBmove picks its start and end corners the way it does.
-    wire x_at_end = oct_xdec ? (cx <= cx_end) : (cx >= cx_end);
-    wire y_at_end = oct_ydec ? (cy <= cy_end) : (cy >= cy_end);
+    wire walk_xdec = (dm0_adrmode == AM_SPAN) ? 1'b0 : oct_xdec;
+    wire signed [16:0] x_step = walk_xdec ? cx - 17'sd1 : cx + 17'sd1;
+    wire signed [16:0] y_incr = dm0_ystride ? 17'sd2 : 17'sd1;
+    wire signed [16:0] y_step = oct_ydec ? cy - y_incr : cy + y_incr;
+    // THE COMPARISON IS IN FIXED POINT, and the walk carries the start's own
+    // fraction with it for ever - it steps by exactly one, so the fraction
+    // never changes. Two coordinates with the same integer part are still
+    // ordered by their fractions, and comparing only the integers ends a span
+    // one pixel early or late whenever the two endpoints were given different
+    // sub-pixel positions.
+    wire x_at_end = walk_xdec
+                  ? ((x_step <  cx_end) || ((x_step == cx_end) && (xfrac <  xefrac)))
+                  : ((x_step >  cx_end) || ((x_step == cx_end) && (xfrac >  xefrac)));
+    wire y_at_end = oct_ydec
+                  ? ((y_step <  cy_end) || ((y_step == cy_end) && (yfrac <  yefrac)))
+                  : ((y_step >  cy_end) || ((y_step == cy_end) && (yfrac >  yefrac)));
+
+    // LRONLY: a right-to-left primitive draws nothing. A polygon rasteriser
+    // hands REX3 both edges of every span and expects the chip to keep the
+    // one that runs the way the fill does. A SPAN drops out entirely; a BLOCK
+    // still walks, because it owes the y advance to the rows after it - "some
+    // triangles grow weird tails" without that, in IRIS's own words.
+    wire lr_skip = dm0_lronly && oct_xdec && !dm0_is_line;
+    // A SPAN DROPS OUT BEFORE IT STARTS, which is not the same as walking it
+    // with the writes suppressed: the colour DDAs and the pattern cursors
+    // must not advance either, or the next span of the same triangle starts
+    // from the wrong colour. The octant this reads is the one DOSETUP is
+    // deriving in the same cycle, not the one still in the register.
+    wire eff_xdec = (dm0_dosetup || do_resetup) ? setup_xdec : oct_xdec;
+    wire span_lr_drop = (dm0_adrmode == AM_SPAN) && dm0_lronly && eff_xdec;
 
     // One pixel per host word unless RWPACKED; the primitive then ends after
     // that many pixels and the next GO carries the next word.
     wire host_mode = (dm0_opcode == OP_READ) || dm0_colorhost;
 
-    // CLIPMODE's CID-match field, [12:9]. 0xF disables the per-pixel window-ID
-    // clip; anything else gates every DRAW write on the CID nibble in the
-    // auxiliary planes matching - X's mechanism for clipping to occluded
-    // windows, straight from IRIS's process_pixel_draw.
+    // CLIPMODE's CID-match field, [12:9], IS A MASK OF PERMITTED WINDOW IDs
+    // AND NOT AN ID TO EQUAL. The two-bit CID in the auxiliary planes indexes
+    // a bit of it; 0xF permits all four and is how the clip is switched off.
+    // Reading it as an equality - which this did until build 43 - let a draw
+    // through on exactly the windows it should have clipped and clipped the
+    // one it should have let through.
     wire  [3:0] cid_match = clipmode[12:9];
-    wire        cid_gate  = (cid_match != 4'hF) && (dm0_opcode == OP_DRAW);
+    wire        cid_gate  = (cid_match != 4'hF)
+                         && ((dm0_opcode == OP_DRAW) || (dm0_opcode == OP_SCR2SCR));
 
     // FASTCLEAR (DRAWMODE1 bit 17): every drawn pixel takes COLORVRAM,
     // replicated to the plane depth, ignoring the colour source, the logic
@@ -515,10 +687,16 @@ module np_rex3 #(
                             : need_dst_read              ? DR_DST_RD
                             :                              DR_WR;
 
-    // Where the walk goes next, and whether this pixel ended the span.
-    wire signed [16:0] x_step = oct_xdec ? cx - 17'sd1 : cx + 17'sd1;
-    wire signed [16:0] y_incr = dm0_ystride ? 17'sd2 : 17'sd1;
-    wire signed [16:0] y_step = oct_ydec ? cy - y_incr : cy + y_incr;
+    // The first pixel's state, which is the same choice plus the opaque-fill
+    // fast path. A line never takes it: its walk is not a run of adjacent
+    // pixels and DR_FILL's row bookkeeping does not apply.
+    dr_state_t first_pixel_state;
+    assign first_pixel_state =
+        (dm0_opcode == OP_SCR2SCR) ? DR_SRC_RD
+      : need_dst_read              ? DR_DST_RD
+      : ((dm0_opcode == OP_DRAW) && !host_mode && !dm0_is_line) ? DR_FILL
+      :                              DR_WR;
+
     // Host mode forces STOPONX: a READ or a host-sourced DRAW moves one word
     // per GO, and the walk has to keep going until that word is full or empty
     // whatever the flag says. getfbdepth writes two 12-bit pixels with a
@@ -526,17 +704,210 @@ module np_rex3 #(
     // would place one of them, read back 0x0abc0000, and conclude the frame
     // buffer is 8 planes deep.
     wire eff_stoponx = dm0_stoponx || host_mode;
-    wire row_done = eff_stoponx
-                  && (x_at_end || (span_clamped && span_left <= 6'd1));
+    // THE END OF A ROW IS THE END OF A ROW WHATEVER STOPONX SAYS. The flag
+    // decides whether the primitive carries on afterwards, not whether the
+    // row ended - and the row's end is what SKIPLAST names and what wraps x
+    // back to XSAVE. Reading STOPONX into this test left a one-pixel-wide
+    // block in step mode stepping sideways for ever instead of dropping to
+    // the next row.
+    wire row_done = x_at_end;
+    // LENGTH32 IS A PAUSE, NOT A ROW END. It clamps a span to 32 pixels and
+    // the primitive stops where it stands for the next GO to continue; it
+    // does not wrap x back to XSAVE and it does not advance y, which is what
+    // treating it as a row end used to do.
+    wire len32_stop = span_clamped && (span_left <= 6'd1) && !row_done;
+    // The pixel SKIPLAST names: the last of a row, or the last of a line.
+    wire prim_last = dm0_is_line ? line_last : row_done;
+    // LSADVLAST decides whether the stipple steps off the last pixel of a
+    // line. It matters for a connected polyline: without it the joint pixel
+    // would take the same stipple bit twice.
+    wire pat_advance = !dm0_is_line || !line_last || dm0_lsadvlast;
 
-    // DOSETUP's inputs, in integer pixels.
-    wire signed [16:0] setup_dx = fp_int(xend) - fp_int(xstart);
-    wire signed [16:0] setup_dy = fp_int(yend) - fp_int(ystart);
-    wire signed [16:0] setup_adx = setup_dx[16] ? -setup_dx : setup_dx;
-    wire signed [16:0] setup_ady = setup_dy[16] ? -setup_dy : setup_dy;
-    wire setup_xdec   = setup_dx[16];
-    wire setup_ydec   = setup_dy[16];
+    // DOSETUP'S DELTAS ARE THE FIXED-POINT DIFFERENCE SHIFTED DOWN, NOT THE
+    // DIFFERENCE OF THE INTEGER PARTS, and the two are not the same number.
+    // A line from x=123.875 to x=145.625 has a fixed-point difference of
+    // 21.75, which truncates to 21, while its integer endpoints are 22 apart.
+    // Every Bresenham parameter comes out of that one: the octant, both
+    // increments and the decision variable. Taking the integer difference
+    // instead put the whole error term one step out, and a fractional line
+    // then stepped its minor axis in the wrong places along its whole length
+    // - which is exactly what verilator/tb_rex3draw.cpp caught.
+    wire signed [27:0] fp_xs = $signed({xstart[26], xstart[26:0]});
+    wire signed [27:0] fp_xe = $signed({xend[26],   xend[26:0]});
+    wire signed [27:0] fp_ys = $signed({ystart[26], ystart[26:0]});
+    wire signed [27:0] fp_ye = $signed({yend[26],   yend[26:0]});
+    wire signed [27:0] setup_fdx = fp_xe - fp_xs;
+    wire signed [27:0] setup_fdy = fp_ye - fp_ys;
+    wire signed [27:0] setup_afdx = setup_fdx[27] ? -setup_fdx : setup_fdx;
+    wire signed [27:0] setup_afdy = setup_fdy[27] ? -setup_fdy : setup_fdy;
+    wire signed [16:0] setup_adx = setup_afdx[27:11];
+    wire signed [16:0] setup_ady = setup_afdy[27:11];
+    wire setup_xdec   = setup_fdx[27];
+    wire setup_ydec   = setup_fdy[27];
     wire setup_xmajor = setup_adx > setup_ady;
+    wire signed [16:0] setup_major = setup_xmajor ? setup_adx : setup_ady;
+    wire signed [16:0] setup_minor = setup_xmajor ? setup_ady : setup_adx;
+
+    // AND THE PIXEL COUNT IS THE OTHER ONE. The walk runs for as many pixels
+    // as the integer endpoints are apart, the fractional-endpoint correction
+    // works in integer pixels too, and the continuation test compares integer
+    // axes. Only the Bresenham parameters take the shifted difference. IRIS
+    // is inconsistent here in exactly this way and the hardware it was
+    // written against evidently is too.
+    wire signed [16:0] int_dx = fp_int(xend) - fp_int(xstart);
+    wire signed [16:0] int_dy = fp_int(yend) - fp_int(ystart);
+    wire signed [16:0] int_adx = int_dx[16] ? -int_dx : int_dx;
+    wire signed [16:0] int_ady = int_dy[16] ? -int_dy : int_dy;
+    wire signed [16:0] int_major = (int_adx > int_ady) ? int_adx : int_ady;
+
+    // A line continuation whose own two endpoints disagree with the octant
+    // about which axis is major re-derives the whole setup.
+    wire do_resetup = !dm0_dosetup && dm0_is_line && (int_adx != int_ady)
+                    && ((int_adx > int_ady) != bresoctinc1[26]);
+
+    // WITHOUT EITHER STOP FLAG A LINE IS ONE PIXEL PER GO, and the step
+    // happens anyway so that the next GO starts where this one left off -
+    // which is how a driver walks a line by hand. SKIPFIRST and SKIPLAST do
+    // not apply there, because the single pixel is both.
+    wire line_step_one = dm0_is_line && !dm0_stoponx && !dm0_stopony;
+    wire [16:0] line_full = {1'b0, int_major[15:0]} + 17'd1;
+    wire [16:0] line_count = line_step_one ? 17'd1
+                           : ((dm0_length32 && (line_full > 17'd32)) ? 17'd32
+                                                                    : line_full);
+
+    // ---- the Bresenham registers -------------------------------------------
+    // DOSETUP derives all three and the octant; a command without it walks on
+    // whatever they already hold, which is how a connected polyline carries
+    // one segment's error term into the next. incr1 = 2*minor, incr2 =
+    // 2*(minor - major), d = incr1 - major. The field widths are the chip's:
+    // 20 bits unsigned, 21 bits signed, 27 bits signed.
+    wire signed [20:0] setup_incr1 = $signed({4'b0, setup_minor}) <<< 1;
+    wire signed [20:0] setup_incr2 = ($signed({4'b0, setup_minor})
+                                    - $signed({4'b0, setup_major})) <<< 1;
+    wire signed [26:0] setup_d     = $signed({6'b0, setup_incr1})
+                                   - $signed({10'b0, setup_major});
+
+    wire signed [31:0] bres_incr1 = $signed({12'b0, bresoctinc1[19:0]});
+    wire signed [31:0] bres_incr2 = $signed({{11{bresrndinc2[20]}}, bresrndinc2[20:0]});
+    wire signed [31:0] bres_d     = $signed({{5{bresd[26]}}, bresd[26:0]});
+
+    // The octant's four increments. y-major steps y every pixel and x only on
+    // the diagonal; x-major the other way round. `incry` is subtracted, which
+    // is why a y that is increasing carries -1 here.
+    wire signed [16:0] oct_xs = oct_xdec ? -17'sd1 : 17'sd1;
+    wire signed [16:0] oct_ys = oct_ydec ?  17'sd1 : -17'sd1;
+    wire oct_ymajor = !bresoctinc1[26];
+    wire signed [16:0] incrx1 = oct_ymajor ? 17'sd0 : oct_xs;
+    wire signed [16:0] incrx2 = oct_xs;
+    wire signed [16:0] incry1 = oct_ymajor ? oct_ys : 17'sd0;
+    wire signed [16:0] incry2 = oct_ys;
+
+    wire bres_diag = !bres_d[31];       // d >= 0 takes the diagonal step
+    wire signed [16:0] line_x_step = cx + (bres_diag ? incrx2 : incrx1);
+    wire signed [16:0] line_y_step = cy - (bres_diag ? incry2 : incry1);
+    wire signed [31:0] line_d_step = bres_d + (bres_diag ? bres_incr2 : bres_incr1);
+
+    // ---- the fractional endpoint -------------------------------------------
+    // F_LINE and A_LINE are given endpoints with four fractional bits, at
+    // [10:7] of the 21.11 coordinate. The sub-pixel position biases the
+    // initial error term, which is how a fan of lines from one point comes
+    // out evenly spaced instead of quantised into steps. The eight octants
+    // fold into the first by reflecting the two fractions and swapping the
+    // axes; this is IRIS's fline_apply_fract, whose own comment records that
+    // the base d differs from I_LINE's by exactly (minor - major) and that
+    // leaving the correction out flips d's sign on the first step of a
+    // near-degenerate line and loses a row for the rest of it.
+    wire [3:0] frac_xs = xstart[10:7];
+    wire [3:0] frac_ys = ystart[10:7];
+    wire [3:0] frac_xe = xend[10:7];
+    wire [3:0] frac_ye = yend[10:7];
+    wire [2:0] fr_oct  = bresoctinc1[26:24];
+    wire fr_swap = (fr_oct <= 3'd3);    // every y-major octant swaps the axes
+
+    logic [5:0] fr_xf, fr_yf;
+    always_comb begin
+        case (fr_oct)
+            3'd0: begin fr_xf = 6'h10 - {2'b0, frac_ys}; fr_yf = {2'b0, frac_xs}; end
+            3'd1: begin fr_xf = {2'b0, frac_ys};         fr_yf = {2'b0, frac_xs}; end
+            3'd2: begin fr_xf = 6'h10 - {2'b0, frac_ys}; fr_yf = 6'h10 - {2'b0, frac_xs}; end
+            3'd3: begin fr_xf = {2'b0, frac_ys};         fr_yf = 6'h10 - {2'b0, frac_xs}; end
+            3'd4: begin fr_xf = {2'b0, frac_xs};         fr_yf = 6'h10 - {2'b0, frac_ys}; end
+            3'd6: begin fr_xf = 6'h10 - {2'b0, frac_xs}; fr_yf = 6'h10 - {2'b0, frac_ys}; end
+            3'd7: begin fr_xf = 6'h10 - {2'b0, frac_xs}; fr_yf = {2'b0, frac_ys}; end
+            default: begin fr_xf = {2'b0, frac_xs};      fr_yf = {2'b0, frac_ys}; end
+        endcase
+    end
+
+    wire signed [17:0] fr_dxa = $signed({1'b0, int_adx});
+    wire signed [17:0] fr_dya = $signed({1'b0, int_ady});
+    wire signed [17:0] fr_dx  = fr_swap ? fr_dya : fr_dxa;
+    wire signed [17:0] fr_dy  = fr_swap ? fr_dxa : fr_dya;
+    wire signed [23:0] fr_tx  = ($signed({6'b0, fr_dx}) * $signed({18'b0, fr_yf})) >>> 4;
+    wire signed [23:0] fr_ty  = ($signed({6'b0, fr_dy}) * $signed({18'b0, fr_xf})) >>> 4;
+    wire signed [16:0] fr_x2 = cx + incrx2;
+    wire signed [16:0] fr_y2 = cy - incry2;
+
+    // THE CORRECTION TAKES THREE CLOCKS, AND THAT IS WHY. Written as one
+    // expression it is: two coordinate subtractions and their absolute
+    // values, a fold through the octant, two multiplies, four adds, a
+    // comparison, a conditional step, and then - because the step can move
+    // the start a whole pixel along the major axis - another subtraction,
+    // absolute value, maximum, increment and clamp to get the pixel count.
+    // Build 43's first fit put all of that between two flip-flops and missed
+    // the core clock by 5.48 ns on that path alone, with every one of the
+    // four hundred worst paths in the design ending at `line_left`.
+    //
+    // So: stage one folds the fractions and takes the two products, stage two
+    // makes the decision and moves the position, stage three counts the
+    // pixels from where the position ended up. Three clocks once per
+    // fractional line primitive is not a cost anything can measure.
+    logic signed [23:0] frq_tx, frq_ty;
+    logic signed [17:0] frq_dx, frq_dy, frq_maj;
+
+    wire signed [31:0] fr2_d = bres_d
+                             + {{14{frq_dy[17]}}, frq_dy} - {{14{frq_dx[17]}}, frq_dx}
+                             + (({{8{frq_tx[23]}}, frq_tx} - {{8{frq_ty[23]}}, frq_ty}) <<< 1);
+    wire signed [31:0] fr2_e = fr2_d - ({{14{frq_maj[17]}}, frq_maj} <<< 1);
+    wire fr_takes_step = (fr2_e > 32'sd0);
+
+    // Stage three: the pixel count, from the settled position. Every input
+    // here is a register, which is the whole point of the split.
+    wire signed [16:0] pc_dx  = cx_end - cx;
+    wire signed [16:0] pc_dy  = cy_end - cy;
+    wire signed [16:0] pc_adx = pc_dx[16] ? -pc_dx : pc_dx;
+    wire signed [16:0] pc_ady = pc_dy[16] ? -pc_dy : pc_dy;
+    wire signed [16:0] pc_maj = (pc_adx > pc_ady) ? pc_adx : pc_ady;
+    wire [16:0] pc_full  = {1'b0, pc_maj[15:0]} + 17'd1;
+    wire [16:0] pc_count = line_step_one ? 17'd1
+                         : ((dm0_length32 && (pc_full > 17'd32)) ? 17'd32
+                                                                 : pc_full);
+
+    // A_LINE's endpoint filter: a sub-pixel endpoint whose AWEIGHT entry is
+    // zero contributes nothing, so the line skips it. The weight tables are
+    // read for this and for nothing else - the coverage they describe would
+    // need a blend per pixel that no shape in the corpus asks for.
+    wire [4:0] aw_first_i = (({1'b0, frac_xs} + {1'b0, frac_ys}) > 5'd15)
+                          ? 5'd15 : ({1'b0, frac_xs} + {1'b0, frac_ys});
+    wire [4:0] aw_last_i  = (({1'b0, frac_xe} + {1'b0, frac_ye}) > 5'd15)
+                          ? 5'd15 : ({1'b0, frac_xe} + {1'b0, frac_ye});
+    // THE TABLE IS EIGHT NIBBLES AND THE INDEX GOES TO FIFTEEN. Two
+    // fractions of four bits each add to thirty, clamped to fifteen, and a
+    // 32-bit register only holds eight entries - so the top half of the index
+    // wraps. That is what IRIS does (a Rust shift past the width masks its
+    // count) and what this matches; whether the part reads the same entry
+    // twice or a second table nobody has documented is open, and it only ever
+    // decides whether one endpoint pixel of an anti-aliased line is drawn.
+    wire [31:0] aw0_sh = aweight0 >> {aw_first_i[2:0], 2'b0};
+    wire [31:0] aw1_sh = aweight1 >> {aw_last_i[2:0],  2'b0};
+    // The first endpoint's test is read AFTER the setup has spent its
+    // fraction, so a command that ran one never filters its first pixel.
+    wire aline_skip_first = dm0_endptfilter && (dm0_adrmode == AM_ALINE)
+                         && !(dm0_dosetup || do_resetup)
+                         && ((frac_xs != 4'd0) || (frac_ys != 4'd0))
+                         && (aw0_sh[3:0] == 4'd0);
+    wire aline_skip_last  = dm0_endptfilter && (dm0_adrmode == AM_ALINE)
+                         && ((frac_xe != 4'd0) || (frac_ye != 4'd0))
+                         && (aw1_sh[3:0] == 4'd0);
 
     // Screen coordinates. XYMOVE offsets the destination of a screen-to-screen
     // copy unconditionally and any other primitive only when XYOFFSET is set.
@@ -645,98 +1016,381 @@ module np_rex3 #(
     // auxiliary slot itself or from its copy in the drawing slot.
     wire  [3:0] cid_nib = is_aux_plane ? dst_half[3:0] : dst_half[27:24];
 
-    // The destination value the logic op sees, in the plane's own units.
-    logic [23:0] dst_val;
-    always_comb begin
+    // ONE SLOT, ONE PLANE VALUE. The shift and mask a plane selection reads
+    // and writes with - IRIS's plane_shift_mask, and the same extraction for
+    // the destination slot and for a screen-to-screen source.
+    //
+    // THE DEVIATION FROM IRIS IS PLANES 0, 3 AND 7. IRIS maps only 1 (RGB)
+    // and 2 (RGBA) onto the drawing planes and drops a write through any
+    // other unmapped selection; this maps every non-auxiliary selection onto
+    // them, because that is what the PROM's own console path and
+    // its own tb_rex3.cpp bench have always drawn through. No corpus shape
+    // uses one, so nothing observes the difference.
+    function automatic logic [23:0] plane_of(input logic [23:0] slot);
         case (dm1_planes)
-            3'd4:    dst_val = dm1_dblsrc ? {16'b0, dst_aux[23:16]} : {16'b0, dst_aux[15:8]};
-            3'd5:    dst_val = dm1_dblsrc ? {22'b0, dst_aux[7:6]}   : {22'b0, dst_aux[3:2]};
-            3'd6:    dst_val = dm1_dblsrc ? {22'b0, dst_aux[5:4]}   : {22'b0, dst_aux[1:0]};
+            3'd4:    plane_of = dm1_dblsrc ? {16'b0, slot[23:16]} : {16'b0, slot[15:8]};
+            3'd5:    plane_of = dm1_dblsrc ? {22'b0, slot[7:6]}   : {22'b0, slot[3:2]};
+            3'd6:    plane_of = dm1_dblsrc ? {22'b0, slot[5:4]}   : {22'b0, slot[1:0]};
             default: case (dm1_drawdepth)
-                        2'd0:    dst_val = {20'b0, dst_rgb[3:0]};
-                        2'd1:    dst_val = dm1_dblsrc ? {16'b0, dst_rgb[15:8]}
-                                                      : {16'b0, dst_rgb[7:0]};
-                        2'd2:    dst_val = {12'b0, dst_rgb[11:0]};
-                        default: dst_val = dst_rgb;
+                        2'd0:    plane_of = dm1_dblsrc ? {20'b0, slot[7:4]}
+                                                       : {20'b0, slot[3:0]};
+                        2'd1:    plane_of = dm1_dblsrc ? {16'b0, slot[15:8]}
+                                                       : {16'b0, slot[7:0]};
+                        2'd2:    plane_of = {12'b0, slot[11:0]};
+                        default: plane_of = slot;
                      endcase
         endcase
-    end
+    endfunction
 
-    // Source colour. CI mode takes COLORI; RGB mode takes the integer parts of
-    // the three colour DDAs, which are o12.11 with the integer at [23:11].
-    logic [23:0] draw_src;
-    always_comb begin
-        if (dm0_opcode == OP_SCR2SCR)      draw_src = src_pix;
-        else if (dm0_colorhost)            draw_src = host_pix;
-        // FASTCLEAR's value is COLORVRAM; the per-depth `amplified`
-        // replication below produces exactly IRIS's fastclear_color.
-        else if (fastclear_act)            draw_src = colorvram[23:0];
-        else if (dm1_rgbmode)              draw_src = {colorblue[18:11], colorgrn[18:11],
-                                                      colorred[18:11]};
-        else                               draw_src = colori[23:0];
-    end
+    wire [23:0] dst_val = plane_of(dst_plane);
+    wire [23:0] src_val = plane_of(src_pix);
 
-    // The pixel at the top of the host shifter, in its slot. 4bpp and 8bpp
-    // share an 8-bit slot; 12bpp sits in the low 12 bits of a 16-bit slot,
-    // which is what makes getfbdepth's 0x0abc0def two pixels and not three
-    // bytes of tightly packed data.
-    logic [23:0] host_pix;
+    // ---- colour depth conversion -------------------------------------------
+    // RGB MODE CARRIES 24-BIT BGR THROUGH THE PIPELINE AND THE PLANES DO NOT.
+    // 8 bits is 3-3-2, 12 is 4-4-4, 4 is 1-2-1, and all three packings are
+    // irregular enough that a shift would get them wrong. `compress` is the
+    // way down and `expand` the way back up for a blend destination or a
+    // screen-to-screen source; in colour-index mode both are the identity,
+    // because the value already is the plane's own.
+    function automatic logic [23:0] expand_rgb(input logic [23:0] v);
+        logic [7:0] r, g, b;
+        logic [2:0] r3, g3;
+        logic [1:0] g2, b2;
+        begin
+            if (!dm1_rgbmode) expand_rgb = v;
+            else case (dm1_drawdepth)
+                2'd0: begin
+                    g2 = v[2:1];
+                    r  = v[0] ? 8'hFF : 8'h00;
+                    g  = {g2, g2, g2, g2};
+                    b  = v[3] ? 8'hFF : 8'h00;
+                    expand_rgb = {b, g, r};
+                end
+                2'd1: begin
+                    r3 = v[2:0];  g3 = v[5:3];  b2 = v[7:6];
+                    r  = {r3, r3, r3[2:1]};
+                    g  = {g3, g3, g3[2:1]};
+                    b  = {b2, b2, b2, b2};
+                    expand_rgb = {b, g, r};
+                end
+                2'd2: expand_rgb = {{2{v[11:8]}}, {2{v[7:4]}}, {2{v[3:0]}}};
+                default: expand_rgb = v;
+            endcase
+        end
+    endfunction
+
+    // The Bayer cell for this pixel. Threshold table
+    // [0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5] indexed by (y&3)<<2 | (x&3),
+    // packed as sixteen nibbles - IRIS's BAYER_PACKED, same order.
+    localparam logic [63:0] BAYER_PACKED = 64'h5D7F91B36E4CA280;
+    // THE CELL IS INDEXED BY THE WALKER'S OWN COORDINATE, not by the frame
+    // buffer address: IRIS passes the pre-window x and y into compress, so a
+    // window that moves by an odd number of pixels moves its dither pattern
+    // with it rather than shimmering against the screen.
+    wire [3:0] bayer_idx = {cy[1:0], cx[1:0]};
+    wire [63:0] bayer_sh = BAYER_PACKED >> {bayer_idx, 2'b0};
+    wire  [3:0] bayer    = bayer_sh[3:0];
+
+    // One dithered channel: `s` is the scaled 8-bit value, its top nibble is
+    // the quantised result, and the Bayer cell decides whether the remainder
+    // rounds up. The saturate is IRIS's `.min()` - a channel already at its
+    // maximum does not wrap round to black on a high cell.
+    function automatic logic [3:0] dith(input logic [7:0] s,
+                                        input logic [3:0] maxv);
+        logic [3:0] d;
+        begin
+            d = s[7:4] & maxv;
+            if ((s[3:0] > bayer) && (d != maxv)) d = d + 4'd1;
+            dith = d;
+        end
+    endfunction
+
+    function automatic logic [23:0] compress_rgb(input logic [31:0] v);
+        logic [7:0] r, g, b, sr, sg, sb;
+        logic [3:0] dr, dg, db;
+        begin
+            r = v[7:0];  g = v[15:8];  b = v[23:16];
+            if (!dm1_rgbmode) compress_rgb = v[23:0];
+            else if (!dm1_dither) case (dm1_drawdepth)
+                2'd0:    compress_rgb = {20'b0, b[7], g[7:6], r[7]};
+                2'd1:    compress_rgb = {16'b0, b[7:6], g[7:5], r[7:5]};
+                2'd2:    compress_rgb = {12'b0, b[7:4], g[7:4], r[7:4]};
+                default: compress_rgb = v[23:0];
+            endcase
+            else case (dm1_drawdepth)
+                2'd0: begin
+                    sr = (r >> 3) - (r >> 4);
+                    sg = (g >> 2) - (g >> 4);
+                    sb = (b >> 3) - (b >> 4);
+                    dr = dith(sr, 4'd1);
+                    dg = dith(sg, 4'd3);
+                    db = dith(sb, 4'd1);
+                    compress_rgb = {20'b0, db[0], dg[1:0], dr[0]};
+                end
+                2'd1: begin
+                    sr = (r >> 1) - (r >> 4);
+                    sg = (g >> 1) - (g >> 4);
+                    sb = (b >> 2) - (b >> 4);
+                    dr = dith(sr, 4'd7);
+                    dg = dith(sg, 4'd7);
+                    db = dith(sb, 4'd3);
+                    compress_rgb = {16'b0, db[1:0], dg[2:0], dr[2:0]};
+                end
+                2'd2: begin
+                    sr = r - (r >> 4);
+                    sg = g - (g >> 4);
+                    sb = b - (b >> 4);
+                    dr = dith(sr, 4'd15);
+                    dg = dith(sg, 4'd15);
+                    db = dith(sb, 4'd15);
+                    compress_rgb = {12'b0, db, dg, dr};
+                end
+                // 24 bits is already the pipeline's own depth: nothing to
+                // quantise, so nothing to dither.
+                default: compress_rgb = v[23:0];
+            endcase
+        end
+    endfunction
+
+    // ---- the source colour --------------------------------------------------
+    // The pixel at the top of the host shifter, in its slot, expanded to
+    // 24-bit BGR when the pipeline is carrying colour rather than an index.
+    // 4bpp and 8bpp share an 8-bit slot; 12bpp sits in the low 12 bits of a
+    // 16-bit slot, which is what makes getfbdepth's 0x0abc0def two pixels and
+    // not three bytes of tightly packed data. HOSTDEPTH's encoding is
+    // 4/8/12/32 and DRAWDEPTH's is 4/8/12/24 - not the same order, and not
+    // the same last entry.
+    logic [31:0] host_pix;
     always_comb begin
+        logic [7:0] hr, hg, hb;
+        logic [1:0] q;
         case (dm1_hostdepth)
-            2'd0:    host_pix = {20'b0, host_shift[59:56]};
-            2'd1:    host_pix = {16'b0, host_shift[63:56]};
-            2'd2:    host_pix = {12'b0, host_shift[59:48]};
-            default: host_pix = host_shift[55:32];
+            2'd0: begin
+                if (!dm1_rgbmode) host_pix = {28'b0, host_shift[59:56]};
+                else begin
+                    q = host_shift[58:57];
+                    host_pix = {8'h0,
+                                host_shift[59] ? 8'hFF : 8'h00,
+                                {q, q, q, q},
+                                host_shift[56] ? 8'hFF : 8'h00};
+                end
+            end
+            2'd1: begin
+                if (!dm1_rgbmode) host_pix = {24'b0, host_shift[63:56]};
+                else begin
+                    hr = {host_shift[58:56], host_shift[58:56], host_shift[58:57]};
+                    hg = {host_shift[61:59], host_shift[61:59], host_shift[61:60]};
+                    hb = {host_shift[63:62], host_shift[63:62],
+                          host_shift[63:62], host_shift[63:62]};
+                    host_pix = {8'h0, hb, hg, hr};
+                end
+            end
+            2'd2: begin
+                if (!dm1_rgbmode) host_pix = {20'b0, host_shift[59:48]};
+                else host_pix = {8'h0, {2{host_shift[59:56]}},
+                                 {2{host_shift[55:52]}}, {2{host_shift[51:48]}}};
+            end
+            default: host_pix = host_shift[63:32];
         endcase
     end
+
+    // ZPATTERN and the line stipple both have an opaque mode: a bit that
+    // misses does not drop the pixel, it draws it in COLORBACK. That is how a
+    // stippled line paints its own background and how Ng1TpDrawbitmap paints
+    // a glyph cell rather than just its ink.
+    // FASTCLEAR COLLAPSES THE WHOLE PIXEL PIPELINE - "no support for any per
+    // pixel operation, flat fill only, via COLORVRAM" (rex3.pdf 3.5.5). It
+    // switches off both patterns, the dither, the shade DDAs, the alpha
+    // function, the blend and the logic op, which is what IRIS's unpack folds
+    // away and why a fastclear costs one write and no read.
+    //
+    // THE PATTERNS AND THE ALPHA FUNCTION ARE THE DRAW OPCODE'S ALONE. A
+    // screen-to-screen copy runs neither: IRIS's process_pixel_scr2scr has no
+    // pattern prologue and no afunction, so a copy under a live ZPATTERN
+    // copies every pixel rather than a stippled subset. The DDAs and the
+    // pattern cursors still advance, because the walk advances them whatever
+    // the pixel body was.
+    wire pixel_is_draw = (dm0_opcode == OP_DRAW);
+    wire zpat_en  = dm0_enzpattern && !fastclear_act;
+    wire lspat_en = dm0_enlspat    && !fastclear_act;
+    wire shade_en = dm0_shade      && !fastclear_act;
+    wire zpat_bit_set = zpattern[zbit];
+    wire lspat_bit_set = lspattern[patbit];
+    wire zpat_miss  = zpat_en  && !zpat_bit_set && pixel_is_draw;
+    wire lspat_miss = lspat_en && !lspat_bit_set && pixel_is_draw;
+    wire use_bg = (zpat_miss && dm0_zpopaque) || (lspat_miss && dm0_lsopaque);
+    // A miss with no opaque bit behind it drops the pixel entirely.
+    wire pat_drop = (zpat_miss && !dm0_zpopaque) || (lspat_miss && !dm0_lsopaque);
+
+    // Whether this pixel consumes a word from the host shifter: only when the
+    // patterns let it through and the mode says the colour or the alpha comes
+    // from the host. IRIS fetches in the same place, after the patterns and
+    // before the address.
+    wire host_consume = !use_bg && !pat_drop
+                     && (dm0_colorhost || dm0_alphahost);
+
+    // Source colour, 32 bits: BGR in the low three bytes and the alpha the
+    // compare and the blend use in the top one. The alpha comes from the DDA
+    // or from the host independently of the colour, which is what lets a
+    // colour-index program stream a host alpha alongside its indices.
+    wire [7:0] src_alpha = dm0_alphahost ? host_pix[31:24]
+                                         : clamp_comp(coloralpha);
+    logic [31:0] raw_src;
+    always_comb begin
+        if (dm0_opcode == OP_SCR2SCR) raw_src = {8'h0, expand_rgb(src_val)};
+        else if (use_bg)              raw_src = colorback;
+        else begin
+            // COLORI is the red DDA in colour-index mode and all three in
+            // RGB mode, each clamped on the way out.
+            raw_src = dm0_colorhost
+                    ? {src_alpha, host_pix[23:0]}
+                    : (dm1_rgbmode
+                       ? {src_alpha, clamp_comp(colorblue), clamp_comp(colorgrn),
+                          clamp_comp(colorred)}
+                       : {src_alpha, 3'b0, colorred[31:11]});
+        end
+    end
+
+    // ---- the alpha function -------------------------------------------------
+    // Three OR-able relations against ALPHAREF; all three set is the disable
+    // the PROM writes in every command.
+    logic afunc_pass;
+    always_comb begin
+        case (dm1_compare)
+            3'd0:    afunc_pass = 1'b0;
+            3'd1:    afunc_pass = raw_src[31:24] <  alpharef[7:0];
+            3'd2:    afunc_pass = raw_src[31:24] == alpharef[7:0];
+            3'd3:    afunc_pass = raw_src[31:24] <= alpharef[7:0];
+            3'd4:    afunc_pass = raw_src[31:24] >  alpharef[7:0];
+            3'd5:    afunc_pass = raw_src[31:24] != alpharef[7:0];
+            3'd6:    afunc_pass = raw_src[31:24] >= alpharef[7:0];
+            default: afunc_pass = 1'b1;
+        endcase
+    end
+
+    // ---- alpha blending -----------------------------------------------------
+    // Four channels of s*sf + d*df over 255. The two selectors name each
+    // other's colour - BF_OC is the destination channel when it is the source
+    // multiplier and the source channel when it is the destination one - and
+    // BLENDALPHA decides whether the source multiplier sees the real source
+    // alpha or a flat one, leaving DFACTOR's own definition alone (spec 3.8,
+    // and the trailing clause of it is load-bearing).
+    //
+    // THE DIVIDE BY 255 IS EXACT, not a shift. (n * 131587) >> 25 equals
+    // n / 255 for every n a channel can produce - the largest is
+    // 255*255 + 255*255 = 130050 - and 131587 is 0x20203, three shifts and
+    // two adds. A plain >> 8 would darken every blended pixel by a part in
+    // 256, which over a screen full of translucent windows is visible.
+    wire [31:0] blend_dst = dm1_backblend ? colorback : {8'h0, expand_rgb(dst_val)};
+    wire  [7:0] sa_real = raw_src[31:24];
+    wire  [7:0] sa_src  = dm1_blendalpha ? sa_real : 8'hFF;
+
+    function automatic logic [7:0] bfactor(input logic [2:0] sel,
+                                           input logic [7:0] c,
+                                           input logic [7:0] a);
+        case (sel)
+            3'd0:    bfactor = 8'h00;
+            3'd1:    bfactor = 8'hFF;
+            3'd2:    bfactor = c;
+            3'd3:    bfactor = 8'hFF - c;
+            3'd4:    bfactor = a;
+            3'd5:    bfactor = 8'hFF - a;
+            default: bfactor = 8'h00;
+        endcase
+    endfunction
+
+    function automatic logic [7:0] blend_chan(input logic [7:0] s,
+                                              input logic [7:0] d);
+        logic [16:0] acc;
+        logic [41:0] scaled;
+        logic [16:0] q;
+        begin
+            acc    = ({9'b0, s} * {9'b0, bfactor(dm1_sfactor, d, sa_src)})
+                   + ({9'b0, d} * {9'b0, bfactor(dm1_dfactor, s, sa_real)});
+            scaled = {25'b0, acc} * 42'd131587;
+            q      = scaled[41:25];
+            blend_chan = (q > 17'd255) ? 8'hFF : q[7:0];
+        end
+    endfunction
+
+    wire [31:0] blended = {blend_chan(raw_src[31:24], blend_dst[31:24]),
+                           blend_chan(raw_src[23:16], blend_dst[23:16]),
+                           blend_chan(raw_src[15:8],  blend_dst[15:8]),
+                           blend_chan(raw_src[7:0],   blend_dst[7:0])};
+
+    // ---- the logic op and the plane write -----------------------------------
+    // "Amplify" replicates a plane-depth value into both buffers of its plane
+    // so one write mask can reach either or both. The mask constants in
+    // ng1_init.c are the check: OLAY 0xFFFF00 covers both overlay buffers,
+    // PUP 0x0000CC both popup buffers, CID 0x000033 both window-ID buffers.
+    function automatic logic [23:0] amplify(input logic [23:0] v);
+        case (dm1_planes)
+            3'd4:    amplify = {v[7:0], v[7:0], 8'h00};
+            3'd5:    amplify = {16'b0, v[1:0], 2'b0, v[1:0], 2'b0};
+            3'd6:    amplify = {18'b0, v[1:0], 2'b0, v[1:0]};
+            default: case (dm1_drawdepth)
+                        2'd0:    amplify = {16'b0, v[3:0], v[3:0]};
+                        2'd1:    amplify = {8'b0, v[7:0], v[7:0]};
+                        2'd2:    amplify = {v[11:0], v[11:0]};
+                        default: amplify = v;
+                     endcase
+        endcase
+    endfunction
+
+    wire [23:0] src_amp = amplify(compress_rgb(raw_src));
+    wire [23:0] dst_amp = amplify(dst_val);
 
     logic [23:0] logic_out;
     always_comb begin
         case (eff_logicop)
             4'h0:    logic_out = 24'h000000;
-            4'h1:    logic_out =  draw_src &  dst_val;
-            4'h2:    logic_out =  draw_src & ~dst_val;
-            4'h3:    logic_out =  draw_src;
-            4'h4:    logic_out = ~draw_src &  dst_val;
-            4'h5:    logic_out =  dst_val;
-            4'h6:    logic_out =  draw_src ^  dst_val;
-            4'h7:    logic_out =  draw_src |  dst_val;
-            4'h8:    logic_out = ~(draw_src | dst_val);
-            4'h9:    logic_out = ~(draw_src ^ dst_val);
-            4'hA:    logic_out = ~dst_val;
-            4'hB:    logic_out =  draw_src | ~dst_val;
-            4'hC:    logic_out = ~draw_src;
-            4'hD:    logic_out = ~draw_src |  dst_val;
-            4'hE:    logic_out = ~(draw_src & dst_val);
+            4'h1:    logic_out =  src_amp &  dst_amp;
+            4'h2:    logic_out =  src_amp & ~dst_amp;
+            4'h3:    logic_out =  src_amp;
+            4'h4:    logic_out = ~src_amp &  dst_amp;
+            4'h5:    logic_out =  dst_amp;
+            4'h6:    logic_out =  src_amp ^  dst_amp;
+            4'h7:    logic_out =  src_amp |  dst_amp;
+            4'h8:    logic_out = ~(src_amp | dst_amp);
+            4'h9:    logic_out = ~(src_amp ^ dst_amp);
+            4'hA:    logic_out = ~dst_amp;
+            4'hB:    logic_out =  src_amp | ~dst_amp;
+            4'hC:    logic_out = ~src_amp;
+            4'hD:    logic_out = ~src_amp |  dst_amp;
+            4'hE:    logic_out = ~(src_amp & dst_amp);
             default: logic_out = 24'hFFFFFF;
         endcase
     end
 
-    // "Amplify" replicates the value into both buffers of its plane so one
-    // write mask can reach either or both. The mask constants in ng1_init.c
-    // are the check: OLAY 0xFFFF00 covers both overlay buffers, PUP 0x0000CC
-    // both popup buffers, CID 0x000033 both window-ID buffers.
-    logic [23:0] amplified;
+    // FASTCLEAR replicates COLORVRAM across the plane's slots and writes it
+    // with no per-pixel operation at all. At 12 bits it takes nibbles out of
+    // COLORVRAM in RGB mode and the low twelve bits in colour-index mode.
+    logic [23:0] fc_color;
     always_comb begin
-        case (dm1_planes)
-            3'd4:    amplified = {logic_out[7:0], logic_out[7:0], 8'h00};
-            3'd5:    amplified = {18'b0, logic_out[1:0], 2'b0, logic_out[1:0], 2'b0}
-                               & 24'h0000CC;
-            3'd6:    amplified = {18'b0, logic_out[1:0], 2'b0, logic_out[1:0]}
-                               & 24'h000033;
-            default: case (dm1_drawdepth)
-                        2'd0:    amplified = {logic_out[3:0], logic_out[3:0],
-                                              logic_out[3:0], logic_out[3:0],
-                                              logic_out[3:0], logic_out[3:0]};
-                        2'd1:    amplified = {logic_out[7:0], logic_out[7:0],
-                                              logic_out[7:0]};
-                        2'd2:    amplified = {logic_out[11:0], logic_out[11:0]};
-                        default: amplified = logic_out;
-                     endcase
+        case (dm1_drawdepth)
+            2'd0:    fc_color = {4'h0, colorvram[3:0], 4'h0, colorvram[3:0],
+                                 colorvram[3:0], colorvram[3:0]};
+            2'd1:    fc_color = {3{colorvram[7:0]}};
+            2'd2:    fc_color = dm1_rgbmode
+                              ? {2{colorvram[23:20], colorvram[15:12], colorvram[7:4]}}
+                              : {2{colorvram[11:0]}};
+            default: fc_color = colorvram[23:0];
         endcase
     end
 
-    wire [23:0] plane_new = (dst_plane & ~wrmask[23:0]) | (amplified & wrmask[23:0]);
+    // The value that reaches the plane. SCR2SCR's blend arm does not amplify
+    // after compressing, which is IRIS's process_pixel_scr2scr and is kept
+    // because the comparison bench enforces it.
+    logic [23:0] pixel_out;
+    always_comb begin
+        if (fastclear_act)      pixel_out = fc_color;
+        else if (dm1_blend)     pixel_out = (dm0_opcode == OP_SCR2SCR)
+                                          ? compress_rgb(blended)
+                                          : amplify(compress_rgb(blended));
+        else                    pixel_out = logic_out;
+    end
+
+    wire [23:0] plane_new = (dst_plane & ~wrmask[23:0]) | (pixel_out & wrmask[23:0]);
 
     // A read before every write is only needed when the write cannot say what
     // it leaves alone. Two things can make it unnecessary: a write mask whose
@@ -747,14 +1401,20 @@ module np_rex3 #(
     wire mask_byte_clean = (wrmask[7:0]   == 8'h00 || wrmask[7:0]   == 8'hFF)
                         && (wrmask[15:8]  == 8'h00 || wrmask[15:8]  == 8'hFF)
                         && (wrmask[23:16] == 8'h00 || wrmask[23:16] == 8'hFF);
-    wire logic_needs_dst = !(eff_logicop == 4'h0 || eff_logicop == 4'h3
+    wire logic_live = !dm1_blend && !fastclear_act;
+    wire logic_needs_dst = logic_live
+                        && !(eff_logicop == 4'h0 || eff_logicop == 4'h3
                           || eff_logicop == 4'hC || eff_logicop == 4'hF);
+    // A blend reads the destination as its second operand - unless BACKBLEND
+    // names COLORBACK instead, which is the one blend that needs no read.
     // The CID clip needs the auxiliary planes of every destination pixel, so
-    // it forces the read path - which is also what keeps it out of DR_FILL.
+    // it forces the read path too - which is also what keeps it out of
+    // DR_FILL.
     wire need_dst_read = (dm0_opcode == OP_READ) || logic_needs_dst
+                      || (dm1_blend && !dm1_backblend)
                       || !mask_byte_clean || cid_gate;
 
-    wire [23:0] plane_val = need_dst_read ? plane_new : amplified;
+    wire [23:0] plane_val = need_dst_read ? plane_new : pixel_out;
     // The new slot, in both halves of the port word so that the byte enables
     // alone decide which pixel it lands on. Byte 3 of a drawing slot is never
     // written here - that is the window-ID copy, which DR_CID maintains.
@@ -778,25 +1438,49 @@ module np_rex3 #(
                         || (slot_be[1] && (plane_val[15:8]  != 8'h0))
                         || (slot_be[0] && (plane_val[3:2]   != 2'b0)));
 
+    // A READ's pixel on its way into the host word: the plane value in
+    // colour-index mode, and the 24-bit colour quantised to the host's own
+    // depth in RGB mode. HOSTDEPTH's last encoding is 32 bits and carries a
+    // full alpha byte, which DRAWDEPTH's 24 has nowhere to put.
+    wire [23:0] rd_expanded = expand_rgb(dst_val);
+    logic [31:0] host_pack_val;
+    always_comb begin
+        if (!dm1_rgbmode) case (dm1_hostdepth)
+            2'd0:    host_pack_val = {28'b0, dst_val[3:0]};
+            2'd1:    host_pack_val = {24'b0, dst_val[7:0]};
+            2'd2:    host_pack_val = {20'b0, dst_val[11:0]};
+            default: host_pack_val = {8'b0,  dst_val};
+        endcase
+        else case (dm1_hostdepth)
+            2'd0:    host_pack_val = {28'b0, rd_expanded[23], rd_expanded[15:14],
+                                      rd_expanded[7]};
+            2'd1:    host_pack_val = {24'b0, rd_expanded[23:22], rd_expanded[15:13],
+                                      rd_expanded[7:5]};
+            2'd2:    host_pack_val = {20'b0, rd_expanded[23:20], rd_expanded[15:12],
+                                      rd_expanded[7:4]};
+            default: host_pack_val = {8'hFF,  rd_expanded};
+        endcase
+    end
+
     // ---- host pixel packing ------------------------------------------------
     // HOSTDEPTH picks the slot width: 12bpp and 32bpp use 16- and 32-bit
     // slots, 4bpp and 8bpp both use an 8-bit slot. Without RWPACKED a word
     // carries one pixel. Which is why getfbdepth's 0x0abc0def is two 12-bit
     // pixels in two 16-bit halves rather than 24 bits of tightly packed data.
-    logic [2:0] host_count;
+    logic [3:0] host_count;
     logic [5:0] host_step;
     always_comb begin
         if (!dm1_rwpacked) begin
-            host_count = 3'd1;
+            host_count = 4'd1;
             host_step  = 6'd0;
         end else begin
             case (dm1_hostdepth)
                 2'd0, 2'd1: begin host_step = 6'd8;
-                                  host_count = dm1_rwdouble ? 3'd8 : 3'd4; end
+                                  host_count = dm1_rwdouble ? 4'd8 : 4'd4; end
                 2'd2:       begin host_step = 6'd16;
-                                  host_count = dm1_rwdouble ? 3'd4 : 3'd2; end
+                                  host_count = dm1_rwdouble ? 4'd4 : 4'd2; end
                 default:    begin host_step = 6'd32;
-                                  host_count = dm1_rwdouble ? 3'd2 : 3'd1; end
+                                  host_count = dm1_rwdouble ? 4'd2 : 4'd1; end
             endcase
         end
     end
@@ -875,7 +1559,14 @@ module np_rex3 #(
             R_SLOPEGRN:    rdata_c = slopegrn;
             R_SLOPEBLUE:   rdata_c = slopeblue;
             R_WRMASK:      rdata_c = wrmask;
-            R_COLORI:      rdata_c = colori;
+            // COLORI READS BACK OUT OF THE DDAs, clamped, because that is
+            // where it was written to: a colour-index shade leaves the
+            // iterated index in the red DDA and the driver reads it from
+            // here.
+            R_COLORI:      rdata_c = dm1_rgbmode
+                                   ? {8'h0, clamp_comp(colorblue),
+                                      clamp_comp(colorgrn), clamp_comp(colorred)}
+                                   : {11'h0, colorred[31:11]};
             R_COLORX:      rdata_c = colorx;
             R_SLOPERED1:   rdata_c = slopered1;
             R_HOSTRW0:     rdata_c = hostrw0;
@@ -971,6 +1662,76 @@ module np_rex3 #(
 `endif
 `endif
 
+    // ======================================================================
+    //  Leaving a pixel
+    // ======================================================================
+    // THE COLOUR DDAs ADVANCE WHETHER OR NOT THE PIXEL WAS DRAWN, and so do
+    // the pattern cursors. A clipped pixel still consumed its place in the
+    // span, and a shaded span whose DDAs only stepped on the pixels that
+    // survived the scissor would come out with a colour discontinuity at
+    // every window edge. IRIS calls iterate_shade and iterate_pattern
+    // unconditionally after `pixel`, and this is that call.
+    //
+    // Both walkers - the fill path and the general one - leave a pixel
+    // through here, which is the only way the two can be guaranteed to shade
+    // and stipple the same.
+    task automatic walk_advance;
+        logic [31:0] nr, ng, nb, na;
+        begin
+            first_pix <= 1'b0;
+
+            // ---- the colour DDAs -----------------------------------------
+            nr = colorred   + slope_ext(slopered,   24);
+            ng = colorgrn   + slope_ext(slopegrn,   20);
+            nb = colorblue  + slope_ext(slopeblue,  20);
+            na = coloralpha + slope_ext(slopealpha, 20);
+            if (shade_en) begin
+                if (dm1_rgbmode) begin
+                    colorred   <= clamp_shade(nr);
+                    colorgrn   <= clamp_shade(ng);
+                    colorblue  <= clamp_shade(nb);
+                    coloralpha <= clamp_shade(na);
+                end else begin
+                    // COLOUR-INDEX SHADING ITERATES THE RED DDA AND NOTHING
+                    // ELSE, and clamps it only under CICLAMP - by watching one
+                    // bit above the index's own width, which is the overflow
+                    // the spec names for each depth.
+                    colorred <= (dm0_ciclamp && (dm1_drawdepth == 2'd1) && nr[19])
+                                  ? 32'h0007_FFFF
+                              : (dm0_ciclamp && (dm1_drawdepth == 2'd2) && nr[21])
+                                  ? 32'h001F_FFFF
+                              :   nr;
+                    colorgrn   <= ng;
+                    colorblue  <= nb;
+                    coloralpha <= na;
+                end
+            end
+
+            // ---- the pattern cursors -------------------------------------
+            // ZPATTERN is a plain 32-bit rotate downwards. The stipple is the
+            // same walk slowed by LSREPEAT and cut short by LSLENGTH, and its
+            // repeat counter lives in LSMODE so that LSSAVE and LSRESTORE can
+            // carry it from one segment of a connected line to the next.
+            // BOTH CURSORS OBEY LSADVLAST, not just the stipple's: IRIS calls
+            // one iterate_pattern for the pair behind a single `!is_last ||
+            // lsadvlast` test. Advancing the z pattern on a line's last pixel
+            // and the stipple not leaves the two a step apart for the rest of
+            // the primitive's life, and the next continuation GO then paints
+            // a different set of pixels - one position out, with the right
+            // colours, which is the hardest kind of wrong to see.
+            if (zpat_en && pat_advance)
+                zbit <= (zbit == 5'd0) ? 5'd31 : zbit - 5'd1;
+            if (lspat_en && pat_advance) begin
+                if (ls_rcount == 8'd0) begin
+                    lsmode[7:0] <= ls_repeat - 8'd1;
+                    patbit <= (patbit == ls_wrap) ? 5'd31 : (patbit - 5'd1);
+                end else begin
+                    lsmode[7:0] <= ls_rcount - 8'd1;
+                end
+            end
+        end
+    endtask
+
     always_ff @(posedge clk) begin
         if (reset) begin
             drawmode0 <= 32'h0; drawmode1 <= 32'h0;
@@ -984,7 +1745,13 @@ module np_rex3 #(
             brese1 <= 32'h0; bress2 <= 32'h0; aweight0 <= 32'h0; aweight1 <= 32'h0;
             colorred <= 32'h0; coloralpha <= 32'h0; colorgrn <= 32'h0; colorblue <= 32'h0;
             slopered <= 32'h0; slopealpha <= 32'h0; slopegrn <= 32'h0; slopeblue <= 32'h0;
-            slopered1 <= 32'h0; wrmask <= 32'h0; colori <= 32'h0; colorx <= 32'h0;
+            slopered1 <= 32'h0; wrmask <= 32'h0; colorx <= 32'h0;
+            patbit <= 5'd31; line_left <= 17'd0;
+            frq_tx <= 24'd0; frq_ty <= 24'd0;
+            frq_dx <= 18'd0; frq_dy <= 18'd0; frq_maj <= 18'd0;
+            skip_first_r <= 1'b0; skip_last_r <= 1'b0;
+            xfrac <= 11'd0; yfrac <= 11'd0;
+            xefrac <= 11'd0; yefrac <= 11'd0;
             hostrw0 <= 32'h0; hostrw1 <= 32'h0;
             dcbmode <= {21'h0, 4'hF, 7'h0};   // DCBADDR powers up at 0xF
             dcbdata0 <= 32'h0; dcbdata1 <= 32'h0;
@@ -994,7 +1761,7 @@ module np_rex3 #(
             dr <= DR_IDLE; cx <= 17'sd0; cy <= 17'sd0; cx_end <= 17'sd0;
             cy_end <= 17'sd0; cx_save <= 17'sd0; zbit <= 5'd31;
             span_left <= 6'd32; span_clamped <= 1'b0; first_pix <= 1'b0;
-            src_pix <= 24'h0; dst_half <= 32'h0; host_left <= 3'd0;
+            src_pix <= 24'h0; dst_half <= 32'h0; host_left <= 4'd0;
             dr_after <= DR_IDLE; cid_x <= 17'sd0; cid_y <= 11'd0; cid_val <= 4'h0;
             host_shift <= 64'h0;
             config_r <= 32'h0;
@@ -1081,7 +1848,12 @@ module np_rex3 #(
                         R_XSTARTENDI:  begin xstart <= {5'b0, wr_val[31:16], 11'b0};
                                              xsave  <= {5'b0, wr_val[31:16], 11'b0};
                                              xend   <= {5'b0, wr_val[15:0],  11'b0}; end
-                        R_COLORRED:    colorred   <= wr_val & M_COLOR24;
+                        // 12-BIT COLOUR INDEX ARRIVES AS o12.9 AND IS STORED
+                        // AS o12.11, which is the one place the bus value and
+                        // the register's value differ by anything but a mask.
+                        R_COLORRED:    colorred   <= ci12_shift
+                                                   ? ((wr_val << 2) & M_COLOR24)
+                                                   :  (wr_val       & M_COLOR24);
                         R_COLORALPHA:  coloralpha <= wr_val & M_COLOR20;
                         R_COLORGRN:    colorgrn   <= wr_val & M_COLOR20;
                         R_COLORBLUE:   colorblue  <= wr_val & M_COLOR20;
@@ -1090,9 +1862,30 @@ module np_rex3 #(
                         R_SLOPEGRN:    slopegrn   <= to_sign_mag(wr_val, 20);
                         R_SLOPEBLUE:   slopeblue  <= to_sign_mag(wr_val, 20);
                         R_WRMASK:      wrmask <= wr_val & M_COLOR24;
-                        R_COLORI:      colori <= wr_val;
-                        R_COLORX:      colorx <= wr_val;
-                        R_SLOPERED1:   slopered1 <= wr_val;
+                        // COLORI IS A WINDOW ONTO THE COLOUR DDAs, NOT A
+                        // REGISTER. It has to be: CI shading iterates the red
+                        // DDA and reads the index back out of it, so a
+                        // separate store would hold the un-shaded colour and
+                        // every Gouraud span would come out flat. In RGB mode
+                        // the three bytes land in the three DDAs; in CI mode
+                        // the whole value lands in red, shifted into the
+                        // integer part at [22:11]. IRIS's set_colori.
+                        R_COLORI:      if (dm1_rgbmode) begin
+                                           colorred  <= {13'b0, wr_val[7:0],  11'b0};
+                                           colorgrn  <= {13'b0, wr_val[15:8], 11'b0};
+                                           colorblue <= {13'b0, wr_val[23:16],11'b0};
+                                       end else begin
+                                           colorred  <= wr_val << 11;
+                                       end
+                        R_COLORX:      colorx <= ci12_shift
+                                               ? ((wr_val << 2) & M_COLOR24)
+                                               :  (wr_val       & M_COLOR24);
+                        // SLOPERED1 IS THE RED SLOPE AGAIN - the CI shading
+                        // alias. The separate storage stays only so the
+                        // read-back keeps the width the register test has
+                        // always seen from it.
+                        R_SLOPERED1:   begin slopered1 <= wr_val;
+                                             slopered  <= to_sign_mag(wr_val, 24); end
                         R_HOSTRW0:     hostrw0 <= wr_val;
                         R_HOSTRW1:     hostrw1 <= wr_val;
                         R_DCBMODE:     dcbmode <= wr_val;
@@ -1272,25 +2065,48 @@ module np_rex3 #(
                                  rex3_gos, drawmode0, drawmode1,
                                  fp_int(xstart), fp_int(ystart),
                                  fp_int(xend),   fp_int(yend), fp_int(xsave),
-                                 bresoctinc1[26:24], zpattern, colori,
+                                 bresoctinc1[26:24], zpattern, (colorred >> 11),
                                  wrmask, clipmode, smask0x, smask0y,
                                  xymove, xywin, topscan[10:0]);
 `endif
                 end
 
                 DR_SETUP: begin
-                    // DOSETUP derives the octant from the two endpoints; a
-                    // command that does not set it uses whatever BRESOCTINC1
-                    // already holds, which is how Ng1TpDrawbitmap makes a
-                    // glyph walk upwards by writing 0x1000000 once.
-                    if (dm0_dosetup)
+                    // DOSETUP derives the octant and the three Bresenham
+                    // registers from the two endpoints; a command that does
+                    // not set it walks on whatever they already hold, which is
+                    // how Ng1TpDrawbitmap makes a glyph go upwards by writing
+                    // 0x1000000 once and how a connected polyline carries one
+                    // segment's error term into the next.
+                    //
+                    // A LINE CONTINUATION RE-DERIVES WHEN THE AXES DISAGREE.
+                    // A degenerate setup GO followed by a horizontal
+                    // continuation leaves a persisted octant that calls the
+                    // wrong axis major, and the walk then steps the wrong way
+                    // for the whole segment.
+                    if (dm0_dosetup || do_resetup) begin
                         bresoctinc1[26:24] <= {setup_xmajor, setup_xdec, setup_ydec};
+                        bresoctinc1[19:0]  <= setup_incr1[19:0];
+                        bresrndinc2[20:0]  <= setup_incr2[20:0];
+                        bresd              <= {5'b0, setup_d[26:0]};
+                    end
+                    // The pattern cursors restart only on a new primitive.
+                    if (dm0_dosetup) begin
+                        zbit   <= 5'd31;
+                        patbit <= 5'd31;
+                    end
                     cx         <= fp_int(xstart);
                     cy         <= fp_int(ystart);
                     cx_save    <= fp_int(xsave);
                     cx_end     <= fp_int(xend);
                     cy_end     <= fp_int(yend);
-                    zbit       <= 5'd31;
+                    // A LINE DROPS THE SUB-PIXEL PART. Its setup consumed the
+                    // fractions and then wrote the integer position back, so
+                    // everything downstream of it works in whole pixels.
+                    xfrac      <= dm0_is_line ? 11'd0 : xstart[10:0];
+                    yfrac      <= dm0_is_line ? 11'd0 : ystart[10:0];
+                    xefrac     <= dm0_is_line ? 11'd0 : xend[10:0];
+                    yefrac     <= dm0_is_line ? 11'd0 : yend[10:0];
                     first_pix  <= 1'b1;
                     // LENGTH32 clamps a span to 32 pixels, but only when the
                     // span is at least that wide.
@@ -1298,13 +2114,56 @@ module np_rex3 #(
                     span_clamped <= dm0_length32 && (setup_adx >= 17'sd32);
                     host_left  <= host_count;
                     host_shift <= dm1_rwdouble ? {hostrw0, hostrw1} : {hostrw0, 32'h0};
+                    line_left  <= line_count;
+                    skip_first_r <= line_step_one ? 1'b0
+                                  : (dm0_skipfirst || aline_skip_first);
+                    skip_last_r  <= line_step_one ? 1'b0
+                                  : (dm0_skiplast  || aline_skip_last);
                     // NOOP moves the position without touching a pixel, which
                     // is what a setup-only GO is for.
                     dr <= (dm0_opcode == OP_NOOP) ? DR_IDLE
-                        : (dm0_opcode == OP_SCR2SCR) ? DR_SRC_RD
-                        : need_dst_read ? DR_DST_RD
-                        : ((dm0_opcode == OP_DRAW) && !host_mode) ? DR_FILL
-                        : DR_WR;
+                        : span_lr_drop ? DR_IDLE
+                        : (dm0_is_fract && (dm0_dosetup || do_resetup)) ? DR_FRACT
+                        : first_pixel_state;
+                end
+
+                // The fractional-endpoint correction, one cycle, only for
+                // F_LINE and A_LINE and only behind a DOSETUP.
+                // THE SETUP SPENDS THE SUB-PIXEL PART AND WRITES THE INTEGER
+                // POSITION BACK. That is IRIS's `ctx.xstart = x << 11`, and
+                // it is load-bearing beyond tidiness: the endpoint filter
+                // below reads XSTART's fraction, and by the time it runs the
+                // fraction is gone, so a DOSETUP line never filters its first
+                // endpoint however the weights are set.
+                DR_FRACT: begin
+                    frq_dx  <= fr_dx;
+                    frq_dy  <= fr_dy;
+                    frq_tx  <= fr_tx;
+                    frq_ty  <= fr_ty;
+                    frq_maj <= oct_ymajor ? fr_dy : fr_dx;
+                    dr      <= DR_FRACT2;
+                end
+
+                DR_FRACT2: begin
+                    bresd <= fr_takes_step ? {5'b0, fr2_e[26:0]} : {5'b0, fr2_d[26:0]};
+                    if (fr_takes_step && oct_ymajor) begin
+                        cx     <= fr_x2;
+                        xstart <= {5'b0, fr_x2[15:0], 11'b0};
+                    end else begin
+                        xstart <= {5'b0, cx[15:0], 11'b0};
+                    end
+                    if (fr_takes_step && !oct_ymajor) begin
+                        cy     <= fr_y2;
+                        ystart <= {5'b0, fr_y2[15:0], 11'b0};
+                    end else begin
+                        ystart <= {5'b0, cy[15:0], 11'b0};
+                    end
+                    dr <= DR_FRACT3;
+                end
+
+                DR_FRACT3: begin
+                    line_left <= pc_count;
+                    dr        <= first_pixel_state;
                 end
 
                 // One pixel per clock. The position advances every cycle
@@ -1334,19 +2193,26 @@ module np_rex3 #(
                 // one transaction at a time whatever this state does, so the
                 // writes it used to throw away were never going to happen.
                 DR_FILL: if (!fb_req || fb_ack) begin
-                    first_pix <= 1'b0;
+                    walk_advance();
                     if (span_left != 6'd0) span_left <= span_left - 6'd1;
                     if (row_done) begin
-                        cx        <= cx_save;
-                        zbit      <= 5'd31;
-                        cy        <= y_step;
+                        zbit   <= 5'd31;
+                        patbit <= 5'd31;
                         span_left <= 6'd32;
-                        ystart    <= {5'b0, y_step[15:0], 11'b0};
-                        xstart    <= xsave;
+                        // A SPAN THAT REACHES ITS END IS OVER. Only a block
+                        // wraps x back to XSAVE and drops to the next row.
+                        if (dm0_adrmode != AM_SPAN) begin
+                            cx     <= cx_save;
+                            cy     <= y_step;
+                            ystart <= {5'b0, y_step[15:0], yfrac};
+                            xstart <= xsave;
+                            // SKIPFIRST is per row in a block; see the
+                            // note on the general walker's row end.
+                            first_pix <= 1'b1;
+                        end
                     end else begin
-                        zbit   <= (zbit == 5'd0) ? 5'd31 : zbit - 5'd1;
                         cx     <= x_step;
-                        xstart <= {5'b0, x_step[15:0], 11'b0};
+                        xstart <= {5'b0, x_step[15:0], xfrac};
                     end
                     // Where the walk goes next; through DR_CID first if the
                     // pixel just written needs its window-ID copy refreshed.
@@ -1382,12 +2248,19 @@ module np_rex3 #(
                 DR_WR: if (fb_ack || !fb_req) begin
                     // READ packs the pixel into the host word, low end first
                     // so the first pixel ends up at the top; a host-sourced
-                    // DRAW consumes one slot from the top instead.
-                    if (dm0_opcode == OP_READ)
-                        host_shift <= (host_shift << host_step) | {40'h0, dst_val};
-                    else if (dm0_colorhost)
+                    // DRAW consumes one slot from the top instead. A pixel the
+                    // patterns dropped consumes nothing: IRIS fetches the host
+                    // word only after the pattern test, so a stippled
+                    // host-sourced draw spends one word per drawn pixel and
+                    // not one per position.
+                    if (dm0_opcode == OP_READ) begin
+                        host_shift <= (host_shift << host_step)
+                                    | {32'h0, host_pack_val};
+                        host_left  <= host_left - 4'd1;
+                    end else if (host_consume) begin
                         host_shift <= host_shift << host_step;
-                    if (host_mode) host_left <= host_left - 3'd1;
+                        host_left  <= host_left - 4'd1;
+                    end
                     if (fb_req && cid_copy_need) begin
                         cid_x    <= dst_x;
                         cid_y    <= dst_y;
@@ -1402,8 +2275,36 @@ module np_rex3 #(
                 DR_CID: if (fb_ack) dr <= dr_after;
 
                 DR_STEP: begin
-                    first_pix <= 1'b0;
+                    walk_advance();
                     if (span_left != 6'd0) span_left <= span_left - 6'd1;
+
+                    // A LINE COUNTS ITS PIXELS. It cannot ask the coordinates
+                    // whether it has arrived: Bresenham's minor axis lands on
+                    // whichever side of the true line the error term puts it,
+                    // and for a fractional line that is not the requested
+                    // endpoint at all. The step is skipped on the last pixel
+                    // so that XSTART and YSTART are left on it rather than one
+                    // past it - a following XYENDI GO re-derives the setup
+                    // from XSTART, and one pixel of drift there walks the next
+                    // segment of a polyline off the joint.
+                    if (dm0_is_line) begin
+                        line_left <= line_left - 17'd1;
+                        if (!line_last || line_step_one) begin
+                            cx     <= line_x_step;
+                            cy     <= line_y_step;
+                            xstart <= {5'b0, line_x_step[15:0], 11'b0};
+                            ystart <= {5'b0, line_y_step[15:0], 11'b0};
+                            bresd  <= {5'b0, line_d_step[26:0]};
+                        end else begin
+                            // The walk is over and did not step. XSTART and
+                            // YSTART still have to be published - in whole
+                            // pixels, the sub-pixel part spent - because a
+                            // following GO derives its setup from them.
+                            xstart <= {5'b0, cx[15:0], 11'b0};
+                            ystart <= {5'b0, cy[15:0], 11'b0};
+                        end
+                        dr <= line_last ? DR_IDLE : next_pixel_state;
+                    end
 
                     // ROW END IS CHECKED BEFORE WORD END, because IRIS's walk
                     // does the y-advance and the x-wrap before it looks at the
@@ -1417,16 +2318,33 @@ module np_rex3 #(
                     // edge of its rectangle. The PROM never saw it - its
                     // host-mode transfers are one-word primitives - but X's
                     // pixel DMA hits it on every row of every blit.
-                    if (row_done) begin
-                        // End of the span. x returns to XSAVE and y advances;
-                        // the z-pattern restarts at bit 31, which is why each
-                        // scanline of a glyph starts from the top of its word.
-                        cx   <= cx_save;
-                        zbit <= 5'd31;
-                        cy   <= y_step;
+                    else if (row_done) begin
+                        // End of the row. The pattern cursors restart at bit
+                        // 31, which is why each scanline of a glyph starts
+                        // from the top of its word.
+                        zbit   <= 5'd31;
+                        patbit <= 5'd31;
                         span_left <= 6'd32;
-                        ystart <= {5'b0, y_step[15:0], 11'b0};
-                        xstart <= xsave;
+                        // A SPAN IS ONE ROW AND ENDS HERE; a block wraps x
+                        // back to XSAVE and drops to the next.
+                        if (dm0_adrmode != AM_SPAN) begin
+                            cx     <= cx_save;
+                            cy     <= y_step;
+                            ystart <= {5'b0, y_step[15:0], yfrac};
+                            xstart <= xsave;
+                            // SKIPFIRST IS PER ROW IN A BLOCK, which is what
+                            // makes it useful: a polygon hands the chip both
+                            // halves of every span and the flag drops the
+                            // shared edge pixel of each one. IRIS's block
+                            // walker sets this flag at every row and never
+                            // clears it, so under SKIPFIRST it draws nothing
+                            // at all - its span and line walkers both clear
+                            // it, and nothing in the corpus sets SKIPFIRST,
+                            // so that arm has never run against real
+                            // software. verilator/tb_rex3draw.cpp leaves the
+                            // combination out and says so.
+                            first_pix <= 1'b1;
+                        end
                         if (host_mode && dm0_opcode == OP_READ) begin
                             hostrw0 <= dm1_rwdouble ? host_shift[63:32] : host_shift[31:0];
                             hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
@@ -1436,11 +2354,18 @@ module np_rex3 #(
                         // Ng1TpDrawbitmap paints a glyph, one write to
                         // ZPATTERN per scanline. Host mode ends the GO's work
                         // here too, whatever the count says.
-                        if (!dm0_stopony || y_at_end || host_mode)
+                        if ((dm0_adrmode == AM_SPAN) || !dm0_stopony || y_at_end
+                            || host_mode)
                             dr <= DR_IDLE;
                         else
                             dr <= next_pixel_state;
-                    end else if (host_mode && host_left == 3'd0) begin
+                    end else if (len32_stop) begin
+                        // LENGTH32's thirty-second pixel. The primitive pauses
+                        // where it stands, x already stepped, for the next GO.
+                        cx     <= x_step;
+                        xstart <= {5'b0, x_step[15:0], xfrac};
+                        dr     <= DR_IDLE;
+                    end else if (host_mode && host_left == 4'd0) begin
                         // A whole host word mid-row: flush it and pause the
                         // primitive where it stands. The next GO carries the
                         // next word.
@@ -1449,12 +2374,11 @@ module np_rex3 #(
                             hostrw1 <= dm1_rwdouble ? host_shift[31:0]  : hostrw1;
                         end
                         cx     <= x_step;
-                        xstart <= {5'b0, x_step[15:0], 11'b0};
+                        xstart <= {5'b0, x_step[15:0], xfrac};
                         dr     <= DR_IDLE;
                     end else begin
-                        zbit   <= (zbit == 5'd0) ? 5'd31 : zbit - 5'd1;
                         cx     <= x_step;
-                        xstart <= {5'b0, x_step[15:0], 11'b0};
+                        xstart <= {5'b0, x_step[15:0], xfrac};
                         // Without STOPONX one pixel is the whole primitive.
                         dr     <= eff_stoponx ? next_pixel_state : DR_IDLE;
                     end
@@ -1469,18 +2393,28 @@ module np_rex3 #(
     // ---- frame buffer port -------------------------------------------------
     // FASTCLEAR writes through the patterns; the CID clip skips any pixel
     // whose window-ID nibble in the auxiliary planes does not match.
-    wire zpat_hit = !dm0_enzpattern || zpattern[zbit] || fastclear_act;
-    wire skip_pix = (first_pix && dm0_skipfirst)
-                 || (row_done && dm0_skiplast)
+    // THE CID IS TWO BITS AND CIDMATCH IS A MASK OF THE FOUR THEY NAME.
+    wire cid_ok = cid_match[cid_nib[1:0]];
+    // The alpha function only runs where there is an alpha to test: a
+    // fastclear writes through it, as it writes through everything.
+    wire afunc_drop = !fastclear_act && pixel_is_draw
+                   && (dm1_compare != 3'd7) && !afunc_pass;
+    wire skip_pix = (first_pix && skip_first_r)
+                 || (prim_last && skip_last_r)
+                 || lr_skip
                  || (!clip_ok)
-                 || (!zpat_hit && !dm0_zpopaque)
-                 || (cid_gate && (cid_nib != cid_match));
+                 || pat_drop
+                 || afunc_drop
+                 || (cid_gate && !cid_ok);
 
     // DR_FILL's next state, kept apart so that a detour through DR_CID can
     // come back to it. Without STOPONX one pixel is the whole primitive.
     always_comb begin
-        if (row_done) fill_next = (!dm0_stopony || y_at_end) ? DR_DRAIN : DR_FILL;
-        else          fill_next = eff_stoponx ? DR_FILL : DR_DRAIN;
+        if (row_done)
+            fill_next = ((dm0_adrmode == AM_SPAN) || !dm0_stopony || y_at_end)
+                      ? DR_DRAIN : DR_FILL;
+        else if (len32_stop) fill_next = DR_DRAIN;
+        else                 fill_next = eff_stoponx ? DR_FILL : DR_DRAIN;
     end
 
     // The window-ID copy: byte 3 of the drawing slot of the pixel DR_CID was
