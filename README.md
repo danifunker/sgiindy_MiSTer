@@ -34,6 +34,13 @@ programs drawn by a reimplementation of the Newport (XL) graphics board.
   (the MiSTer scaler converts it to your HDMI mode).
 - Parallel port, ISDN, video capture (VINO) and IndyCam are not implemented.
 
+### Known bug
+
+**A disk read can rarely come back with two bytes wrong.** Installing IRIX from
+the CD, `inst`'s checksums catch exactly one file with the last 32-bit word of a
+disk block half overwritten, the same way every time; the CD image is proven
+good. Until it is fixed, keep a backup copy of your disk image.
+
 ## Requirements
 
 - A DE10-Nano (MiSTer). **No SDRAM module is needed** - the core uses only the
