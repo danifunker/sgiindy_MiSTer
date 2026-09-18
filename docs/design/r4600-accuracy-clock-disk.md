@@ -1,4 +1,4 @@
-# 51. The CPU against real Indys, the clock, and the disk byte path
+# The CPU against real Indys, the clock, and the disk byte path
 
 Written 2026-09-16. Three requests: make the CPU accurate against the cpu-tests
 suite now that the suite has been validated on real SGI hardware (the resume

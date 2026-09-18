@@ -16,8 +16,10 @@ Every sample is classified twice:
     python profan.py CAPTURE.bin [--unix unix.ecoff] [--so so_locations]
                      [--top 25] [--series 10]
 
-The kernel symbol table comes from ecoffsyms.py; so_locations comes off the
-image (efsread.py IMAGE cat /usr/lib/so_locations).
+The kernel symbol table comes from ecoffsyms.py, reading the kernel the
+capture was taken under - extract it from the disk image with
+`efsread.py IMAGE get /unix unix.ecoff`. so_locations comes off the image the
+same way (efsread.py IMAGE get /usr/lib/so_locations so_locations).
 """
 import argparse
 import bisect
@@ -102,7 +104,8 @@ def main():
     ap.add_argument("capture")
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.normpath(os.path.join(here, "..", ".."))
-    ap.add_argument("--unix", default=os.path.join(root, "unix.ecoff"))
+    ap.add_argument("--unix", default=os.path.join(root, "unix.ecoff"),
+                    help="%s" % "IRIX's kernel: extract it from the system disk image with tools/misterdeploy/efsread.py IMAGE get /unix unix.ecoff")
     ap.add_argument("--so", default=os.environ.get("SO_LOCATIONS", ""))
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--series", type=float, default=0.0,

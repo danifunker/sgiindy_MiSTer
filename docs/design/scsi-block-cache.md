@@ -1,12 +1,8 @@
-# Work item: the SCSI block cache - build 26
+# The SCSI block cache
 
-Paste everything below the line as the opening message of a fresh session.
-This continues [48](../history.md#48) §3 (the
-MacQuadra800 SCSI work and what transfers). Written 2026-09-08.
+Build 26 (2026-09-08), with the CD-ROM slot added in build 27 (section 6).
 
----
-
-## STATE AT HANDOFF (read this first)
+## Summary
 
 * **What was built:** `rtl/scsi/scsi_cache.sv`, the MacQuadra800 per-target
   read-ahead / write-behind block cache, ported nearly verbatim and wired
@@ -40,10 +36,6 @@ MacQuadra800 SCSI work and what transfers). Written 2026-09-08.
   with `--scsi-nocache`; the whole-machine IRIX 5.3 sim boot to 230M cycles.
   Results in §3.
 * **Board:** §4.
-* **Still open from docs/46-48, unchanged:** the R4600 patch to the
-  cpu-tests suite is UNCOMMITTED in `C:\Temp\mistercore\iris\cpu-tests`; the
-  16 KB two-way I-cache is a performance follow-up; the sim never reaches
-  "The system is coming up"; the missing-hardware list in docs/48 §2.
 
 ## 1. What the cache is, in this core's terms
 

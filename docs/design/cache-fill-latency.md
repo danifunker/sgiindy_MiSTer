@@ -1,4 +1,4 @@
-# 52. Where a fill's clocks go, 3,000 ALMs back, and fewer trips to DDR3
+# Where a cache line fill's clocks go, 3,000 ALMs back, and fewer trips to DDR3
 
 Written 2026-09-16/17, resuming docs/design/r4600-accuracy-clock-disk.md's list of what was left: line fills
 costing ~20 clocks on the board against ~8 in the simulator, a dirty data line

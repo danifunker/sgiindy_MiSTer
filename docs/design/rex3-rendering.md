@@ -1,4 +1,4 @@
-# 55. The rest of REX3's command set, and the corpus that named it
+# The rest of REX3's command set, and the corpus that named it
 
 Written 2026-09-17, after docs/design/hpc3-register-file.md. The question was "what do we need to add to
 get the 3D and the rendering working, and is it REX3?". It is REX3: the Indy's

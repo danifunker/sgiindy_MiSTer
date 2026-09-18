@@ -110,7 +110,13 @@ done
 [ "$LAUNCH" = 0 ] && { log "--no-launch: stopping here"; exit 0; }
 
 # Start from a known state, the same as every other measurement here does.
+# MISTER_RBF_PATH names a bitstream staged somewhere else (usually
+# /tmp/SGIIndy.rbf, see scripts/regression.sh) and wins over the card's copy,
+# as it does for launch_unstable_core.py - without it this launched whatever
+# old build was sitting in _Unstable.
+CORE_PATH="${MISTER_RBF_PATH:-/media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE}"
 rsh "python3 /media/fat/sgidbg/memclear.py >/dev/null; \
      python3 /media/fat/sgidbg/fb_poke.py fill 0xE7 >/dev/null; \
-     echo 'load_core /media/fat/$MISTER_CORE_FOLDER/$RBF_REMOTE' > /dev/MiSTer_cmd"
+     echo 'load_core $CORE_PATH' > /dev/MiSTer_cmd"
+log "launched $CORE_PATH"
 log "loaded - give it about 40 seconds, then read the screen"

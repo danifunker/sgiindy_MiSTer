@@ -40,7 +40,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("prof")
     here = os.path.dirname(os.path.abspath(__file__))
-    ap.add_argument("--unix", default=os.path.normpath(os.path.join(here, "..", "..", "unix.ecoff")))
+    ap.add_argument("--unix", default=os.path.normpath(os.path.join(here, "..", "..", "unix.ecoff")),
+                    help="IRIX's kernel: extract it from the system disk image with tools/misterdeploy/efsread.py IMAGE get /unix unix.ecoff")
     ap.add_argument("--top", type=int, default=40)
     a = ap.parse_args()
     kaddr, kname = kernel_procs(a.unix)

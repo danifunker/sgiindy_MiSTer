@@ -1,4 +1,4 @@
-# 33 - The Newport pixel-DMA black screen: the MC's VDMA engine was never built
+# The Newport pixel DMA: the MC's VDMA engine
 
 **Status: fix implemented and sim-verified; this section's board result is
 recorded at the bottom.** Follows [32-resume-newport-dma.md](../history.md#32).

@@ -1,4 +1,4 @@
-# 50. Speed: where an IRIX session's time goes, and builds 28-30
+# Speed: where an IRIX session's time goes (builds 28-30)
 
 Written 2026-09-16. The request was "this core is running slowly - fix the
 speed before adding features; look at what is hurting the user experience."

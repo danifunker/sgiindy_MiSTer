@@ -44,7 +44,6 @@ cr_ie_info.json
 # with the machine, bitstream and date on them: they are the only results in
 # this repository that a simulator did not produce, and they are the reference
 # everything else is judged against.
-!tests/hardware/*.log
 *.fst
 *.vcd
 tests/out/

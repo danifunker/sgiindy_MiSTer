@@ -18,9 +18,7 @@ set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Lite Edition"
 # THE VENDORED CPU IS VHDL-2008 AND WILL NOT PARSE AS ANYTHING ELSE. cpu.vhd
 # uses sized bit-string literals - `mul1 <= 40x"0" & ...` - which are a 2008
 # construct, and without this the very first compile stops with 59 syntax
-# errors on lines that are perfectly good VHDL. syn/sgiindy_syn.qsf has carried
-# this since the CPU first went through Quartus; the root project did not,
-# because the root project had never been compiled.
+# errors on lines that are perfectly good VHDL.
 set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
 
 set_global_assignment -name GENERATE_RBF_FILE ON

@@ -1,4 +1,4 @@
-# 54. HPC3's register file, and what it cost to be flip-flops
+# HPC3's register file, and what it cost to be flip-flops
 
 Written 2026-09-17, after docs/design/scsi-sync-negotiation.md. docs/design/cache-fill-latency.md §7 listed `sgi_hpc3`'s arrays as the
 next flip-flop storage in the core; this is that change, and it is the third of

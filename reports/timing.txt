@@ -1,0 +1,70 @@
+TimeQuest timing summaries - sgiindy-b44.sta.rpt (slow 1100mV 100C model unless stated)
+
++------------------------------------------------------------------------------------------------------------+
+; Setup Summary                                                                                              ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; Clock                                                                             ; Slack  ; End Point TNS ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk ; 0.714  ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk           ; 0.979  ; 0.000         ;
+; sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk                                ; 3.939  ; 0.000         ;
+; spi_sck                                                                           ; 6.183  ; 0.000         ;
+; FPGA_CLK1_50                                                                      ; 7.728  ; 0.000         ;
+; FPGA_CLK2_50                                                                      ; 12.187 ; 0.000         ;
+; pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk   ; 21.889 ; 0.000         ;
++-----------------------------------------------------------------------------------+--------+---------------+
+
++-----------------------------------------------------------------------------------------------------------+
+; Hold Summary                                                                                              ;
++-----------------------------------------------------------------------------------+-------+---------------+
+; Clock                                                                             ; Slack ; End Point TNS ;
++-----------------------------------------------------------------------------------+-------+---------------+
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk ; 0.188 ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk           ; 0.206 ; 0.000         ;
+; pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk   ; 0.267 ; 0.000         ;
+; spi_sck                                                                           ; 0.353 ; 0.000         ;
+; FPGA_CLK1_50                                                                      ; 0.376 ; 0.000         ;
+; FPGA_CLK2_50                                                                      ; 0.413 ; 0.000         ;
+; sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk                                ; 0.413 ; 0.000         ;
++-----------------------------------------------------------------------------------+-------+---------------+
+
++------------------------------------------------------------------------------------------------------------+
+; Recovery Summary                                                                                           ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; Clock                                                                             ; Slack  ; End Point TNS ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk ; 3.044  ; 0.000         ;
+; sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk                                ; 6.204  ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk           ; 10.382 ; 0.000         ;
+; FPGA_CLK1_50                                                                      ; 17.709 ; 0.000         ;
++-----------------------------------------------------------------------------------+--------+---------------+
+
++-----------------------------------------------------------------------------------------------------------+
+; Removal Summary                                                                                           ;
++-----------------------------------------------------------------------------------+-------+---------------+
+; Clock                                                                             ; Slack ; End Point TNS ;
++-----------------------------------------------------------------------------------+-------+---------------+
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk ; 0.935 ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk           ; 1.019 ; 0.000         ;
+; FPGA_CLK1_50                                                                      ; 1.152 ; 0.000         ;
+; sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk                                ; 2.306 ; 0.000         ;
++-----------------------------------------------------------------------------------+-------+---------------+
+
++------------------------------------------------------------------------------------------------------------+
+; Minimum Pulse Width Summary                                                                                ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; Clock                                                                             ; Slack  ; End Point TNS ;
++-----------------------------------------------------------------------------------+--------+---------------+
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|fpll_0|fpll|vcoph[0]             ; 1.122  ; 0.000         ;
+; pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]     ; 1.196  ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]             ; 1.666  ; 0.000         ;
+; pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk ; 1.930  ; 0.000         ;
+; sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk                                ; 3.601  ; 0.000         ;
+; spi_sck                                                                           ; 4.203  ; 0.000         ;
+; emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk           ; 8.563  ; 0.000         ;
+; FPGA_CLK1_50                                                                      ; 9.210  ; 0.000         ;
+; FPGA_CLK2_50                                                                      ; 9.211  ; 0.000         ;
+; FPGA_CLK3_50                                                                      ; 9.730  ; 0.000         ;
+; pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk   ; 18.923 ; 0.000         ;
++-----------------------------------------------------------------------------------+--------+---------------+
+

@@ -96,6 +96,9 @@ STASUM="output_files/$PROJECT_NAME.sta.summary"
 
 if [ -f "output_files/$PROJECT_NAME.rbf" ]; then
     log "OK: output_files/$PROJECT_NAME.rbf ($(ls -l "output_files/$PROJECT_NAME.rbf" | awk '{print $5}') bytes)"
+    # The reviewable build report (reports/summary.md, resources-by-entity.txt,
+    # timing.txt) for this bitstream - commit it with the release it belongs to.
+    python tools/fit_report.py --project "$PROJECT_NAME" --seed "${SEED:-}" 2>&1 | sed 's/^/    /' | tee -a "$LOG"         || log "WARNING: tools/fit_report.py failed; reports/ not updated"
 else
     log "ERROR: no rbf produced."
     exit 1

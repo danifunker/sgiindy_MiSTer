@@ -1,4 +1,4 @@
-# 53. The synchronous-transfer negotiation, failed in front of every command
+# SCSI synchronous-transfer negotiation, failed in front of every command
 
 Written 2026-09-17, resuming docs/design/cache-fill-latency.md §7's list. Its first item was the disk's
 byte path; sizing that from build 38's boot profile turned up a larger item

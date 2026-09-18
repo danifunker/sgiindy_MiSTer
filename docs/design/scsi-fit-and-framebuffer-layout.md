@@ -1,4 +1,4 @@
-# 36. The SCSI fit lands; the frame buffer goes to four bytes a pixel
+# The SCSI fit, and the frame buffer at four bytes a pixel
 
 Session of 2026-09-02, following [35](../history.md#35).
 Three things happened: the docs/29 SCSI fixes were fitted and put on the

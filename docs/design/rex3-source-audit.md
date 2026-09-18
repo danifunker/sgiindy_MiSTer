@@ -1,4 +1,4 @@
-# 56. REX3 against its sources, and the plan to make it right
+# REX3 against its sources, and the plan to make it right
 
 Written 2026-09-17 (evening), after docs/design/rex3-rendering.md and the build 43b board runs.
 GL programs on the board drew nothing recognisable, and Dani's reading was
