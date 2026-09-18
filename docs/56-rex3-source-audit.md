@@ -104,7 +104,70 @@ the slow path.
 
 ## 4. Findings by area
 
-(in progress)
+Each area was audited against the spec, IRIS, MAME and the guest's
+binaries. Items marked **(re-checked)** were verified a second time against
+the sources before being written here; the rest carry the audit's own
+evidence (spec page, file:line, guest address).
+
+### 4.1 The register file, control bits, coordinates and clipping
+
+Table 7's register types, recovered from the PDF's Symbol-font codes (the
+text extractions drop them): **stall until the pipeline is idle** -
+DRAWMODE1, COLORBACK, COLORVRAM, ALPHAREF, STALL0, XYMOVE, WRMASK, SMASK1-4,
+CLIPMODE, STALL1; **display-bus FIFO** - DCBMODE, DCBDATA0, DCBDATA1;
+**immediate** - CONFIG, STATUS, USER_STATUS, DCBRESET. The core's
+hold-every-write-while-busy model is a superset of the stall rule and keeps
+program order, so it is correct if slow.
+
+**GL-format coordinates keep four float exponent bits - BREAKS GL
+(re-checked).** XSTARTF/YSTARTF/XENDF/YENDF (0x138-0x144) and XENDF1 (0x14C)
+are "12.4(7) GL version of XSTART, (zeros 4 msbs)" (p21). GL stores the raw
+bits of the float `4096 + x`, whose mantissa is exactly x in 12.11 fixed
+point and whose exponent (139) puts 0xB in bits 26:23. IRIS
+(`rex3.rs:695`, "hardware masks off bits 31:23") and MAME (`newport.cpp:4043`)
+mask with 0x007FFF80; np_rex3 masks with M_COORD = 0x07FFFF80 (line 225,
+1822-1829), so the coordinate becomes x - 20480 and every pixel is culled.
+Every GL line and point, including the ones GL writes with 32-bit stores.
+0x14C is also decoded as an integer "XENDI" rather than XENDF1.
+
+**SETUP (0x0030) does nothing - BREAKS GL (re-checked).** "Performs
+line/span setup without iteration (ignore DOSETUP)" (p21), and "The host
+must, in advance, issue a write to address=SETUP in order to have REX
+calculate quadrant" (§3.5, repeatedly). IRIS runs `setup()` on the write
+(`rex3.rs:3145`); np_rex3 stores the value (line 1814). GL's
+`__glNptRenderBitmap` writes XYSTARTI, XYENDI, DRAWMODE0 = block without
+DOSETUP, then SETUP (`sw $zero, 0x30`), then ZPATTERN|GO per row - so GL
+text, CopyPixels and GL's point-at-a-time lines use a stale octant.
+
+**Line stipple state.** LSPATTERN and LSMODE's repeat counter are the live
+iterator on the part ("recirculating iterators", §3.4); LSSAVE/LSRESTORE
+copy them to and from the save fields. np_rex3 keeps LSPATTERN fixed, indexes
+it with a hidden counter reset at every DOSETUP and row, and ignores
+LSSAVE/LSRESTORE, so dashes restart at every polyline vertex and wide
+stippled lines lose their phase. IRIS simplifies the same way, so it cannot
+be the oracle here; GL's wide-line code does LSSAVE once and LSRESTORE per
+pass.
+
+**No vertical sector clip.** Writes outside the 1344 x 1024 drawing area are
+culled (§3.3); np_rex3 wraps y modulo 1024, so anything drawn above or below
+the screen reappears at the opposite edge.
+
+**XYMOVE in the screen-mask tests.** np_rex3 tests SMASK0 without XYMOVE and
+SMASK1-4 with it; IRIS and MAME add it to all, the errata (p147) to none.
+Needs a board test before choosing.
+
+**Minor:** STATUS VERSION reads 1 (IRIS and MAME answer 3); reset values of
+DRAWMODE1 (0x3002F001) and CONFIG (0x230C4) are zero here; read-back widths
+of DRAWMODE0, the colour registers, DCBMODE and CONFIG exceed the spec's;
+COLORX is stored but never reaches the DDA; PLANES 0/3/7 draw; YFLIP and
+SWAPENDIAN are missing (no corpus shape uses either); the colour-index
+clamp and the COMPARE field in CI mode differ from the spec in ways no
+corpus shape reaches.
+
+The kernel's context switch saves exactly the registers with a read format
+and converts all four slopes back to sign-magnitude; every one round-trips
+in the core. `tb_rex3draw.cpp` never writes the GL-format coordinates,
+SETUP, LSSAVE/LSRESTORE or a non-zero XYMOVE - which is where these hid.
 
 ## 5. Implementation plan
 
