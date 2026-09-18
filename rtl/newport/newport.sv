@@ -151,24 +151,90 @@ module newport #(
     // CPU presented has to be split. `aoff[2]` is the only thing that can say
     // which word a read addressed - byte enables are meaningless on a read.
     // See rtl/cpu/r4300_bus.sv.
-    wire        hi_word = ~aoff[2];
-    wire [12:0] r3_off  = {addr[12:3], aoff[2], 2'b00};
-    wire [31:0] r3_wdata = aoff[2] ? wdata[31:0] : wdata[63:32];
+    //
+    // A DOUBLEWORD STORE IS TWO REGISTER WRITES AND ONE GO. GL writes REX3's
+    // registers in pairs with 64-bit `sdc1` stores - XYSTARTI+XYENDI,
+    // XSTARTF+YSTARTF, XSTARTI+XENDF1 with GO, the colour and slope pairs,
+    // HOSTRW0+HOSTRW1 with GO: 215 of them between libGLcore.so and libgl.so,
+    // none in the X server (docs/56 3.1, 4.4, 4.6). The Indy really sends them
+    // as single 64-bit transfers - the kernel sets the MC's GRX_SIZE_64 and
+    // CONFIG.BUSWIDTH - and REX3 takes a whole transfer as one GFIFO entry
+    // (GF_DATA 63:0, GF_D32 marking the 32-bit ones, one GF_GO), so the even
+    // register gets bits 63:32, the odd one 31:0, and the primitive starts
+    // after both. IRIS's write64 and MAME's rex3_w do exactly that.
+    //
+    // This used to keep the even word and drop the odd one - and because the
+    // GO bit is address bit 11, which the even word's offset carried, the GO
+    // fired with the second register stale: XYSTARTI+XYENDI|GO drew to the
+    // PREVIOUS end point. That is the whole of "GL draws things it
+    // shouldn't".
+    //
+    // So a store with bytes in both words becomes two beats into np_rex3's
+    // 32-bit port: the even register with the GO stripped, then the odd one
+    // carrying the address's own GO. The first beat's acknowledgement stays
+    // here; the CPU is acknowledged by the second. The second beat is issued
+    // in the very cycle the first is acknowledged, so there is no cycle in
+    // which np_rex3 sees neither - and it refuses a VDMA beat in any cycle
+    // that carries a CPU write, so nothing can land between the halves.
+    // Loads are untouched: nothing in IRIX, X or GL issues a doubleword load
+    // to REX3, and the bus does not carry a load's size.
+    wire        dword_st = we && (|be[7:4]) && (|be[3:0]);
+
+    typedef enum logic [0:0] { DW_IDLE, DW_ODD } dw_state_t;
+    dw_state_t   dw;
+    logic [12:0] dw_off;        // the odd register's offset, GO included
+    logic [31:0] dw_data;
+    logic  [3:0] dw_be;
+
+    logic [31:0] r3_rdata;
+    logic        r3_ack;
+    wire         r3_first = sel && in_rex3;               // a CPU access arrives
+    wire         r3_second = (dw == DW_ODD) && r3_ack;    // its even half is done
+
+    logic        r3_sel;
+    logic [12:0] r3_off;
+    logic [31:0] r3_wdata;
     // The four byte enables belonging to that word, [3] the most significant.
     // `be[7-i]` guards byte i of the doubleword, so the high word's lanes are
     // be[7:4] and the low word's are be[3:0]. REX3 needs them for exactly one
     // register - DCBDATA0, whose datum has to be re-aligned to the top of the
     // word before the Display Control Bus shifts it out. See np_rex3.sv.
-    wire  [3:0] r3_be   = aoff[2] ? be[3:0] : be[7:4];
+    logic  [3:0] r3_be;
+    always_comb begin
+        r3_sel = r3_first || r3_second;
+        if (r3_second) begin
+            r3_off   = dw_off;
+            r3_wdata = dw_data;
+            r3_be    = dw_be;
+        end else if (dword_st) begin
+            r3_off   = {addr[12], 1'b0, addr[10:3], 3'b000};
+            r3_wdata = wdata[63:32];
+            r3_be    = be[7:4];
+        end else begin
+            r3_off   = {addr[12:3], aoff[2], 2'b00};
+            r3_wdata = aoff[2] ? wdata[31:0] : wdata[63:32];
+            r3_be    = aoff[2] ? be[3:0] : be[7:4];
+        end
+    end
 
-    logic [31:0] r3_rdata;
-    logic        r3_ack;
-    wire         r3_sel = sel && in_rex3;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            dw <= DW_IDLE;
+        end else if (r3_first && dword_st) begin
+            dw      <= DW_ODD;
+            dw_off  <= {addr[12:3], 3'b100};
+            dw_data <= wdata[31:0];
+            dw_be   <= be[3:0];
+        end else if (r3_second) begin
+            dw <= DW_IDLE;
+        end
+    end
 
     // Mirror the 32-bit answer into both halves so the read shift in
-    // r4300_bus lands on it whichever word was addressed.
+    // r4300_bus lands on it whichever word was addressed. The even half of a
+    // doubleword store is acknowledged to this module, not to the CPU.
     assign rdata = r3_ack ? {r3_rdata, r3_rdata} : 64'h0;
-    assign ack   = r3_ack | gfx_hole_ack;
+    assign ack   = (r3_ack && (dw != DW_ODD)) | gfx_hole_ack;
 
     // Anything in the window that is not REX3 answers zero, one cycle later.
     logic gfx_hole_ack;
@@ -230,6 +296,9 @@ module newport #(
 
     // ---- video timing --------------------------------------------------------
     logic        vc2_hsync, vc2_vsync, vc2_de, vc2_hblank, vc2_vblank, vc2_vint;
+    // VC2's pixel enable, undelayed: what the frame buffer fetch runs on. The
+    // `ce_pix` port is this, delayed to match the colour (see the syncs).
+    logic        vc2_ce;
     logic [10:0] vc2_x, vc2_y;
     logic  [3:0] vc2_dbg_did;
 
@@ -242,7 +311,7 @@ module newport #(
         .width  (dcb_width),
         .wdata  (dcb_wdata),
         .rdata  (vc2_rdata),
-        .ce_pix (ce_pix),
+        .ce_pix (vc2_ce),
         .hsync  (vc2_hsync),
         .vsync  (vc2_vsync),
         .de     (vc2_de),
@@ -310,11 +379,19 @@ module newport #(
 
     // The display ID selects a mode-table entry per pixel. It comes from
     // VC2's DID table walker - the per-window mechanism X uses to give every
-    // window its own pixel mode. It is delayed one pixel, exactly as the
-    // cursor is, so it pairs with the frame buffer word it describes.
+    // window its own pixel mode. It is delayed TWO pixels, exactly as the
+    // cursor is, so it pairs with the frame buffer word it describes: the
+    // frame buffer answers the cycle after the request and `slot_rgb`
+    // registers that answer, so the word for the address VC2 emits in cycle
+    // t is in `slot_rgb` in cycle t+2. See "THE PIXEL IS TWO CYCLES BEHIND"
+    // at the syncs below.
+    //
+    // Two CLOCKS, not two pixel enables - see "THE DELAYS ARE CLOCKS" at the
+    // syncs below.
+    logic [4:0] did_q1;
     always_ff @(posedge clk) begin
-        if (reset)       did_q <= 5'd0;
-        else if (ce_pix) did_q <= vc2_did;
+        if (reset) begin did_q1 <= 5'd0; did_q <= 5'd0; end
+        else       begin did_q1 <= vc2_did; did_q <= did_q1; end
     end
 
     np_xmap9 #(.REVISION(8'd3)) u_xmap0 (
@@ -379,9 +456,9 @@ module newport #(
     logic        req_x0;
 
     wire [31:0] slot_off = (((({21'b0, vc2_y}) << FB_STRIDE_LOG2) + {21'b0, vc2_x}) << 2);
-    assign fbr_req  = ce_pix && vc2_de;
+    assign fbr_req  = vc2_ce && vc2_de;
     assign fbr_addr = FB_BASE + slot_off;
-    assign fba_req  = ce_pix && vc2_de;
+    assign fba_req  = vc2_ce && vc2_de;
     assign fba_addr = FB_BASE + 32'h0080_0000 + slot_off;
 
     always_ff @(posedge clk) begin
@@ -391,7 +468,7 @@ module newport #(
             pix_valid <= 1'b0;
             req_x0    <= 1'b0;
         end else begin
-            if (ce_pix) req_x0 <= vc2_x[0];
+            if (vc2_ce) req_x0 <= vc2_x[0];
             if (fbr_ack) begin
                 slot_rgb  <= req_x0 ? fbr_rdata[55:32] : fbr_rdata[23:0];
                 pix_valid <= 1'b1;
@@ -402,14 +479,15 @@ module newport #(
     end
     assign pix_word = {8'h00, slot_aux, 8'h00, slot_rgb};
 
-    // THE CURSOR IS ONE STAGE AHEAD AND HAS TO BE HELD BACK. It is generated
+    // THE CURSOR IS TWO STAGES AHEAD AND HAS TO BE HELD BACK. It is generated
     // from VC2's own counters, which is where the frame buffer ADDRESS comes
-    // from; the word for that address arrives a cycle later. Combining them
-    // without this register puts the pointer one pixel left of everything it
-    // is drawn over, which is exactly the kind of thing that survives a glance.
+    // from; the word for that address is in `slot_rgb` two cycles later (the
+    // answer, then its register). With one stage here - as it was until
+    // build 44 - the pointer was drawn over the pixel one to its left.
+    logic [1:0] cursor_q1;
     always_ff @(posedge clk) begin
-        if (reset)        cursor_q <= 2'd0;
-        else if (ce_pix)  cursor_q <= vc2_cursor;
+        if (reset) begin cursor_q1 <= 2'd0; cursor_q <= 2'd0; end
+        else       begin cursor_q1 <= vc2_cursor; cursor_q <= cursor_q1; end
     end
 
     // The mode table entry, per IRIS's ModeEntry: [0] buffer select,
@@ -511,12 +589,18 @@ module newport #(
         direct_rgb_q <= direct_rgb_c;
     end
 
+    // The raw view is registered like CMAP's answer and the direct path, so
+    // all three arrive in the same cycle as the delayed display enable.
+    logic [23:0] raw_rgb_q;
+    always_ff @(posedge clk)
+        raw_rgb_q <= (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
+
     logic [23:0] pix_rgb;
     always_comb begin
         if (dbg_raw_index) begin
             // The index itself, as grey - and the cursor as white, so that the
             // debug view does not report a pointer-shaped hole.
-            pix_rgb = (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
+            pix_rgb = raw_rgb_q;
         end else if (direct_q) begin
             pix_rgb = direct_rgb_q;
         end else begin
@@ -529,30 +613,49 @@ module newport #(
     assign vid_g = de ? pix_rgb[15:8]  : 8'h00;
     assign vid_b = de ? pix_rgb[23:16] : 8'h00;
 
-    // TWO STAGES, NOT ONE, and the second one is CMAP's. The pixel is one read
-    // behind the timing generator - that is the frame buffer - and now one
-    // more behind it again, because the palette lookup had to become a
-    // registered read for the array to infer as M10K rather than as 393 Kbit
-    // of flip-flops (see np_cmap.sv). The syncs are delayed to match rather
-    // than the data being pushed forward, so the picture moves as a whole.
+    // THE PIXEL IS TWO CYCLES BEHIND THE ADDRESS AND ITS COLOUR THREE, so the
+    // syncs are delayed three stages. VC2 emits a column's address in cycle
+    // t; the frame buffer (sim_ram, and fb_linecache on the board - "one
+    // cycle after the request") answers in t+1; `slot_rgb` registers the
+    // answer, so the pixel is there in t+2; CMAP's lookup is a registered
+    // read (it had to be, for the array to infer as M10K rather than 393 Kbit
+    // of flip-flops - see np_cmap.sv), so the colour is there in t+3. The
+    // syncs are delayed to match rather than the data being pushed forward,
+    // so the picture moves as a whole.
     //
-    // Getting this wrong is a one-pixel horizontal shift of the entire image,
-    // which is exactly the kind of thing that survives a glance and fails
-    // tests/run-rex3.sh's replay.
-    logic hs_d, vs_d, de_d;
-    logic hs_q, vs_q, de_q;
+    // THIS WAS TWO STAGES UNTIL BUILD 44, which counted the answer and not
+    // its register, and it put every column one place to the right: the
+    // display enable's first pixel showed whatever the previous line had
+    // fetched last. Nothing saw it while the window opened on IRIX's black
+    // 8-pixel margin; cropping the window to the desktop's own columns put
+    // the previous line's last pixel at the left edge of every line, and
+    // tests/vidshift.py caught it on the boot gradient (docs/56).
+    //
+    // THE DELAYS ARE CLOCKS, AND THE PIXEL ENABLE GOES WITH THEM. The colour
+    // path above runs every clock, but VC2's pixel enable does not: it pauses
+    // at the timing generator's table-fetch stalls, which fall at run
+    // boundaries INSIDE the visible window (columns 251/252, 759/760,
+    // 1013/1014 and 1267/1268 on IRIX's 1280x1024 table). Delays counted in
+    // pixel enables slipped against the data at every stall, and a pair of
+    // pixels showed its right-hand neighbour - verilator/tb_newport.cpp's
+    // test 9, which samples the pins the way the MiSTer scaler does, on the
+    // pixel enable (sgiindy.sv: CE_PIXEL). So VC2's own enable, the syncs and
+    // the display enable travel together down a plain three-clock line, and
+    // the scaler samples each colour on the enable that belongs to it.
+    logic [3:0] vd1, vd2, vd3;      // {ce, hsync, vsync, de}
     always_ff @(posedge clk) begin
         if (reset) begin
-            hs_d <= 1'b0; vs_d <= 1'b0; de_d <= 1'b0;
-            hs_q <= 1'b0; vs_q <= 1'b0; de_q <= 1'b0;
-        end else if (ce_pix) begin
-            hs_d <= vc2_hsync; vs_d <= vc2_vsync; de_d <= vc2_de;
-            hs_q <= hs_d;      vs_q <= vs_d;      de_q <= de_d;
+            vd1 <= 4'b0; vd2 <= 4'b0; vd3 <= 4'b0;
+        end else begin
+            vd1 <= {vc2_ce, vc2_hsync, vc2_vsync, vc2_de};
+            vd2 <= vd1;
+            vd3 <= vd2;
         end
     end
-    assign hsync = hs_q;
-    assign vsync = vs_q;
-    assign de    = de_q;
+    assign ce_pix = vd3[3];
+    assign hsync  = vd3[2];
+    assign vsync  = vd3[1];
+    assign de     = vd3[0];
 
     assign gfx_irq    = vc2_vint;
     assign vblank_irq = r3_vrint;

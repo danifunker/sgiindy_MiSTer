@@ -127,7 +127,7 @@ class Cmd:
 def modelled(c):
     """Is this a command the model reproduces exactly?"""
     return (c.opcode == 2                      # DRAW
-            and c.adrmode == 1                 # BLOCK
+            and c.adrmode == 1                 # BLOCK, not SPAN
             and c.planes == 1                  # the RGB drawing planes
             and c.logicop == 3                 # SRC
             and c.drawdepth in (1, 3)          # 8-bit colour index, or 24-bit
@@ -169,10 +169,23 @@ def walk(c):
 
     # A malformed command must not spin forever; the engine cannot either,
     # because its counters are finite, but the model's are not.
+    #
+    # THE STEP COMES FIRST AND THE END TEST LOOKS AT WHERE IT LANDED, and the
+    # row ends whatever STOPONX says - that flag decides only whether the
+    # primitive carries on afterwards. Both are the engine's order since
+    # build 43, and both are IRIS's; the model used to test the pre-step
+    # position and to fold STOPONX into the row end, which put SKIPLAST on the
+    # wrong pixel and left a one-pixel-wide block in step mode walking
+    # sideways for ever.
     for _ in range(FB_STRIDE * FB_LINES + 16):
-        x_at_end = cx <= c.x1 if xdec else cx >= c.x1
-        y_at_end = cy <= c.y1 if ydec else cy >= c.y1
-        row_done = c.stoponx and (x_at_end or (span_clamped and span_left <= 1))
+        nx = cx - 1 if xdec else cx + 1
+        ny = cy - y_incr if ydec else cy + y_incr
+        x_at_end = nx < c.x1 if xdec else nx > c.x1
+        y_at_end = ny < c.y1 if ydec else ny > c.y1
+        row_done = x_at_end
+        # LENGTH32 is a pause, not a row end: it stops the primitive where it
+        # stands for the next GO rather than wrapping x and advancing y.
+        len32_stop = span_clamped and span_left <= 1 and not row_done
 
         dst_x = cx + win_x + (move_x if move else 0) - COORD_BIAS
         dst_y = (cy + win_y + (move_y if move else 0)
@@ -195,13 +208,19 @@ def walk(c):
         if row_done:
             cx = cx_save
             zbit = 31
-            cy = cy - y_incr if ydec else cy + y_incr
+            cy = ny
             span_left = 32
+            # SKIPFIRST is per row in a block: the flag names the first pixel
+            # of each row, not the first of the whole primitive.
+            first = True
             if not c.stopony or y_at_end:
                 return
+        elif len32_stop:
+            cx = nx
+            return
         else:
             zbit = 31 if zbit == 0 else zbit - 1
-            cx = cx - 1 if xdec else cx + 1
+            cx = nx
             if not c.stoponx:
                 return
 

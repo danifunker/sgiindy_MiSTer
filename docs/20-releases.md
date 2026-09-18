@@ -31,6 +31,87 @@ See [19-hardware-bringup.md](19-hardware-bringup.md).
 
 ---
 
+## SGIIndy_20260918 — GL draws: the rest of REX3, GL's register interface, and a display that shows every column
+
+`releases/SGIIndy_20260918.rbf`, md5 `889b69be4ee3b2248a61162b4dc6c078`
+(build 44, SEED=2; 35,886 ALMs, 41,331 registers, 485 / 553 M10K, 59 / 112
+DSP, core clock setup slack +0.979 ns, HDMI PLL +0.714 ns, no negative slack in
+any check). Same `releases/boot.rom`. Built and tested on the board
+2026-09-18. Details in [55-rex3-rendering.md](55-rex3-rendering.md) and
+[56-rex3-source-audit.md](56-rex3-source-audit.md).
+
+### What changed
+
+* **GL draws.** IRIX's GL demos animate on the board: `bongo`'s shaded
+  octahedra, and `ep` (ElectroPaint) both full screen and in its windowed
+  modes - fat outlines, smoothly shaded ribbons, filled quads. Until this
+  build a GL window showed only whatever was already in the planes it was
+  given. Four defects stood between GL and the screen, and each one alone was
+  enough to blank it (docs/56):
+  * GL writes REX3's registers in pairs with 64-bit stores (XSTARTF+YSTARTF,
+    XSTARTI+XENDF1, ...), and the core kept the first register of each pair
+    and dropped the second - often with the GO. A doubleword store is now two
+    register writes with one GO after both, which is how the chip's graphics
+    FIFO takes it.
+  * GL's float coordinates (XSTARTF to YENDF) kept four bits of the float's
+    exponent, which put every GL coordinate far off the screen. They are now
+    decoded the way the chip does it, and 0x14C is XENDF1 - where every IRIS GL
+    polygon span ends - rather than an integer XEND.
+  * A write to SETUP only stored the value. It now runs the line and span
+    setup without drawing, which GL's bitmaps, text and depth lines rely on.
+  * (Not GL-blocking, found in the same audit.) A register read now waits
+    for the writes and drawing before it, while STATUS, USER_STATUS and
+    CONFIG still answer at once - X's GetImage and GL read-backs got stale
+    words. An image in a host buffer at 4 mod 8 bytes is no longer dropped by
+    the VDMA engine.
+* **The rasteriser does the rest of REX3's command set** (build 43, never
+  released on its own; docs/55): the colour DDAs for Gouraud shading with both
+  clamp rules, the Bayer dither, alpha blending and the alpha test, the line
+  stipple, all three line address modes, and SPAN as distinct from BLOCK - what
+  X's line savers (`xlock -mode qix`) and GL's shading are drawn with.
+* **The display shows every column.** The display enable was VC2's
+  1,318-pixel pipe window rather than its 1,296-pixel visible one, and the
+  MiSTer scaler squeezed that into 1,280 by dropping a column every ~34 pixels -
+  the "damaged glyphs" in the Console. The window is now the desktop's own 1,280
+  columns (frame buffer columns 8 to 1287, where IRIX draws), and the pixel,
+  cursor and window-ID pipelines are aligned in clocks rather than pixel
+  enables, which stall inside the line.
+
+### Tested
+
+In the simulator: `newporttest` 27 / 27 (newport.sv driven with the CPU's real
+32- and 64-bit stores, reads behind a running primitive, and VDMA beats at every
+start byte); tb_rex3 at three memory latencies; tb_rex3draw - np_rex3 against a
+transcription of IRIS's rasteriser, 15 runs of 20,426 random cases plus 426
+shapes recorded from a live desktop, no difference; tb_vc2; `run-newport` (the
+PROM's frame out of the pins, 1280x1065, row for row) and `run-rex3` (3,928 PROM
+commands, every pixel checked).
+
+**Replayed against IRIS.** A REX3 bus trace IRIS recorded of IRIX 5.3 booting
+to X and running xlock, ep, bongo and buttonfly - 43.4 million register
+accesses - replayed through newport.sv from power-on
+(`verilator/tb_newport_replay.cpp`): both plane sets match IRIS's pixel for
+pixel at every dump checked so far - the X login screen, xlock running and
+gone, and ep 13 seconds in.
+
+On the board, this bitstream: X up 90 s after launch on a pristine image;
+bongo and ep draw and animate; xlock qix draws its full-screen line fans; the
+desktop shows its edges whole. The cpu-tests suite, diskcheck and perfprobe
+were still running on the board when this entry was written.
+
+### Known limits
+
+* The pixel-path fidelity items of docs/56's phase 2 are not in this build.
+  BLENDALPHA flattens the source factor of all four channels, so GL's
+  standard alpha blend comes out additive. GL colour masks and X plane masks
+  on RGB visuals write the wrong planes. With the dither off, colours are
+  truncated instead of rounded, which is one step off. SWAPENDIAN (OpenGL
+  textures) is ignored. None of the demos above uses these; buttonfly draws
+  with the dither off.
+* The display refreshes at ~27 Hz, and GL animation is slow.
+
+---
+
 ## SGIIndy_20260917 — the disk driver's busy-wait, loads behind loads, and 7,000 ALMs back
 
 `releases/SGIIndy_20260917.rbf`, md5 `1dc28a9667ae14c3e3b39dd07a4cbb7f`

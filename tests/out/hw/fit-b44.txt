@@ -1,0 +1,50 @@
+Build 44 fit (SEED=2), 2026-09-18
+rbf: output_files/sgiindy-b44-seed2.rbf md5 889b69be4ee3b2248a61162b4dc6c078, 4436708 bytes
+RTL: add-rex b00d154 (docs/56 phase 1: display window, GL register interface, host read path, VDMA start byte)
+
+Fitter Status : Successful - Fri Sep 18 05:53:17 2026
+Quartus Prime Version : 17.0.2 Build 602 07/19/2017 SJ Lite Edition
+Revision Name : sgiindy
+Top-level Entity Name : sys_top
+Family : Cyclone V
+Device : 5CSEBA6U23I7
+Timing Models : Final
+Logic utilization (in ALMs) : 35,886 / 41,910 ( 86 % )
+Total registers : 41331
+Total pins : 145 / 314 ( 46 % )
+Total virtual pins : 0
+Total block memory bits : 3,804,923 / 5,662,720 ( 67 % )
+Total RAM Blocks : 485 / 553 ( 88 % )
+Total DSP Blocks : 59 / 112 ( 53 % )
+Total HSSI RX PCSs : 0
+Total HSSI PMA RX Deserializers : 0
+Total HSSI TX PCSs : 0
+Total HSSI PMA TX Serializers : 0
+Total PLLs : 3 / 6 ( 50 % )
+Total DLLs : 0 / 4 ( 0 % )
+
+Setup slack by clock (quartus_sta):
+    Type  : Setup 'pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk'
+    Slack : 0.714
+    TNS   : 0.000
+    Type  : Setup 'emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk'
+    Slack : 0.979
+    TNS   : 0.000
+    Type  : Setup 'sysmem|fpga_interfaces|clocks_resets|h2f_user0_clk'
+    Slack : 3.939
+    TNS   : 0.000
+    Type  : Setup 'spi_sck'
+    Slack : 6.183
+    TNS   : 0.000
+    Type  : Setup 'FPGA_CLK1_50'
+    Slack : 7.728
+    TNS   : 0.000
+    Type  : Setup 'FPGA_CLK2_50'
+    Slack : 12.187
+    TNS   : 0.000
+    Type  : Setup 'pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk'
+    Slack : 21.889
+    TNS   : 0.000
+
+Hold, recovery, removal, minimum pulse width: no negative slack (sgiindy-b44.sta.rpt summaries)
+Build 43b for comparison: 35,481 ALMs, core setup slack +0.506 ns

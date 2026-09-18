@@ -31,6 +31,7 @@
 
 // Active-low channel positions, from vc2.pdf's pin list.
 static const int A_DSPLY_EN = 2;   // state A bit 2
+static const int A_VIS_LN   = 0;   // state A bit 0 - VIS_LN_VC_N, the visible window
 static const int C_VSYNC    = 1;   // state C bit 1
 static const int C_HSYNC    = 2;   // state C bit 2
 
@@ -46,6 +47,14 @@ static const int H_FRONT = 12, H_SYNC = 57, H_BACK = 40;   // 2-pixel units
 static const int H_VIS_RUNS = 5;                           // visible span, in runs
 static const int H_VIS_DUR  = 127;                         // duration of each
 static const int H_VIS = H_VIS_RUNS * H_VIS_DUR;
+// DSPLY_EN RUNS ON PAST THE PICTURE, as it does in every real table: RO1's
+// pipeline enable stays asserted to flush the pipe after VIS_LN, the visible
+// window, has ended - 22 pixels on IRIX's 1280x1024 table. The display must
+// follow VIS_LN (docs/56 3.6: following DSPLY_EN made the MiSTer scaler drop
+// a column every 34 pixels), so this table gives the two different ends and
+// the visible width checked is VIS_LN's.
+static const int H_TAIL = 11;                              // DSPLY_EN only
+static const int H_VIS_LN = H_VIS - H_TAIL;
 static const int V_FRONT = 2, V_SYNC = 3, V_BACK = 36, V_VIS = 300; // lines
 static const int H_TOTAL = H_FRONT + H_SYNC + H_BACK + H_VIS;
 static const int V_TOTAL = V_FRONT + V_SYNC + V_BACK + V_VIS;
@@ -121,7 +130,8 @@ int main(int argc, char **argv)
 
     // Every channel high (inactive) except where a run names one.
     const int A_IDLE = 0x7F, B_IDLE = 0x7F, C_IDLE = 0x7F;
-    const int A_VIS  = A_IDLE & ~(1 << A_DSPLY_EN);
+    const int A_VIS  = A_IDLE & ~(1 << A_DSPLY_EN) & ~(1 << A_VIS_LN);
+    const int A_TAIL = A_IDLE & ~(1 << A_DSPLY_EN);
     const int C_HS   = C_IDLE & ~(1 << C_HSYNC);
     const int C_VS   = C_IDLE & ~(1 << C_VSYNC);
     const int C_HSVS = C_HS   & ~(1 << C_VSYNC);
@@ -158,8 +168,13 @@ int main(int argc, char **argv)
     };
     for (int i = 0; i < H_VIS_RUNS; i++) {
         bool last = (i == H_VIS_RUNS - 1);
-        vis_line.push_back(run_w0(H_VIS_DUR, A_VIS, last, last));
-        if (last) vis_line.push_back(run_w1(B_IDLE, C_IDLE, true));
+        if (!last) {
+            vis_line.push_back(run_w0(H_VIS_DUR, A_VIS, false, false));
+        } else {
+            vis_line.push_back(run_w0(H_VIS_DUR - H_TAIL, A_VIS, false, false));
+            vis_line.push_back(run_w0(H_TAIL, A_TAIL, true, true));
+            vis_line.push_back(run_w1(B_IDLE, C_IDLE, true));
+        }
     }
 
     std::vector<uint16_t> front = blank_line(C_HS,   C_IDLE);
@@ -331,7 +346,7 @@ int main(int argc, char **argv)
     }
 
     int want_lines  = V_TOTAL;
-    int want_w      = H_VIS * 2;
+    int want_w      = H_VIS_LN * 2;
     int want_hswide = H_SYNC * 2;
     printf("vc2: %d frames, %d lines per frame, %d visible pixels per line, "
            "hsync %d pixels\n", frames, seen_h, seen_w, hs_width_seen);

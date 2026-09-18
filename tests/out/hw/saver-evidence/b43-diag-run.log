@@ -1,0 +1,120 @@
+[20:28:24] restoring /media/fat/games/SGIIndy/SGIIndy53.img from /media/fat/games/SGIIndy/SGIIndy53-pristine.img (in place; see perfprobe.sh)
+[20:33:01] launching 0abf9d13c58d88e4447c9136a79170d3 (/tmp/SGIIndy.rbf)
+[20:33:20] +11s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 161 marker  0.2% 
+[20:33:31] +22s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices 168 marker  0.2% 
+[20:33:42] +33s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:33:54] +45s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:34:05] +56s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:34:16] +67s BOOTING    panicstr=0x00000000 panel9 12.3% idx16  0.0% indices 168 marker  0.1% 
+[20:34:27] +78s UNKNOWN    panicstr=0x00000000 panel9  0.0% idx16  0.0% indices   1 marker  0.0% 
+[20:34:38] +89s X-UP       panicstr=0x00000000 panel9  0.0% idx16 22.2% indices 166 marker  0.0% 
+[20:34:38] X-UP at +89s
+[20:34:54] logging in as root
+[20:36:39] quitting Software Manager, pointer into the Console
+FRESH tests/out/hw/saver-b43/00-desktop.png <- SGIIndy/20260917_203750-screen.png
+[20:37:52] saver xclock (33s): /usr/bin/X11/xclock -update 1 -geometry 300x300+420+140
+FRESH tests/out/hw/saver-b43/xclock-1.png <- SGIIndy/20260917_203823-screen.png
+FRESH tests/out/hw/saver-b43/xclock-2.png <- SGIIndy/20260917_203836-screen.png
+FRESH tests/out/hw/saver-b43/xclock-3.png <- SGIIndy/20260917_203849-screen.png
+[20:39:11] saver xdpy (12s): /usr/bin/X11/xdpyinfo
+FRESH tests/out/hw/saver-b43/xdpy-1.png <- SGIIndy/20260917_203930-screen.png
+FRESH tests/out/hw/saver-b43/xdpy-2.png <- SGIIndy/20260917_203936-screen.png
+FRESH tests/out/hw/saver-b43/xdpy-3.png <- SGIIndy/20260917_203942-screen.png
+[20:40:03] saver gfxinf (12s): /usr/gfx/gfxinfo
+FRESH tests/out/hw/saver-b43/gfxinf-1.png <- SGIIndy/20260917_204022-screen.png
+FRESH tests/out/hw/saver-b43/gfxinf-2.png <- SGIIndy/20260917_204028-screen.png
+FRESH tests/out/hw/saver-b43/gfxinf-3.png <- SGIIndy/20260917_204033-screen.png
+[20:40:55] saver xlsvis (12s): /usr/bin/X11/xdpyinfo -queryExtensions
+FRESH tests/out/hw/saver-b43/xlsvis-1.png <- SGIIndy/20260917_204117-screen.png
+FRESH tests/out/hw/saver-b43/xlsvis-2.png <- SGIIndy/20260917_204123-screen.png
+FRESH tests/out/hw/saver-b43/xlsvis-3.png <- SGIIndy/20260917_204129-screen.png
+[20:41:50] saver qixw (33s): /usr/bin/X11/xlock -mode qix -nolock
+FRESH tests/out/hw/saver-b43/qixw-1.png <- SGIIndy/20260917_204218-screen.png
+FRESH tests/out/hw/saver-b43/qixw-2.png <- SGIIndy/20260917_204231-screen.png
+FRESH tests/out/hw/saver-b43/qixw-3.png <- SGIIndy/20260917_204244-screen.png
+[20:43:06] saver qix (33s): /usr/bin/X11/xlock -mode qix -besaver
+FRESH tests/out/hw/saver-b43/qix-1.png <- SGIIndy/20260917_204334-screen.png
+FRESH tests/out/hw/saver-b43/qix-2.png <- SGIIndy/20260917_204347-screen.png
+FRESH tests/out/hw/saver-b43/qix-3.png <- SGIIndy/20260917_204400-screen.png
+[20:44:22] saver swarm (33s): /usr/bin/X11/xlock -mode swarm -besaver
+FRESH tests/out/hw/saver-b43/swarm-1.png <- SGIIndy/20260917_204451-screen.png
+FRESH tests/out/hw/saver-b43/swarm-2.png <- SGIIndy/20260917_204504-screen.png
+FRESH tests/out/hw/saver-b43/swarm-3.png <- SGIIndy/20260917_204517-screen.png
+[20:45:39] saver rotor (33s): /usr/bin/X11/xlock -mode rotor -besaver
+FRESH tests/out/hw/saver-b43/rotor-1.png <- SGIIndy/20260917_204607-screen.png
+FRESH tests/out/hw/saver-b43/rotor-2.png <- SGIIndy/20260917_204620-screen.png
+FRESH tests/out/hw/saver-b43/rotor-3.png <- SGIIndy/20260917_204633-screen.png
+[20:46:55] saver bongo (33s): /usr/demos/bin/bongo
+FRESH tests/out/hw/saver-b43/bongo-1.png <- SGIIndy/20260917_204721-screen.png
+FRESH tests/out/hw/saver-b43/bongo-2.png <- SGIIndy/20260917_204734-screen.png
+FRESH tests/out/hw/saver-b43/bongo-3.png <- SGIIndy/20260917_204747-screen.png
+[20:48:09] saver ep (33s): /usr/demos/bin/ep
+FRESH tests/out/hw/saver-b43/ep-1.png <- SGIIndy/20260917_204834-screen.png
+FRESH tests/out/hw/saver-b43/ep-2.png <- SGIIndy/20260917_204847-screen.png
+FRESH tests/out/hw/saver-b43/ep-3.png <- SGIIndy/20260917_204900-screen.png
+[20:49:22] saver butter (33s): /usr/demos/bin/buttonfly
+FRESH tests/out/hw/saver-b43/butter-1.png <- SGIIndy/20260917_204949-screen.png
+FRESH tests/out/hw/saver-b43/butter-2.png <- SGIIndy/20260917_205002-screen.png
+FRESH tests/out/hw/saver-b43/butter-3.png <- SGIIndy/20260917_205015-screen.png
+[20:50:37] saver havep (33s): /usr/sbin/haven -n /usr/demos/bin/ep -S
+FRESH tests/out/hw/saver-b43/havep-1.png <- SGIIndy/20260917_205105-screen.png
+FRESH tests/out/hw/saver-b43/havep-2.png <- SGIIndy/20260917_205119-screen.png
+FRESH tests/out/hw/saver-b43/havep-3.png <- SGIIndy/20260917_205132-screen.png
+[20:51:54] halting
+[20:53:11] what each client printed:
+---- s-bongo.log ----
+---- s-ep.log ----
+---- s-gfxinf.log ----
+Graphics board 0 is "NG1" graphics.
+	Managed (":0.0") 1280x1024 
+	24 bitplanes, NG1 revision 4, REX3 revision B, VC2 revision A
+ 	MC revision C, xmap9 revision D, cmap revision D, bt445 revision 7
+	Display 1280x1024 @ 60Hz, monitor id 10
+---- s-qix.log ----
+---- s-qixw.log ----
+---- s-rotor.log ----
+---- s-swarm.log ----
+---- s-xclock.log ----
+---- s-xdpy.log ----
+name of display:    :0.0
+version number:    11.0
+vendor string:    Silicon Graphics
+vendor release number:    5000
+maximum request size:  0 bytes
+motion buffer size:  0
+bitmap unit, bit order, padding:    32, MSBFirst, 32
+image byte order:    MSBFirst
+number of supported pixmap formats:    6
+supported pixmap formats:
+    depth 1, bits_per_pixel 1, scanline_pad 32
+    depth 2, bits_per_pixel 8, scanline_pad 32
+    depth 4, bits_per_pixel 8, scanline_pad 32
+    depth 8, bits_per_pixel 8, scanline_pad 32
+    depth 12, bits_per_pixel 16, scanline_pad 32
+    depth 24, bits_per_pixel 32, scanline_pad 32
+keycode range:    minimum 15, maximum 141
+focus:  window 0x3000004, revert to PointerRoot
+number of extensions:    19
+    Adobe-DPS-Extension
+---- s-xlsvis.log ----
+name of display:    :0.0
+version number:    11.0
+vendor string:    Silicon Graphics
+vendor release number:    5000
+maximum request size:  0 bytes
+motion buffer size:  0
+bitmap unit, bit order, padding:    32, MSBFirst, 32
+image byte order:    MSBFirst
+number of supported pixmap formats:    6
+supported pixmap formats:
+    depth 1, bits_per_pixel 1, scanline_pad 32
+    depth 2, bits_per_pixel 8, scanline_pad 32
+    depth 4, bits_per_pixel 8, scanline_pad 32
+    depth 8, bits_per_pixel 8, scanline_pad 32
+    depth 12, bits_per_pixel 16, scanline_pad 32
+    depth 24, bits_per_pixel 32, scanline_pad 32
+keycode range:    minimum 15, maximum 141
+focus:  window 0x3000004, revert to PointerRoot
+number of extensions:    19
+    Adobe-DPS-Extension  (opcode: 128, base event: 64, base error: 128)
+[20:53:18] done -> tests/out/hw/saver-b43

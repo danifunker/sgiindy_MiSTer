@@ -436,7 +436,61 @@ linecachetest:
 rex3test:
 	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3 --top-module np_rex3 	   -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) 	   --x-assign fast --x-initial fast --noassert 	   -o Vnp_rex3 $(RTL)/newport/np_rex3.sv tb_rex3.cpp
 
-.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest rex3test all clean
+# --- the rasteriser against IRIS's rasteriser -------------------------------
+# tb_rex3.cpp asks whether the writes reach memory; this asks whether they are
+# the RIGHT writes, against a transcription of iris/src/rex3_generic.rs. It
+# runs every non-host draw shape in IRIS's own corpus of what a real IRIX
+# desktop asked REX3 for, then a field-level random walk over the modes.
+# Regenerate rex3_corpus.h from a newer IRIS with:
+#   python3 ../tools/rex3_corpus.py --iris ../../iris -o rex3_corpus.h
+#   make rex3draw
+#   REX3D_CASES=20000 ./obj_dir_rex3draw/Vnp_rex3draw
+#   REX3D_SEED=7 REX3D_VERBOSE=1 ./obj_dir_rex3draw/Vnp_rex3draw
+rex3draw:
+	$V -cc --exe --build -j 0 --Mdir ./obj_dir_rex3draw --top-module np_rex3 -O3 -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnp_rex3draw $(RTL)/newport/np_rex3.sv tb_rex3draw.cpp
+	./obj_dir_rex3draw/Vnp_rex3draw
+
+# --- Newport at its own bus: the CPU's and the MC's transactions (docs/56) ---
+# tb_rex3 and tb_rex3draw drive np_rex3's 32-bit register port, which sits
+# downstream of newport.sv's doubleword handling - where docs/56 3.1 lives.
+# These drive newport.sv itself (REX3, VC2, both XMAP9s, both CMAPs, the
+# BT445) with the CPU's real 32- and 64-bit loads and stores (r4300_bus.sv's
+# byte lanes), GO aliases, reads behind a running primitive, and VDMA beats
+# with the start byte in the address, against a 16 MB frame buffer model.
+# verilator/tb_newport.h has the bus contract; tb_newport.cpp the tests.
+#   make newporttest       the directed tests. Several are expected to fail
+#                          before build 44 and say so; the exit status counts
+#                          only the others unless NEWPORT_STRICT=1
+#   ./obj_dir_newport/Vnewport_test --fb-lat 20 --strict 2 5
+#   make newportreplay     the RX3TRACE replay (tb_newport_replay.cpp), then its
+#                          self-test on a synthetic trace from tools/rx3trace.py
+#   ./obj_dir_npreplay/Vnewport_replay TRACE -o OUT --iris-rgb 'IRIS/rgb_%04u.bin' --iris-aux 'IRIS/aux_%04u.bin'
+# -O3 builds for this top: the Verilator 5.020 internal fault the whole-machine
+# targets work around with WM_OPT is not hit by newport.sv on its own.
+# --verilate-jobs 1: once in some forty builds 5.020 died at exit, after a good
+# build, with "attempted to destroy locked Thread Pool"; without verilation
+# worker threads there is nothing left to race, and newport verilates in seconds.
+NEWPORT_V = $(RTL)/newport/newport.sv $(RTL)/newport/np_rex3.sv $(RTL)/newport/np_vc2.sv $(RTL)/newport/np_xmap9.sv $(RTL)/newport/np_cmap.sv $(RTL)/newport/np_bt445.sv
+NEWPORT_OPT = -O3
+NPREPLAY_SYNTH = ./obj_dir_npreplay/synth
+NPREPLAY_IRIS = --iris-rgb $(NPREPLAY_SYNTH)/iris_rgb_%04u.bin --iris-aux $(NPREPLAY_SYNTH)/iris_aux_%04u.bin
+
+newporttest:
+	$V -cc --exe --build --build-jobs 0 --verilate-jobs 1 --Mdir ./obj_dir_newport --top-module newport $(NEWPORT_OPT) -CFLAGS "-O2 -std=c++17 -I.." $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnewport_test $(NEWPORT_V) tb_newport.cpp
+	./obj_dir_newport/Vnewport_test
+
+# The self-test: the synthetic trace as the RTL is (marker 2 differs - the
+# doubleword store of docs/56 3.1), then with the bench splitting doublewords,
+# where every marker must match IRIS's expected dumps.
+newportreplay:
+	$V -cc --exe --build --build-jobs 0 --verilate-jobs 1 --Mdir ./obj_dir_npreplay --top-module newport $(NEWPORT_OPT) -CFLAGS "-O2 -std=c++17 -I.." -LDFLAGS "-lz" $(CPUTEST_W) --x-assign fast --x-initial fast --noassert -o Vnewport_replay $(NEWPORT_V) tb_newport_replay.cpp
+	python3 ../tools/rx3trace.py synth $(NPREPLAY_SYNTH)
+	./obj_dir_npreplay/Vnewport_replay $(NPREPLAY_SYNTH)/synth.rx3 -o $(NPREPLAY_SYNTH)/asis $(NPREPLAY_IRIS)
+	./obj_dir_npreplay/Vnewport_replay $(NPREPLAY_SYNTH)/synth.rx3 -o $(NPREPLAY_SYNTH)/split64 --split64 --fail-on-diff $(NPREPLAY_IRIS)
+
+.PHONY: newporttest newportreplay
+
+.PHONY: cputest gui vc2test cputest-rex3-debug cputest-dcb-debug ddr3test linecachetest rex3test rex3draw all clean
 
 # --- the same harness with the DMA engine's per-cycle state trace ----------
 # hpc3_scsi_dma.sv's `ifdef DMA_DEBUG block is silent and free in the normal

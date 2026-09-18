@@ -157,7 +157,9 @@ static void wr(uint32_t off, uint32_t val)
 // Register offsets, from np_rex3.sv.
 enum {
     R_DRAWMODE1 = 0x0000, R_DRAWMODE0 = 0x0004, R_ZPATTERN = 0x0014,
-    R_XSTARTI   = 0x0148, R_XENDI     = 0x014C,
+    R_SETUP     = 0x0030, R_XSTART    = 0x0100, R_BRESOCTINC1 = 0x0120,
+    R_XSTARTI   = 0x0148, R_XENDF1    = 0x014C,
+    R_HOSTRW0   = 0x0230, R_STATUS    = 0x1338,
     R_XYSTARTI  = 0x0150, R_XYENDI    = 0x0154,
     R_WRMASK    = 0x0220, R_COLORI    = 0x0224,
     R_TOPSCAN   = 0x1320, R_XYWIN     = 0x1324, R_CLIPMODE = 0x1328,
@@ -193,7 +195,13 @@ int main(int argc, char **argv)
     // clipping drops it and the engine draws nothing at all - which is what
     // the first run of this test measured.
     wr(R_XYWIN,     0x10001000);
-    wr(R_CLIPMODE,  0x00000000);       // clipping off
+    // CLIPPING OFF IS 0x1E00, NOT ZERO. The scissor masks are off at zero,
+    // but CIDMATCH is a mask of PERMITTED window IDs and zero permits none
+    // of the four - so a clipmode of zero clips every pixel away. 0xF in
+    // that field is what switches the window-ID clip off, and what X
+    // writes. This said 0 until build 43, when the engine started reading
+    // the field the way the part does.
+    wr(R_CLIPMODE,  0x00001E00);       // scissors off, every window ID allowed
     // fb_row is (y + win_y - 4096 - topscan - 1) mod FB_LINES, so 1023 makes
     // it the identity: y - 1024, and 1024 is the number of lines.
     wr(R_TOPSCAN,   0x000003FF);
@@ -348,14 +356,132 @@ int main(int argc, char **argv)
                    (unsigned long long)got, (unsigned long long)wantv);
         check("a DMA read beat returned the pixels just drawn",
               rd_ok && got == wantv);
+
+        //====================================================================
+        //  Build 44: the host read path, SETUP, the VDMA start byte
+        //  (docs/56 4.1, 4.4). A register read here is what the CPU does -
+        //  one `sel` cycle, then wait for the acknowledgement.
+        //====================================================================
+        auto rd = [&](uint32_t off, uint32_t &val, int &waited) -> bool {
+            dut->sel = 1; dut->we = 0; dut->off = off; dut->be = 0xF;
+            tick();
+            dut->sel = 0;
+            for (waited = 0; waited < 200000; waited++) {
+                if (dut->ack) { val = dut->rdata; tick(); return true; }
+                tick();
+            }
+            return false;
+        };
+        auto idle = [&]() { for (int i = 0; i < 200000 && dut->gfx_busy; i++) tick(); };
+        uint32_t v = 0; int w = 0;
+        printf("\nBuild 44: host reads, SETUP, VDMA start byte\n");
+
+        // A PACKED READ'S LAST WORD IS LEFT-JUSTIFIED. Three 8bpp pixels in a
+        // four-field word: the first in bits 31:24, the third in 15:8, the
+        // empty field zero - "the leftmost field is the first one to be used"
+        // (§3.10). X keeps the top bytes of a row's last word.
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 8) | (1u << 7) | (1u << 3));
+        wr(R_DRAWMODE0, 1 | (0u << 2) | (1u << 8));            // READ, span
+        wr(R_XYSTARTI,  ((uint32_t)DX0 << 16) | (uint32_t)DY0);
+        wr(R_XYENDI,    ((uint32_t)(DX0 + 2) << 16) | (uint32_t)DY0);
+        rd(R_HOSTRW0 | GO, v, w);                              // prime: GO
+        bool r1 = rd(R_HOSTRW0, v, w);                         // the packed word
+        uint32_t want = ((uint32_t)px_val(DX0, DY0) << 24)
+                      | ((uint32_t)px_val(DX0 + 1, DY0) << 16)
+                      | ((uint32_t)px_val(DX0 + 2, DY0) << 8);
+        if (v != want) printf("  packed partial word %08x, expected %08x\n", v, want);
+        check("a row's partial last word is left-justified", r1 && v == want);
+
+        // AN UNPACKED READ PUTS ITS ONE PIXEL IN THE LEFTMOST FIELD, and the
+        // back-to-back GO reads each return the pixel the previous GO read -
+        // the X server's GetImage loop.
+        idle();
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 8) | (1u << 3));
+        wr(R_DRAWMODE0, 1 | (0u << 2) | (1u << 8));
+        wr(R_XYSTARTI,  ((uint32_t)(DX0 + 5) << 16) | (uint32_t)DY0);
+        wr(R_XYENDI,    ((uint32_t)(DX0 + 9) << 16) | (uint32_t)DY0);
+        rd(R_HOSTRW0 | GO, v, w);                              // prime
+        bool ok_loop = true;
+        for (int j = 0; j < 4; j++) {
+            bool last = (j == 3);
+            bool r = rd(last ? R_HOSTRW0 : (R_HOSTRW0 | GO), v, w);
+            uint32_t wv = (uint32_t)px_val(DX0 + 5 + j, DY0) << 24;
+            if (!r || v != wv) {
+                printf("  unpacked read %d: %08x, expected %08x (waited %d)\n", j, v, wv, w);
+                ok_loop = false;
+            }
+        }
+        check("unpacked reads return each pixel in the leftmost field, in order", ok_loop);
+
+        // A READ WAITS FOR THE PRIMITIVE BEFORE IT; STATUS DOES NOT. A
+        // read-modify-write fill (a write mask that splits a byte), then at
+        // once a STATUS read - answered immediately, busy - and an XSTART
+        // read - answered only after the engine is idle.
+        idle();
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 3));
+        wr(R_WRMASK,    0x0F);
+        wr(R_COLORI,    0x5A);
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));   // DRAW, block
+        wr(R_XYSTARTI,  (200u << 16) | 200u);
+        wr(R_XYENDI | GO, (263u << 16) | 215u);                    // 64 x 16
+        bool rs = rd(R_STATUS, v, w);
+        check("STATUS answers at once while the engine runs, and says busy",
+              rs && w == 0 && (v & 8));
+        bool rx = rd(R_XSTART, v, w);
+        bool idle_at_ack = !dut->gfx_busy;
+        check("a register read waits for the running primitive", rx && w > 0 && idle_at_ack);
+        wr(R_WRMASK, 0x00FFFFFF);
+
+        // SETUP DERIVES THE OCTANT AND DRAWS NOTHING. A block from (300,300)
+        // to (290,290) runs right to left and bottom to top; BRESOCTINC1 is
+        // written with octant 0 first, DRAWMODE0 has no DOSETUP, and SETUP
+        // must still leave XDEC and YDEC set - without a single write.
+        idle();
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));   // no DOSETUP
+        wr(R_BRESOCTINC1, 0);
+        wr(R_XYSTARTI,  (300u << 16) | 300u);
+        wr(R_XYENDI,    (290u << 16) | 290u);
+        uint64_t before = accepted;
+        wr(R_SETUP, 0);
+        idle();
+        bool rb = rd(R_BRESOCTINC1, v, w);
+        check("SETUP derived the octant (x and y decreasing)", rb && ((v >> 24) & 3) == 3);
+        check("SETUP drew nothing", accepted == before);
+        // Put the octant back: every block below walks without DOSETUP and
+        // relies on octant 0, as the tests above this one did.
+        wr(R_BRESOCTINC1, 0);
+
+        // THE VDMA START BYTE IS NOT PART OF THE REGISTER. Ng1PixelDma puts a
+        // buffer's (address & 7) in the GIO address's low bits; a beat at
+        // 0xA34 is HOSTRW0|GO for a buffer at 4 mod 8, and must draw.
+        idle();
+        wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 10) | (1u << 8)
+                        | (1u << 7) | (1u << 3) | 0u);
+        wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 6) | (1u << 8) | (1u << 9));
+        wr(R_XYSTARTI,  ((uint32_t)DX0 << 16) | (uint32_t)(DY0 + 20));
+        wr(R_XYENDI,    ((uint32_t)(DX0 + 7) << 16) | (uint32_t)(DY0 + 20));
+        dut->nd_req = 1; dut->nd_we = 1; dut->nd_off = 0xA34;
+        dut->nd_wdata = 0x0102030405060708ull;
+        bool nacc = false;
+        for (int guard = 0; guard < 100000; guard++) {
+            tick();
+            if (dut->nd_ack) { dut->nd_req = 0; tick(); nacc = true; break; }
+        }
+        dut->nd_req = 0;
+        idle();
+        bool sb_ok = nacc;
+        for (int j = 0; j < 8; j++)
+            if (!pix_written(DX0 + j, DY0 + 20) || pix_index(DX0 + j, DY0 + 20) != (uint8_t)(j + 1))
+                sb_ok = false;
+        check("a VDMA beat with start byte 4 is host data, not HOSTRW1", sb_ok);
     }
 
     //========================================================================
     //  Phase 3: FASTCLEAR and the CID clip - the two write-path features X
     //  leans on that the PROM never touches (docs/33). FASTCLEAR must write
     //  COLORVRAM through a hostile logic op and a zero z-pattern; the CID
-    //  clip must land pixels only where the auxiliary planes' low nibble
-    //  matches CLIPMODE's cidmatch field.
+    //  clip must land pixels only where CLIPMODE's cidmatch mask permits the
+    //  window ID in the auxiliary planes' low two bits.
     //========================================================================
     {
         enum { R_ZPATTERN_ = 0x0014, R_COLORVRAM = 0x001C, R_CLIPMODE_ = 0x1328 };
@@ -385,20 +511,28 @@ int main(int argc, char **argv)
         check("FASTCLEAR writes COLORVRAM through logicop DST and zpat 0",
               fc_wrong == 0);
 
-        // CID clip: pre-set the aux low nibble to 5 for the left half of a
-        // row only, then draw the whole row with cidmatch=5. Only the left
-        // half may change.
-        // The nibble lives in the auxiliary slot AND as a copy in byte 3 of
-        // the drawing slot, which is where a drawing-plane draw reads it.
+        // CID CLIP: CIDMATCH IS A MASK OF PERMITTED WINDOW IDs, NOT AN ID TO
+        // EQUAL. The window ID is the low TWO bits of the auxiliary slot and
+        // it indexes a bit of the four-bit field; 0xF permits all four, which
+        // is how the clip is switched off. This test used to set one nibble
+        // and match on the same nibble, which passes under either reading and
+        // so said nothing - the engine read it as an equality until build 43
+        // and drew on exactly the windows it should have clipped.
+        //
+        // So: four groups of four pixels carrying window IDs 0, 1, 2 and 3,
+        // and a mask of 0b1010 that permits 1 and 3. Only the second and
+        // fourth groups may change. The ID lives in the auxiliary slot AND as
+        // a copy in byte 3 of the drawing slot, which is where a
+        // drawing-plane draw reads it.
         const int CY = 320, CX0 = 200, CWD = 16;
         for (int x = CX0; x < CX0 + CWD; x++) {
-            uint32_t aux = (x < CX0 + CWD/2) ? 5u : 0u;
-            set_slot(x, CY, true,  aux);
-            set_slot(x, CY, false, (aux << 24) | 0x11);   // old pixel index 0x11
+            uint32_t cid = (uint32_t)((x - CX0) / 4);      // 0,0,0,0,1,1,1,1,...
+            set_slot(x, CY, true,  cid);
+            set_slot(x, CY, false, (cid << 24) | 0x11);    // old pixel index 0x11
         }
         wr(R_ZPATTERN_, 0xFFFFFFFF);
         wr(R_COLORI,    0x00000042);
-        wr(R_CLIPMODE_, (5u << 9));             // cidmatch = 5, smasks off
+        wr(R_CLIPMODE_, (0xAu << 9));           // cidmatch = 1010: IDs 1 and 3
         wr(R_DRAWMODE1, (3u << 28) | (7u << 12) | (1u << 3));
         wr(R_DRAWMODE0, 2 | (1u << 2) | (1u << 8) | (1u << 9));
         wr(R_XYSTARTI,  ((uint32_t)CX0 << 16) | (uint32_t)CY);
@@ -408,16 +542,17 @@ int main(int argc, char **argv)
 
         uint64_t cid_wrong = 0;
         for (int x = CX0; x < CX0 + CWD; x++) {
-            uint8_t want = (x < CX0 + CWD/2) ? 0x42 : 0x11;
+            int cid = (x - CX0) / 4;
+            uint8_t want = ((0xA >> cid) & 1) ? 0x42 : 0x11;
             if (pix_index(x, CY) != want) {
                 cid_wrong++;
                 if (cid_wrong <= 4)
-                    printf("  cid x=%d got %02x want %02x\n", x,
+                    printf("  cid x=%d id=%d got %02x want %02x\n", x, cid,
                            (unsigned)pix_index(x, CY), want);
             }
         }
         printf("CID clip: %llu pixels wrong\n", (unsigned long long)cid_wrong);
-        check("the CID clip draws only where the aux nibble matches",
+        check("CIDMATCH is a mask of permitted window IDs, not an ID to equal",
               cid_wrong == 0);
         // And the copy that draw read must still match the auxiliary slot -
         // a drawing-plane write may not disturb byte 3.

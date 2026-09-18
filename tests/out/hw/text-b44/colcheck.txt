@@ -1,0 +1,6 @@
+screen 1280x1024, frame buffer 1280x1024 (columns 0..1279)
+palette: 41 indices seen
+bands of 32 columns: 31 with content, 9 flat
+offset by band ('=' is +8, '.' flat): = = = = . = = = = = = = = = = = = = = = = = = = = = = = . . . . . . . . = = = =
+at offset +8: 136 of 1302528 pixels differ from their frame buffer column's colour
+COLCHECK: PASS - every band with content shows frame buffer column X + 8
