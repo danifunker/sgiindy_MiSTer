@@ -376,11 +376,16 @@ module newport #(
 
     // The display ID selects a mode-table entry per pixel. It comes from
     // VC2's DID table walker - the per-window mechanism X uses to give every
-    // window its own pixel mode. It is delayed one pixel, exactly as the
-    // cursor is, so it pairs with the frame buffer word it describes.
+    // window its own pixel mode. It is delayed TWO pixels, exactly as the
+    // cursor is, so it pairs with the frame buffer word it describes: the
+    // frame buffer answers the cycle after the request and `slot_rgb`
+    // registers that answer, so the word for the address VC2 emits in cycle
+    // t is in `slot_rgb` in cycle t+2. See "THE PIXEL IS TWO CYCLES BEHIND"
+    // at the syncs below.
+    logic [4:0] did_q1;
     always_ff @(posedge clk) begin
-        if (reset)       did_q <= 5'd0;
-        else if (ce_pix) did_q <= vc2_did;
+        if (reset)       begin did_q1 <= 5'd0; did_q <= 5'd0; end
+        else if (ce_pix) begin did_q1 <= vc2_did; did_q <= did_q1; end
     end
 
     np_xmap9 #(.REVISION(8'd3)) u_xmap0 (
@@ -468,14 +473,15 @@ module newport #(
     end
     assign pix_word = {8'h00, slot_aux, 8'h00, slot_rgb};
 
-    // THE CURSOR IS ONE STAGE AHEAD AND HAS TO BE HELD BACK. It is generated
+    // THE CURSOR IS TWO STAGES AHEAD AND HAS TO BE HELD BACK. It is generated
     // from VC2's own counters, which is where the frame buffer ADDRESS comes
-    // from; the word for that address arrives a cycle later. Combining them
-    // without this register puts the pointer one pixel left of everything it
-    // is drawn over, which is exactly the kind of thing that survives a glance.
+    // from; the word for that address is in `slot_rgb` two cycles later (the
+    // answer, then its register). With one stage here - as it was until
+    // build 44 - the pointer was drawn over the pixel one to its left.
+    logic [1:0] cursor_q1;
     always_ff @(posedge clk) begin
-        if (reset)        cursor_q <= 2'd0;
-        else if (ce_pix)  cursor_q <= vc2_cursor;
+        if (reset)        begin cursor_q1 <= 2'd0; cursor_q <= 2'd0; end
+        else if (ce_pix)  begin cursor_q1 <= vc2_cursor; cursor_q <= cursor_q1; end
     end
 
     // The mode table entry, per IRIS's ModeEntry: [0] buffer select,
@@ -577,12 +583,18 @@ module newport #(
         direct_rgb_q <= direct_rgb_c;
     end
 
+    // The raw view is registered like CMAP's answer and the direct path, so
+    // all three arrive in the same cycle as the delayed display enable.
+    logic [23:0] raw_rgb_q;
+    always_ff @(posedge clk)
+        raw_rgb_q <= (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
+
     logic [23:0] pix_rgb;
     always_comb begin
         if (dbg_raw_index) begin
             // The index itself, as grey - and the cursor as white, so that the
             // debug view does not report a pointer-shaped hole.
-            pix_rgb = (cursor_q != 2'd0) ? 24'hFFFFFF : {3{fb_rgb[7:0]}};
+            pix_rgb = raw_rgb_q;
         end else if (direct_q) begin
             pix_rgb = direct_rgb_q;
         end else begin
@@ -595,25 +607,35 @@ module newport #(
     assign vid_g = de ? pix_rgb[15:8]  : 8'h00;
     assign vid_b = de ? pix_rgb[23:16] : 8'h00;
 
-    // TWO STAGES, NOT ONE, and the second one is CMAP's. The pixel is one read
-    // behind the timing generator - that is the frame buffer - and now one
-    // more behind it again, because the palette lookup had to become a
-    // registered read for the array to infer as M10K rather than as 393 Kbit
-    // of flip-flops (see np_cmap.sv). The syncs are delayed to match rather
-    // than the data being pushed forward, so the picture moves as a whole.
+    // THE PIXEL IS TWO CYCLES BEHIND THE ADDRESS AND ITS COLOUR THREE, so the
+    // syncs are delayed three stages. VC2 emits a column's address in cycle
+    // t; the frame buffer (sim_ram, and fb_linecache on the board - "one
+    // cycle after the request") answers in t+1; `slot_rgb` registers the
+    // answer, so the pixel is there in t+2; CMAP's lookup is a registered
+    // read (it had to be, for the array to infer as M10K rather than 393 Kbit
+    // of flip-flops - see np_cmap.sv), so the colour is there in t+3. The
+    // syncs are delayed to match rather than the data being pushed forward,
+    // so the picture moves as a whole.
     //
-    // Getting this wrong is a one-pixel horizontal shift of the entire image,
-    // which is exactly the kind of thing that survives a glance and fails
-    // tests/run-rex3.sh's replay.
+    // THIS WAS TWO STAGES UNTIL BUILD 44, which counted the answer and not
+    // its register, and it put every column one place to the right: the
+    // display enable's first pixel showed whatever the previous line had
+    // fetched last. Nothing saw it while the window opened on IRIX's black
+    // 8-pixel margin; cropping the window to the desktop's own columns put
+    // the previous line's last pixel at the left edge of every line, and
+    // tests/vidshift.py caught it on the boot gradient (docs/56).
     logic hs_d, vs_d, de_d;
+    logic hs_e, vs_e, de_e;
     logic hs_q, vs_q, de_q;
     always_ff @(posedge clk) begin
         if (reset) begin
             hs_d <= 1'b0; vs_d <= 1'b0; de_d <= 1'b0;
+            hs_e <= 1'b0; vs_e <= 1'b0; de_e <= 1'b0;
             hs_q <= 1'b0; vs_q <= 1'b0; de_q <= 1'b0;
         end else if (ce_pix) begin
             hs_d <= vc2_hsync; vs_d <= vc2_vsync; de_d <= vc2_de;
-            hs_q <= hs_d;      vs_q <= vs_d;      de_q <= de_d;
+            hs_e <= hs_d;      vs_e <= vs_d;      de_e <= de_d;
+            hs_q <= hs_e;      vs_q <= vs_e;      de_q <= de_e;
         end
     end
     assign hsync = hs_q;

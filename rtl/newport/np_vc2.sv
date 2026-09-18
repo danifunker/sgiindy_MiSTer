@@ -409,11 +409,15 @@ module np_vc2 #(
     assign pix_x = x_ctr;
     assign pix_y = y_ctr;
 
+    // Nothing is shown until one visible line has been measured - the first
+    // line after reset, before the PROM has drawn anything - so the scaler
+    // never sees a line of the wrong width.
     logic [10:0] vis_w;
+    wire         vis_known = (vis_w != 11'd0);
     wire         crop_en = (vis_w > 11'd1280);
     wire  [10:0] crop_lo = (vis_w - 11'd1280) >> 1;
-    assign de = vis && (!crop_en || ((x_ctr >= crop_lo)
-                                     && (x_ctr < crop_lo + 11'd1280)));
+    assign de = vis && vis_known
+             && (!crop_en || ((x_ctr >= crop_lo) && (x_ctr < crop_lo + 11'd1280)));
 
     // The chip will not respond at all until soft reset is released, and the
     // spec is explicit that both it and the DCB hang if you try. Gating the
